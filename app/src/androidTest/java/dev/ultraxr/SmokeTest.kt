@@ -92,6 +92,23 @@ class SmokeTest {
         Native.handsDestroy(h)
     }
 
+    /** The app's own start-up path: assets copied out of the APK, both trackers created. */
+    @Test fun appStartsBothTrackersFromItsAssets() {
+        Tracking.acquire(ctx)
+        try {
+            val until = System.currentTimeMillis() + 90_000
+            var snap = Tracking.snapshot()
+            while (System.currentTimeMillis() < until && !(snap.vioActive && snap.handsActive) && Tracking.vioError.isEmpty() && Tracking.handsError.isEmpty()) {
+                Thread.sleep(500); snap = Tracking.snapshot()
+            }
+            assertEquals("6DoF start-up error", "", Tracking.vioError)
+            assertEquals("hand tracking start-up error", "", Tracking.handsError)
+            assertTrue("6DoF estimator created", snap.vioActive)
+            assertTrue("hand tracker created", snap.handsActive)
+            assertTrue("OpenXR runtime library loaded: ${dev.ultraxr.xr.XrRuntime.detail}", dev.ultraxr.xr.XrRuntime.available)
+        } finally { Tracking.release() }
+    }
+
     @Test fun gameRendersInPhonePreview() {
         val a = launch(PlayActivity::class.java) as PlayActivity
         Thread.sleep(4000)
