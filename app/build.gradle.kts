@@ -12,10 +12,11 @@ android {
         applicationId = "dev.ultraxr"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         ndk { abiFilters += listOf("arm64-v8a") }
-        externalNativeBuild { cmake { arguments += "-DANDROID_STL=none" } }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     signingConfigs {
@@ -36,4 +37,6 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

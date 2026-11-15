@@ -1,0 +1,109 @@
+package dev.ultraxr.render
+
+import android.opengl.GLES30
+import android.opengl.GLSurfaceView
+import android.opengl.Matrix
+import dev.ultraxr.core.HeadTracker
+import dev.ultraxr.core.Pose
+import dev.ultraxr.core.Q
+import dev.ultraxr.tracking.Tracking
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
+
+/** Something to show in the glasses. Updated once per frame, drawn once per eye. */
+interface Scene {
+    fun update(dt: Double, head: HeadTracker.State)
+    fun draw(d: Draw, head: HeadTracker.State)
+}
+
+/**
+ * Renders a [Scene] in side-by-side stereo from the predicted head pose.
+ * In preview mode (no glasses display) it renders a single wider view instead.
+ */
+class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean) : GLSurfaceView.Renderer {
+    @Volatile var width = 0; private set
+    @Volatile var height = 0; private set
+    @Volatile var frames = 0L; private set
+    @Volatile var lateFrames = 0L; private set
+    @Volatile var maxIntervalNs = 0L; private set
+    @Volatile var firstFrameNs = 0L; private set
+    @Volatile var lastFrameNs = 0L; private set
+    @Volatile var periodNs = 16_666_667L
+    @Volatile var avgCpuMs = 0.0; private set
+    @Volatile var glError = ""; private set
+
+    private val draw = Draw()
+    private val proj = FloatArray(16); private val view = FloatArray(16); private val vp = FloatArray(16)
+    private val headM = FloatArray(16); private val headRot = FloatArray(16); private val eyeM = FloatArray(16)
+    private val eyePos = FloatArray(3)
+
+    fun resetStats() { frames = 0; lateFrames = 0; maxIntervalNs = 0; firstFrameNs = 0 }
+
+    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        try { draw.init() } catch (e: Throwable) { glError = e.toString(); Tracking.log("GL init failed: $e") }
+    }
+
+    override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) { width = w; height = h }
+
+    override fun onDrawFrame(gl: GL10?) {
+        val now = System.nanoTime()
+        val dt = if (frames == 0L) { firstFrameNs = now; 0.0 } else {
+            val d = now - lastFrameNs
+            if (d > maxIntervalNs) maxIntervalNs = d
+            if (d > periodNs * 3 / 2) lateFrames++
+            (d * 1e-9).coerceAtMost(0.1)
+        }
+        lastFrameNs = now; frames++
+        if (glError.isNotEmpty()) { GLES30.glClearColor(0.2f, 0f, 0f, 1f); GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT); return }
+
+        // Predict to the middle of the frame that this render will be scanned out in.
+        val head = Tracking.head.predict(now + periodNs * 3 / 2)
+        val sc = scene
+        sc.update(dt, head)
+
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glClearColor(0f, 0f, 0f, 1f) // black is transparent on see-through glasses
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+        Q.toMatrix(head.pose.q, head.pose.p, headM)
+        Q.toMatrix(head.pose.q, ZERO, headRot)
+
+        val s = Tracking.settings
+        val scale = s.fovScale.toDouble()
+        if (stereo) {
+            val half = width / 2
+            frustum(Tracking.displayTanH * scale, Tracking.displayTanV * scale)
+            val ipd = s.ipdMm / 1000.0
+            for (e in 0..1) {
+                GLES30.glViewport(e * half, 0, half, height)
+                draw.eyeIndex = e
+                renderEye(sc, head, if (e == 0) -ipd / 2 else ipd / 2)
+            }
+        } else {
+            // Phone preview: one view, widened so the scene is visible without turning.
+            val tv = 0.6; val th = tv * width / height.coerceAtLeast(1)
+            frustum(th, tv)
+            draw.eyeIndex = -1
+            renderEye(sc, head, 0.0)
+        }
+        avgCpuMs = avgCpuMs * 0.95 + (System.nanoTime() - now) / 1e6 * 0.05
+    }
+
+    private fun frustum(tanH: Double, tanV: Double) {
+        Matrix.frustumM(proj, 0, (-tanH * NEAR).toFloat(), (tanH * NEAR).toFloat(), (-tanV * NEAR).toFloat(), (tanV * NEAR).toFloat(), NEAR.toFloat(), 60f)
+    }
+
+    private fun renderEye(sc: Scene, head: HeadTracker.State, offsetX: Double) {
+        val eye = head.pose * Pose(doubleArrayOf(offsetX, 0.0, 0.0))
+        Q.toMatrix(eye.q, eye.p, eyeM)
+        Matrix.invertM(view, 0, eyeM, 0)
+        Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
+        eyePos[0] = eye.p[0].toFloat(); eyePos[1] = eye.p[1].toFloat(); eyePos[2] = eye.p[2].toFloat()
+        draw.begin(vp, eyePos, headRot)
+        sc.draw(draw, head)
+    }
+
+    companion object {
+        private const val NEAR = 0.08
+        private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
+    }
+}
