@@ -54,7 +54,7 @@ OpenXR games would draw on the phone instead of the glasses.
 | USB protocol code: display mode packets, IMU reports, camera unshuffle, UVC parsing | **Unit-tested** against the formats documented by XR Gate and ar-drivers-rs | 7 tests |
 | Clock sync, stereo pairing, image orientation, sensor fusion, recovery, recentering, gestures | **Simulation-tested**, including a byte-exact simulated glasses stream | 13 tests |
 | Game rules | **Unit-tested** with scripted head and hands | 7 tests |
-| 6DoF estimator (Basalt) through this app's API | **Simulation-tested** on a rendered stereo + IMU sequence: see `native/vio/NOTES.md` | host test |
+| 6DoF estimator (Basalt) through this app's API | **Simulation-tested** on a rendered 31 s stereo + IMU sequence: 1.9 mm position error and 0.12 degrees over a 10.4 m path; recovers from image gaps and a clock jump. Starting while the head moves diverged in simulation, so the app waits for a still moment. See `native/vio/NOTES.md` | host test, 57 checks |
 | Hand tracker (Mercury) through this app's API | **Host-tested**: no false detections on empty images; detects a photographed hand at 16-20 cm | host test |
 | OpenXR runtime driver (head, controllers, hand joints, recentre) | **Host-tested** through Monado's own tracker code | 30 checks |
 | Pixel 10 Pro XL opens the glasses over USB, claims the camera interface | **Unverified** | needs your hardware |
@@ -85,6 +85,7 @@ device or is reported as failing by the hardware check.
 5. **OpenXR apps are told the phone's refresh rate**, and the runtime's frame pacing is not
    locked to the glasses' display, so expect an occasional dropped frame.
 6. **Hand tracking needs about a third of a second** of continuous view before a hand appears.
+7. **Position tracking starts only while your head is still** for about a second (at launch and after a tracking loss). Until then you have rotation-only tracking and a prompt in the glasses.
 
 ## How it is built
 

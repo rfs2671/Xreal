@@ -138,6 +138,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
         val cameraDenied = checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
         when {
             cameraDenied -> showBanner("Ultra XR needs the camera permission. Android requires it before an app may use the glasses' tracking cameras.", "Allow") { requestPermissions(arrayOf(Manifest.permission.CAMERA), 1) }
+            s.link == GlassesLink.State.NEED_PERMISSION && s.linkDetail.startsWith("USB") -> showBanner("Ultra XR needs USB access to the glasses to read their cameras and motion sensor.", "Allow") { Tracking.link?.retry() }
+            s.link == GlassesLink.State.STREAMING && s.linkDetail.isNotEmpty() -> showBanner("${s.linkDetail}. Games still work, without position tracking or hands. Run the check for details.", "Run check") { startActivity(Intent(this, CheckActivity::class.java)) }
             s.link == GlassesLink.State.FAILED -> showBanner("Could not start the glasses: ${s.linkDetail}. Unplug them, plug them back in, or run the check for details.", "Try again") { Tracking.link?.retry() }
             streaming && st != null && !st.onGlasses -> showBanner("The glasses are connected over USB, but Android reports no external display. Check that the cable is plugged straight into the phone.", "Run check") { startActivity(Intent(this, CheckActivity::class.java)) }
             streaming && !Tracking.settings.firstRunDone -> showBanner("First time with these glasses: run the one-minute check so tracking and 3D are confirmed on your hardware.", "Run check") { startActivity(Intent(this, CheckActivity::class.java)) }
@@ -173,7 +175,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         row.add(col, 0, weight = 1f, startDp = 14)
         row.add(Ui.text(this, "Play", 14f, Ui.ACCENT, bold = true).apply { gravity = Gravity.END }, ViewGroup.LayoutParams.WRAP_CONTENT)
         row.isClickable = true
-        row.setOnClickListener { XrRuntime.launch(this, info) }
+        row.setOnClickListener { stage?.stop(); XrRuntime.launch(this, info) }
         return row
     }
 }

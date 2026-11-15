@@ -84,6 +84,9 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
     @Volatile private var imuRunning = false
     private var uvc: UvcStream? = null
     private var permissionAsked: String? = null
+    private var permissionDenied = false
+    private var healthySeconds = 0
+    private var camerasDown = false
     private var failures = 0
 
     private var watchImu = 0L
@@ -97,8 +100,13 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             when (i.action) {
-                ACTION_PERMISSION -> handler.post { permissionAsked = null; connectIfPossible() }
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> handler.post { failures = 0; connectIfPossible() }
+                ACTION_PERMISSION -> {
+                    // On a refusal keep the request marked as asked: asking again straight away would
+                    // loop (Android answers "denied" instantly when the camera permission is missing).
+                    val granted = i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    handler.post { if (granted) { permissionAsked = null; connectIfPossible() } else { permissionDenied = true; setState(State.NEED_PERMISSION, "USB access was not granted") } }
+                }
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> handler.post { failures = 0; permissionAsked = null; permissionDenied = false; connectIfPossible() }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> handler.post { if (findDevice() == null) { teardown(); setState(State.NO_GLASSES, "") } }
             }
         }
@@ -119,11 +127,12 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         started = false
         try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
         handler.removeCallbacksAndMessages(null)
+        // Same handler as connect, so a later start() cannot overtake this teardown.
         handler.post { teardown(); setState(State.NO_GLASSES, "") }
     }
 
     /** Try again after a failure (also called when the app gains camera permission). */
-    fun retry() { handler.post { failures = 0; if (state != State.STREAMING && state != State.CONNECTING) connectIfPossible() } }
+    fun retry() { handler.post { failures = 0; permissionAsked = null; permissionDenied = false; if (state != State.STREAMING && state != State.CONNECTING) connectIfPossible() } }
 
     /** Drop the connection and open it again (used by the hardware check to capture a clean start). */
     fun reconnect() { handler.post { teardown(); failures = 0; setState(State.CONNECTING, ""); connectIfPossible() } }
@@ -155,8 +164,10 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             return
         }
         if (!usb.hasPermission(d)) {
-            setState(State.NEED_PERMISSION, "")
-            if (permissionAsked != d.deviceName) {
+            val camera = context.checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!permissionDenied) setState(State.NEED_PERMISSION, if (camera) "" else "Camera permission needed first")
+            // Android refuses USB access to a device with a video interface until CAMERA is held.
+            if (camera && !permissionDenied && permissionAsked != d.deviceName) {
                 permissionAsked = d.deviceName
                 val pi = PendingIntent.getBroadcast(context, 0, Intent(ACTION_PERMISSION).setPackage(context.packageName),
                     PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -167,7 +178,8 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         setState(State.CONNECTING, "")
         val err = try { connect(d) } catch (e: Throwable) { "unexpected: $e" }
         if (err == null) {
-            failures = 0; watchStallSeconds = 0
+            watchStallSeconds = 0; healthySeconds = 0; camerasDown = false
+            watchImu = pipeline.imuSamples; watchPairs = pipeline.pairs
             setState(State.STREAMING, "")
         } else {
             stats.lastError = err
@@ -216,6 +228,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         }
         val (n, path) = il.write(ImuCodec.streamCommand(true).copyOf(64))
         stats.imuWritePath = "$path ($n)"
+        if (n < 0) return "Could not send the IMU start command"
         imuRunning = true
         imuThread = thread(name = "imu") { imuLoop(il) }
 
@@ -232,8 +245,9 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
     private fun hidCommand(link: HidLink, cmd: Int, data: ByteArray = ByteArray(0)): ByteArray? {
         if (link.write(ImuCodec.command(cmd, data).copyOf(64)).first < 0) return null
         val buf = ByteArray(1024)
-        repeat(64) {
-            val n = link.read(buf, 250)
+        val deadline = System.nanoTime() + 1_200_000_000L
+        while (System.nanoTime() < deadline) {
+            val n = link.read(buf, 150)
             if (n > 0) ImuCodec.parseResponse(buf, n)?.let { (id, d) -> if (id == cmd) return d }
         }
         return null
@@ -246,8 +260,8 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         val len = (lenBytes[0].toInt() and 0xFF) or ((lenBytes[1].toInt() and 0xFF) shl 8) or ((lenBytes[2].toInt() and 0xFF) shl 16) or ((lenBytes[3].toInt() and 0xFF) shl 24)
         if (len <= 0 || len > 1 shl 20) return null
         val out = java.io.ByteArrayOutputStream()
-        var guard = 0
-        while (out.size() < len && guard++ < 20000) {
+        val giveUp = System.nanoTime() + 6_000_000_000L
+        while (out.size() < len && System.nanoTime() < giveUp) {
             val part = hidCommand(link, ImuCodec.CMD_CONFIG_PART) ?: break
             if (part.isEmpty()) break
             out.write(part)
@@ -291,16 +305,30 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
                 val imuMoved = pipeline.imuSamples != watchImu
                 val camMoved = pipeline.pairs != watchPairs
                 watchImu = pipeline.imuSamples; watchPairs = pipeline.pairs
-                watchStallSeconds = if (imuMoved && camMoved) 0 else watchStallSeconds + 1
                 val fatal = uvc?.fatal
-                if (watchStallSeconds >= STALL_SECONDS || fatal != null) {
-                    val why = fatal ?: if (!imuMoved) "IMU stream stopped" else "camera stream stopped"
-                    listener.onLog("stream stalled ($why): reconnecting")
-                    stats.lastError = why; stats.reconnects++
-                    teardown()
-                    failures++
-                    if (failures <= MAX_RETRIES) { setState(State.CONNECTING, "Reconnecting"); handler.postDelayed({ connectIfPossible() }, 600) }
-                    else setState(State.FAILED, why)
+                // With the cameras down for good but the IMU alive, stay connected: rotation-only
+                // tracking is better than nothing.
+                val ok = imuMoved && (camMoved || camerasDown) && (fatal == null || camerasDown)
+                if (ok) {
+                    watchStallSeconds = 0
+                    if (camMoved && ++healthySeconds >= 5) failures = 0
+                    if (camMoved && camerasDown) { camerasDown = false; setState(State.STREAMING, "") }
+                } else watchStallSeconds++
+                if (watchStallSeconds >= STALL_SECONDS || (fatal != null && !camerasDown)) {
+                    val why = fatal ?: if (!imuMoved) "the motion sensor stopped sending" else "the cameras stopped sending"
+                    stats.lastError = why
+                    if (imuMoved && failures >= MAX_RETRIES) {
+                        listener.onLog("cameras unavailable after $failures attempts ($why): continuing with rotation only")
+                        camerasDown = true; watchStallSeconds = 0
+                        setState(State.STREAMING, "Cameras not streaming: rotation only")
+                    } else {
+                        listener.onLog("stream stalled ($why): reconnecting")
+                        stats.reconnects++
+                        teardown()
+                        failures++
+                        if (failures <= MAX_RETRIES) { setState(State.CONNECTING, "Reconnecting"); handler.postDelayed({ connectIfPossible() }, 600) }
+                        else setState(State.FAILED, why)
+                    }
                 }
             } else if (state == State.NO_GLASSES || state == State.NEED_PERMISSION) {
                 connectIfPossible() // attach broadcasts can be missed while the app was not running

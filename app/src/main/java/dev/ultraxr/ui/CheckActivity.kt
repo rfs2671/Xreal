@@ -196,7 +196,7 @@ class CheckActivity : Activity() {
                 set("openxr", if (XrRuntime.available) V.PASS else V.SKIP, XrRuntime.statusLine(this))
                 next(1)
                 set("sixdof", V.RUNNING)
-                say("Now move: look around slowly and take a step to each side.", "Look around, step left and right")
+                say("Hold your head still for two seconds, then look around slowly and take a step to each side.", "Hold still 2 s, then look around and step sideways")
             }
             1 -> { // 6DoF
                 if (head.mode == HeadTracker.Mode.SIX_DOF) {

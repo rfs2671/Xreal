@@ -3,10 +3,11 @@ package dev.ultraxr.proto
 /**
  * Reassembles UVC payloads (iso packets or bulk transfers) into video frames.
  * A frame ends when the FID bit toggles or EOF is set. Only frames of exactly
- * [frameBytes] are delivered; everything else is counted.
+ * [frameBytes] are delivered; everything else is counted. The delivered array is reused for
+ * the next frame, so the callback must finish with it (or copy it) before returning.
  */
 class UvcFrameAssembler(private val frameBytes: Int, private val onFrame: (ByteArray) -> Unit) {
-    private var buf = ByteArray(frameBytes)
+    private val buf = ByteArray(frameBytes)
     private var fill = 0
     private var overflow = false
     private var lastFid = -1
@@ -40,7 +41,7 @@ class UvcFrameAssembler(private val frameBytes: Int, private val onFrame: (ByteA
     private fun finish() {
         when {
             overflow -> { longFrames++; reject(frameBytes + 1) }
-            fill == frameBytes -> { goodFrames++; val f = buf; buf = ByteArray(frameBytes); onFrame(f) }
+            fill == frameBytes -> { goodFrames++; onFrame(buf) }
             fill > 0 -> { shortFrames++; reject(fill) }
         }
         fill = 0; overflow = false

@@ -181,9 +181,13 @@ class CoreTest {
         still(t, 1, 400); t.predict(400_000_000L)
         t.onVio(400_000_000L, doubleArrayOf(1.0, 2.0, 0.5), Q.axisAngle(0.0, 0.0, 1.0, 1.0), doubleArrayOf(0.0, 0.0, 0.0), null)
         still(t, 400, 420)
-        assertTrue(abs(t.predict(420_000_000L).pose.p[0]) > 0.1)
+        // The first estimator state keeps the head where the app already had it; then it moves.
+        near(t.predict(420_000_000L).pose.p, doubleArrayOf(0.0, 0.0, 0.0), 1e-6, "no jump on the first state")
+        t.onVio(420_000_000L, doubleArrayOf(1.7, 2.4, 0.5), Q.axisAngle(0.0, 0.0, 1.0, 1.0), doubleArrayOf(0.0, 0.0, 0.0), null)
+        still(t, 420, 440)
+        assertTrue(abs(t.predict(440_000_000L).pose.p[0]) + abs(t.predict(440_000_000L).pose.p[2]) > 0.5)
         t.recenter()
-        val s = t.predict(420_000_000L)
+        val s = t.predict(440_000_000L)
         near(s.pose.p, doubleArrayOf(0.0, 0.0, 0.0), 1e-9)
         assertEquals(0.0, Q.yawY(s.pose.q), 1e-9)
     }

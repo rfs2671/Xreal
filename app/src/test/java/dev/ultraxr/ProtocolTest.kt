@@ -100,7 +100,7 @@ class ProtocolTest {
 
     @Test fun assemblerRebuildsFramesFromPayloads() {
         val frames = ArrayList<ByteArray>()
-        val asm = UvcFrameAssembler(1000) { frames += it }
+        val asm = UvcFrameAssembler(1000) { frames += it.copyOf() }
         val rnd = Random(1)
         val a = ByteArray(1000).also { rnd.nextBytes(it) }
         val b = ByteArray(1000).also { rnd.nextBytes(it) }

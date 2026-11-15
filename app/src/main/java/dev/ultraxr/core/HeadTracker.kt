@@ -88,7 +88,7 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         val qY = Q.normalize(Q.mul(Z_TO_Y, q))
         val newCorr = Q.normalize(Q.mul(qY, Q.conj(Q.mul(Z_TO_Y, gyroAt))))
         if (epochPending || !haveVio) {
-            if (haveVio || epochs > 0 || heldValid) {
+            if (!recenterPending) {
                 // Keep the app world where it was: old estimate of the body at tNs must equal the new one.
                 val oldQ = Q.mul(fix.q, Q.mul(corr, Q.mul(Z_TO_Y, gyroAt)))
                 val oldP = fix.apply(heldP)
@@ -225,7 +225,9 @@ class VioSupervisor {
                 else if (nowNs - lowFeatureSinceNs > LOW_FEATURE_NS) reason = reason ?: "too few features for 3 s"
             } else lowFeatureSinceNs = 0
             if (reason == null) accept(stateNs, p)
-        } else if (lastFrameNs != 0L && nowNs - lastFrameNs < 500_000_000L && lastStateNs != 0L && nowNs - lastStateNs > STALL_NS) {
+        } else if (lastP != null && lastFrameNs != 0L && nowNs - lastFrameNs < 500_000_000L && nowNs - lastStateNs > STALL_NS) {
+            // Only once this epoch has produced a state: before that the estimator may simply be
+            // waiting for the head to hold still, and resetting would restart that wait.
             reason = "no output for %.1f s while frames arrive".format((nowNs - lastStateNs) * 1e-9)
         }
         if (reason == null) return false

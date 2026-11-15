@@ -81,7 +81,9 @@ class GlassesStage(private val activity: Activity, private val previewHost: View
         if (cur != null && cur.display.displayId == d.displayId && cur.modeId == (mode?.modeId ?: 0)) return
         dismiss(); removePreview()
         try {
-            val r = XrRenderer(scene, stereo = true)
+            // Split into two eyes only when the panel really is in a side-by-side mode.
+            val wide = mode != null || d.mode.physicalWidth >= d.mode.physicalHeight * 3
+            val r = XrRenderer(scene, stereo = wide, preview = false)
             r.periodNs = (1e9 / (mode?.refreshRate ?: d.refreshRate)).toLong()
             val p = StagePresentation(activity, d, mode?.modeId ?: 0, mode?.refreshRate ?: 0f, r)
             p.show()

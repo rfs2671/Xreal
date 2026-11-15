@@ -40,7 +40,7 @@ abstract class BaseScene : Scene {
     protected fun drawStatus(d: Draw, head: HeadTracker.State) {
         val msg = when (head.mode) {
             HeadTracker.Mode.SIX_DOF -> return
-            HeadTracker.Mode.ORIENTATION_ONLY -> if (Tracking.vioStates > 0) "Position tracking lost: look at a textured area" else "Rotation only: position tracking starting"
+            HeadTracker.Mode.ORIENTATION_ONLY -> if (Tracking.vioStates > 0) "Position tracking lost: hold still for a moment" else "Hold still for a moment to start position tracking"
             HeadTracker.Mode.NONE -> "Waiting for the glasses"
         }
         val p = inFront(head, 0.0, -0.3, 1.6)

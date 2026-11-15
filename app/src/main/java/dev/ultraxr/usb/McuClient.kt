@@ -12,7 +12,7 @@ class McuClient(private val link: HidLink) {
         val (n, path) = link.write(McuProtocol.serialize(cmdId, payload))
         lastWritePath = path
         if (n < 0) return null
-        val buf = ByteArray(64)
+        val buf = ByteArray(1024)
         val deadline = System.nanoTime() + 1_500_000_000L
         var tries = 0
         while (System.nanoTime() < deadline && tries++ < 64) {

@@ -23,6 +23,8 @@ object Native {
      */
     @JvmStatic external fun vioGetState(handle: Long, out: DoubleArray): Long
     @JvmStatic external fun vioReset(handle: Long)
+    /** Tuning knob of the estimator wrapper (see ultra_vio.h). Returns false for an unknown key. */
+    @JvmStatic external fun vioSetOption(handle: Long, key: String, value: Double): Boolean
     @JvmStatic external fun vioVersion(): String
 
     // --- hands (Mercury)

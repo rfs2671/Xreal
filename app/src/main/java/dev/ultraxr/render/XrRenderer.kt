@@ -20,7 +20,7 @@ interface Scene {
  * Renders a [Scene] in side-by-side stereo from the predicted head pose.
  * In preview mode (no glasses display) it renders a single wider view instead.
  */
-class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean) : GLSurfaceView.Renderer {
+class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean, private val preview: Boolean = !stereo) : GLSurfaceView.Renderer {
     @Volatile var width = 0; private set
     @Volatile var height = 0; private set
     @Volatile var frames = 0L; private set
@@ -82,6 +82,11 @@ class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean) : GLSu
                 draw.eyeIndex = e
                 renderEye(sc, head, if (e == 0) -ipd / 2 else ipd / 2)
             }
+        } else if (!preview) {
+            // Glasses in a 2D mode (both eyes get the same picture): one view at the display's real FOV.
+            frustum(Tracking.displayTanH * scale, Tracking.displayTanV * scale)
+            draw.eyeIndex = -1
+            renderEye(sc, head, 0.0)
         } else {
             // Phone preview: one view, widened so the scene is visible without turning.
             val tv = 0.6; val th = tv * width / height.coerceAtLeast(1)

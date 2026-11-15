@@ -33,6 +33,9 @@ object OpenXrGlassesLayer {
         /** The window of the app's activity (or Presentation) on the glasses' display now; null when there is none. */
         fun glassesWindow(): Window?
 
+        /** The display that window is on, known before the window's first layout; null when there is none. */
+        fun glassesDisplayOfWindow(): Display?
+
         /**
          * Just before Monado starts and makes its devices: call [UltraXrFeed.configureDisplay] and
          * [UltraXrFeed.configureEyes] here. [Defaults.configure] does it from a Display.
@@ -57,24 +60,27 @@ object OpenXrGlassesLayer {
     private var layer: View? = null
     private var layerManager: WindowManager? = null
     private var connected = false
+    private var generation = 0
 
     /** Called from Monado's binder thread as well as the main thread. */
     fun canShow(): Boolean {
         val window = host?.glassesWindow() ?: return false
-        val display = window.decorView.display ?: return false
+        // decorView.display is null until the first traversal; the client may ask before that.
+        val display = window.decorView.display ?: host?.glassesDisplayOfWindow() ?: return false
         return display.displayId != Display.DEFAULT_DISPLAY
     }
 
-    fun open(monado: MonadoImpl) = open(monado, 0)
+    fun open(monado: MonadoImpl) = open(monado, 0, generation)
 
-    private fun open(monado: MonadoImpl, attempt: Int) {
+    private fun open(monado: MonadoImpl, attempt: Int, gen: Int) {
         main.postDelayed({
-            if (layer != null || connected) return@postDelayed
+            // close() bumps the generation: an application that left during the retries gets no layer.
+            if (gen != generation || layer != null || connected) return@postDelayed
             val window = host?.glassesWindow()
             val token = window?.decorView?.windowToken
             // A window that was only just shown has no token until its first layout pass. Monado waits
             // up to 2 s for the surface, so retry for most of that before giving up on the glasses.
-            if (window != null && token == null && attempt < 25) { open(monado, attempt + 1); return@postDelayed }
+            if (window != null && token == null && attempt < 25) { open(monado, attempt + 1, gen); return@postDelayed }
             if (window == null || token == null || !canShow()) {
                 // The application then shows Monado's side by side picture in its own activity, on the phone.
                 Log.i(TAG, "no window on the glasses: the application draws on its own screen")
@@ -138,6 +144,7 @@ object OpenXrGlassesLayer {
 
     fun close(why: String) {
         main.post {
+            generation++
             layer?.let { view -> runCatching { layerManager?.removeView(view) } }
             layer = null
             layerManager = null

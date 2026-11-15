@@ -1,0 +1,222 @@
+== uvio_sim_test ==
+library: ultra_vio 1.0 (basalt 0f3b2b5)
+calib: /home/user/ref/vladoshub_xr-gate/devices/xreal_ultra/configs/calibration_dataset/final/xreal_air2ultra/ZBBM5DZFMP/unified_480_ccw90_device_time/basalt_calib_640x480.json
+config: /home/user/ref/vladoshub_xr-gate/devices/xreal_ultra/configs/calibration_dataset/final/xreal_air2ultra/ZBBM5DZFMP/unified_480_ccw90_device_time/basalt_vio_config_640x480.json
+generated 930 stereo pairs 480x640 @30 Hz, 31200 IMU samples @1000 Hz, 31.0 s, cam_time_offset_ns=-1830051 (6.4 s to render)
+frame 465 left: mean=119.8 std=48.7
+
+-- scenario api: argument / error handling --
+[ultra_vio] ERROR: failed to parse calibration JSON: rapidjson internal assertion failure: IsObject()
+  [PASS] garbage calibration JSON is rejected with a message ("failed to parse calibration JSON: rapidjson internal assertion failure: IsObject()")
+[ultra_vio] ERROR: failed to parse VIO config JSON: rapidjson internal assertion failure: IsObject()
+  [PASS] garbage config JSON is rejected with a message ("failed to parse VIO config JSON: rapidjson internal assertion failure: IsObject()")
+[ultra_vio] ERROR: calib_json/config_json is NULL
+  [PASS] NULL arguments are rejected
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+  [PASS] valid JSON creates a handle
+  [PASS] no state before any input
+[ultra_vio] ERROR: stereo pair is 640x480 but the calibration expects 480x640; dropping
+  [PASS] wrong image size is counted and dropped
+  [PASS] non-increasing IMU timestamps are dropped
+  [PASS] uvio_set_option
+[ultra_vio] estimator reset (#1)
+  [PASS] uvio_reset on an idle estimator returns
+
+-- scenario nominal: full sequence, real-time pacing, IMU and camera on separate threads --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+  frames_pushed=930 frames_in=930 frames_dropped=0 states_out=930 (polled 930) imu_in=31200 imu_dropped=0
+  reset_count=0 auto_resets=0 valid=1
+  process_ms: mean=9.63 p50=9.21 p95=14.97 max=21.34 | features(cam0): min=108 median=279 max=344
+  wall=31.45 s (stream 31.00 s)  process CPU=36.58 s (1.16 cores avg)  RSS: before=554.0 MB peak=584.0 MB (+29.9 MB)
+  whole sequence               n=930 path=10.36 m  ATE_rmse=0.0019 m  ATE_max=0.0069 m  final_drift=0.0040 m (0.04% of path)
+                               rot_rmse=0.119 deg  rot_max=0.748 deg  tilt_rmse=0.090 deg  vel_rmse=0.0043 m/s
+  [PASS] estimator valid, no resets
+  [PASS] every pushed frame is accounted for (states_out + frames_dropped == frames_in)
+  [PASS] at least 90% of frames produced a state (930/930)
+  [PASS] ATE RMSE 0.0019 m < 0.05 m
+  [PASS] final drift 0.0040 m = 0.04% of 10.36 m path < 1.0%
+  [PASS] orientation RMSE 0.119 deg < 2.0 deg
+  final bias estimate: bg=(0.0021 -0.0011 0.0015) [true 0.0020 -0.0010 0.0015]  ba=(0.012 -0.015 0.010) [true 0.020 -0.015 0.010]
+
+-- scenario reset_still: uvio_reset() at t=20.60 s during the 20.0-21.5 s stop (|v|=0.00 m/s, |a|=0.00 m/s^2, |w|=0.00 rad/s) --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+[ultra_vio] estimator reset (#1)
+  frames_pushed=930 frames_in=930 frames_dropped=0 states_out=930 (polled 930) imu_in=31200 imu_dropped=0
+  reset_count=1 auto_resets=0 valid=1
+  process_ms: mean=9.47 p50=9.17 p95=15.13 max=26.31 | features(cam0): min=108 median=258 max=344
+  wall=31.46 s (stream 31.00 s)  process CPU=36.43 s (1.16 cores avg)  RSS: before=583.8 MB peak=610.6 MB (+26.8 MB)
+  [PASS] exactly one reset, none automatic
+  [PASS] state reported invalid right after uvio_reset
+  [PASS] new estimator produces a state within 0.5 s (0.000 s)
+  epoch 0 (before restart)     n=618 path=6.87 m  ATE_rmse=0.0021 m  ATE_max=0.0071 m  final_drift=0.0030 m (0.04% of path)
+                               rot_rmse=0.135 deg  rot_max=0.719 deg  tilt_rmse=0.102 deg  vel_rmse=0.0044 m/s
+  epoch 1 (after restart)      n=312 path=3.50 m  ATE_rmse=0.0124 m  ATE_max=0.0670 m  final_drift=0.0021 m (0.06% of path)
+                               rot_rmse=0.538 deg  rot_max=3.933 deg  tilt_rmse=0.360 deg  vel_rmse=0.0387 m/s
+  first state of the new epoch at stream t=20.600 s (0.000 s after the event)
+  [PASS] estimator valid at the end
+  [PASS] pre-restart ATE RMSE 0.0021 m < 0.05 m
+  [PASS] post-restart ATE RMSE 0.0124 m < 0.05 m
+  [PASS] post-restart orientation RMSE 0.538 deg < 2.0 deg
+
+-- scenario reset_moving: uvio_reset() at t=12.00 s while moving (|v|=0.41 m/s, |a|=0.31 m/s^2, |w|=0.33 rad/s) --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+[ultra_vio] estimator reset (#1)
+  frames_pushed=930 frames_in=930 frames_dropped=0 states_out=930 (polled 930) imu_in=31200 imu_dropped=0
+  reset_count=1 auto_resets=0 valid=1
+  process_ms: mean=12.31 p50=13.09 p95=18.57 max=31.24 | features(cam0): min=108 median=266 max=317
+  wall=31.45 s (stream 31.00 s)  process CPU=45.87 s (1.46 cores avg)  RSS: before=587.6 MB peak=600.7 MB (+13.1 MB)
+  [PASS] exactly one reset, none automatic
+  [PASS] state reported invalid right after uvio_reset
+  [PASS] new estimator produces a state within 0.5 s (0.000 s)
+  [PASS] frame accounting holds across the reset
+  epoch 0 (before restart)     n=360 path=3.90 m  ATE_rmse=0.0023 m  ATE_max=0.0075 m  final_drift=0.0012 m (0.03% of path)
+                               rot_rmse=0.161 deg  rot_max=0.698 deg  tilt_rmse=0.130 deg  vel_rmse=0.0051 m/s
+  epoch 1 (after restart)      n=570 path=6.44 m  ATE_rmse=1.6708 m  ATE_max=5.2868 m  final_drift=0.2082 m (3.23% of path)
+                               rot_rmse=20.821 deg  rot_max=30.566 deg  tilt_rmse=8.366 deg  vel_rmse=1.3018 m/s
+  first state of the new epoch at stream t=12.000 s (0.000 s after the event)
+  [PASS] estimator valid at the end
+  [PASS] pre-restart ATE RMSE 0.0023 m < 0.05 m
+  [INFO] post-restart accuracy is reported, not judged (see init_moving_sweep): ATE RMSE 1.6708 m, rot RMSE 20.821 deg
+
+-- scenario reset_gated: startup_imu_gate=1, uvio_reset() at t=12.00 s while moving; the estimator may only
+   restart once the IMU has looked stationary for 30 frames (stop is at 20.0-21.5 s) --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+[ultra_vio] startup IMU gate passed at frame t=101000400000
+[ultra_vio] estimator reset (#1)
+[ultra_vio] startup IMU gate passed at frame t=120467066667
+  frames_pushed=930 frames_in=930 frames_dropped=284 states_out=646 (polled 646) imu_in=31200 imu_dropped=0
+  reset_count=1 auto_resets=0 valid=1
+  process_ms: mean=9.14 p50=9.08 p95=14.51 max=23.02 | features(cam0): min=108 median=243 max=306
+  wall=31.45 s (stream 31.00 s)  process CPU=25.29 s (0.80 cores avg)  RSS: before=600.6 MB peak=612.4 MB (+11.8 MB)
+  [PASS] exactly one reset, none automatic
+  [PASS] restart was held back until the device was at rest (first new state at 20.467 s: |v|=0.000 m/s, |w|=0.000 rad/s)
+  [PASS] frame accounting holds (gated frames are counted as dropped)
+  epoch 0 (before restart)     n=330 path=3.90 m  ATE_rmse=0.0024 m  ATE_max=0.0095 m  final_drift=0.0049 m (0.13% of path)
+                               rot_rmse=0.201 deg  rot_max=0.378 deg  tilt_rmse=0.108 deg  vel_rmse=0.0040 m/s
+  epoch 1 (after restart)      n=316 path=3.50 m  ATE_rmse=0.0098 m  ATE_max=0.0551 m  final_drift=0.0031 m (0.09% of path)
+                               rot_rmse=0.401 deg  rot_max=0.726 deg  tilt_rmse=0.136 deg  vel_rmse=0.0216 m/s
+  first state of the new epoch at stream t=20.467 s (8.467 s after the event)
+  [PASS] estimator valid at the end
+  [PASS] pre-restart ATE RMSE 0.0024 m < 0.05 m
+  [PASS] post-restart ATE RMSE 0.0098 m < 0.05 m
+  [PASS] post-restart orientation RMSE 0.401 deg < 2.0 deg
+
+-- scenario gap_short: no images for 0.5 s (t=15.0..15.5 s, moving: |v|=0.28 m/s, |a|=0.64 m/s^2, |w|=0.21 rad/s), IMU keeps running --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+  frames_pushed=915 frames_in=915 frames_dropped=0 states_out=915 (polled 915) imu_in=31200 imu_dropped=0
+  reset_count=0 auto_resets=0 valid=1
+  process_ms: mean=9.20 p50=8.71 p95=14.82 max=21.39 | features(cam0): min=108 median=263 max=330
+  wall=31.45 s (stream 31.00 s)  process CPU=34.75 s (1.11 cores avg)  RSS: before=588.3 MB peak=597.3 MB (+9.0 MB)
+  whole sequence               n=915 path=10.35 m  ATE_rmse=0.0026 m  ATE_max=0.0081 m  final_drift=0.0074 m (0.07% of path)
+                               rot_rmse=0.170 deg  rot_max=0.796 deg  tilt_rmse=0.092 deg  vel_rmse=0.0039 m/s
+  after the gap                n=465 path=5.06 m  ATE_rmse=0.0026 m  ATE_max=0.0076 m  final_drift=0.0043 m (0.08% of path)
+                               rot_rmse=0.166 deg  rot_max=0.300 deg  tilt_rmse=0.058 deg  vel_rmse=0.0029 m/s
+  [PASS] no restart for a gap below max_frame_gap_s, estimator valid
+  [PASS] whole-sequence ATE RMSE 0.0026 m < 0.10 m (single alignment across the gap)
+  [PASS] orientation RMSE 0.170 deg < 3.0 deg
+
+-- scenario gap_long: no images for 2.0 s (t=18.7..20.7 s), IMU keeps running; images resume during the stop --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+[ultra_vio] WARN: stereo stream stalled for 2.033 s; restarting estimator
+  frames_pushed=870 frames_in=870 frames_dropped=0 states_out=870 (polled 870) imu_in=31200 imu_dropped=0
+  reset_count=1 auto_resets=1 valid=1
+  process_ms: mean=9.55 p50=9.22 p95=15.81 max=23.67 | features(cam0): min=108 median=253 max=344
+  wall=31.45 s (stream 31.00 s)  process CPU=34.48 s (1.10 cores avg)  RSS: before=590.1 MB peak=604.5 MB (+14.4 MB)
+  [PASS] gap above max_frame_gap_s triggers exactly one automatic restart
+  [PASS] first image after the gap starts the new epoch (20.700 s)
+  epoch 0 (before restart)     n=561 path=6.60 m  ATE_rmse=0.0021 m  ATE_max=0.0071 m  final_drift=0.0024 m (0.04% of path)
+                               rot_rmse=0.134 deg  rot_max=0.695 deg  tilt_rmse=0.105 deg  vel_rmse=0.0043 m/s
+  epoch 1 (after restart)      n=309 path=3.50 m  ATE_rmse=0.0087 m  ATE_max=0.0509 m  final_drift=0.0028 m (0.08% of path)
+                               rot_rmse=0.446 deg  rot_max=0.562 deg  tilt_rmse=0.118 deg  vel_rmse=0.0180 m/s
+  first state of the new epoch at stream t=20.700 s (0.000 s after the event)
+  [PASS] estimator valid at the end
+  [PASS] pre-restart ATE RMSE 0.0021 m < 0.05 m
+  [PASS] post-restart ATE RMSE 0.0087 m < 0.05 m
+  [PASS] post-restart orientation RMSE 0.446 deg < 2.0 deg
+
+-- scenario gap_long_moving: no images for 2.0 s (t=13.0..15.0 s), images resume while moving (|v|=0.30 m/s, |a|=0.66 m/s^2, |w|=0.19 rad/s) --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+[ultra_vio] WARN: stereo stream stalled for 2.033 s; restarting estimator
+  frames_pushed=870 frames_in=870 frames_dropped=0 states_out=870 (polled 870) imu_in=31200 imu_dropped=0
+  reset_count=1 auto_resets=1 valid=1
+  process_ms: mean=10.09 p50=9.86 p95=15.55 max=26.52 | features(cam0): min=108 median=266 max=323
+  wall=31.45 s (stream 31.00 s)  process CPU=36.10 s (1.15 cores avg)  RSS: before=592.8 MB peak=602.7 MB (+9.9 MB)
+  [PASS] gap above max_frame_gap_s triggers exactly one automatic restart
+  [PASS] first image after the gap starts the new epoch (15.000 s)
+  epoch 0 (before restart)     n=390 path=4.24 m  ATE_rmse=0.0023 m  ATE_max=0.0075 m  final_drift=0.0030 m (0.07% of path)
+                               rot_rmse=0.155 deg  rot_max=0.679 deg  tilt_rmse=0.125 deg  vel_rmse=0.0050 m/s
+  epoch 1 (after restart)      n=480 path=5.21 m  ATE_rmse=0.0058 m  ATE_max=0.0335 m  final_drift=0.0390 m (0.75% of path)
+                               rot_rmse=0.567 deg  rot_max=3.434 deg  tilt_rmse=0.348 deg  vel_rmse=0.0272 m/s
+  first state of the new epoch at stream t=15.000 s (0.000 s after the event)
+  [PASS] estimator valid at the end
+  [PASS] pre-restart ATE RMSE 0.0023 m < 0.05 m
+  [INFO] post-restart accuracy is reported, not judged (see init_moving_sweep): ATE RMSE 0.0058 m, rot RMSE 0.567 deg
+
+-- scenario negative_control: first 10 s with both images rotated by 180 deg (a wrong image orientation).
+   The check passes when the accuracy criteria of the nominal scenario are NOT met, i.e. it shows that the
+   test notices a broken input convention. --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+  frames_pushed=300 frames_in=300 frames_dropped=0 states_out=300 (polled 300) imu_in=10100 imu_dropped=0
+  reset_count=0 auto_resets=0 valid=1
+  process_ms: mean=10.11 p50=11.16 p95=14.79 max=18.82 | features(cam0): min=107 median=210 max=299
+  wall=10.35 s (stream 10.00 s)  process CPU=12.72 s (1.23 cores avg)  RSS: before=602.5 MB peak=611.5 MB (+9.1 MB)
+  first 10 s, wrong orientation n=300 path=3.12 m  ATE_rmse=56.9954 m  ATE_max=135.1237 m  final_drift=187.5771 m (6012.37% of path)
+                               rot_rmse=106.307 deg  rot_max=130.123 deg  tilt_rmse=41.743 deg  vel_rmse=24.1502 m/s
+  [PASS] wrong image orientation is detected by the accuracy criteria (ATE RMSE 56.9954 m, rot RMSE 106.307 deg, 300 states)
+
+-- scenario clock_restart: the first 5 s are fed twice, i.e. all timestamps jump back by 5 s (device replug) --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+[ultra_vio] WARN: IMU timestamp jumped back to 100000000000: device clock restarted, flushing input and restarting estimator
+[ultra_vio] estimator reset (#1)
+  frames_pushed=300 frames_in=300 frames_dropped=1 states_out=299 (polled 299) imu_in=9938 imu_dropped=0
+  reset_count=1 auto_resets=1 valid=1
+  process_ms: mean=7.78 p50=6.72 p95=15.12 max=18.89 | features(cam0): min=107 median=185 max=218
+  wall=10.39 s (stream 10.00 s)  process CPU=9.36 s (0.90 cores avg)  RSS: before=586.7 MB peak=597.8 MB (+11.1 MB)
+  epoch 0 (first pass)         n=150 path=1.11 m  ATE_rmse=0.0024 m  ATE_max=0.0059 m  final_drift=0.0041 m (0.37% of path)
+                               rot_rmse=0.551 deg  rot_max=1.128 deg  tilt_rmse=0.197 deg  vel_rmse=0.0076 m/s
+  epoch 1 (second pass)        n=149 path=1.11 m  ATE_rmse=0.0022 m  ATE_max=0.0057 m  final_drift=0.0019 m (0.17% of path)
+                               rot_rmse=0.416 deg  rot_max=0.852 deg  tilt_rmse=0.149 deg  vel_rmse=0.0062 m/s
+  [PASS] backwards clock jump triggers exactly one automatic restart
+  [PASS] estimator tracks again on the new clock (149 states)
+  [PASS] ATE RMSE 0.0024 m / 0.0022 m < 0.05 m
+
+-- scenario init_moving_sweep (informational, no pass/fail): a fresh estimator is started at different
+   moments of the motion and fed 8 s of data. Basalt initialises with v=0 and gravity from one accelerometer
+   sample, so this measures how well it copes with a (re)start that is NOT at rest. --
+    t_start    |v| m/s   |a| m/s2  |w| rad/s | ATE_rmse m  ATE_max m   rot_rmse    rot_max   states
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+        4.0       0.41       0.32       0.19 |     0.0288     0.1504      3.587      9.478      240  DEGRADED
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+        6.0       0.56       0.15       0.27 |     0.1039     0.3030      6.126      6.403      240  DEGRADED
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+        8.0       0.39       0.34       0.33 |     0.0517     0.2185      4.702      8.237      240  DEGRADED
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+       10.0       0.56       0.09       0.14 |     0.0115     0.0545      0.348      1.650      240  ok
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+       12.0       0.41       0.31       0.33 |     2.1162     4.2462     25.698     34.520      240  DEGRADED
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+       14.0       0.56       0.09       0.21 |     0.3073     0.6062     48.048     53.561      240  DEGRADED
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+       16.0       0.39       0.34       0.28 |     0.0070     0.0533      0.474      2.129      240  ok
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+       20.5       0.00       0.00       0.00 |     0.0103     0.0499      0.692      0.843      240  ok
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+       23.0       0.32       0.54       0.23 |     0.0386     0.1569      2.641      4.636      240  ok
+   4 of 9 starts stayed within the recovery thresholds (ATE RMSE < 0.10 m, rot RMSE < 3.0 deg)
+
+-- scenario flood: whole sequence pushed at ~10x real time from one thread --
+[ultra_vio] ultra_vio 1.0 (basalt 0f3b2b5): 480x640 stereo, cam_time_offset_ns=-1830051, imu_update_rate=1000.0
+  frames_pushed=930 frames_in=930 frames_dropped=402 states_out=528 (polled 527) imu_in=30969 imu_dropped=0
+  reset_count=0 auto_resets=0 valid=1
+  process_ms: mean=17.52 p50=17.82 p95=28.86 max=41.53 | features(cam0): min=108 median=255 max=315
+  wall=3.74 s (stream 31.00 s)  process CPU=13.64 s (3.65 cores avg)  RSS: before=590.4 MB peak=606.3 MB (+15.9 MB)
+  whole sequence (informational) n=527 path=10.36 m  ATE_rmse=0.0026 m  ATE_max=0.0092 m  final_drift=0.0063 m (0.06% of path)
+                               rot_rmse=0.171 deg  rot_max=0.797 deg  tilt_rmse=0.106 deg  vel_rmse=0.0043 m/s
+  RSS at 30% of the flood: 606.3 MB, at the end: 606.3 MB (growth 0.0 MB)
+  [PASS] all pushes returned and were counted (930)
+  [PASS] frames_dropped increased (402)
+  [PASS] states_out (528) + frames_dropped (402) == frames_in (930)
+  [PASS] memory does not grow with the backlog (RSS growth 0.0 MB < 32 MB over the last 70% of the flood)
+  [PASS] pushes never blocked for long (flood took 3.74 s for 31.0 s of data)
+
+== RESULT: PASS (0 failed checks) ==

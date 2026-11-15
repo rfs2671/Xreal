@@ -18,6 +18,7 @@ import dev.ultraxr.ui.LauncherActivity
  */
 class TrackingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
+    private var refused = false
 
     override fun onCreate() {
         super.onCreate()
@@ -35,7 +36,13 @@ class TrackingService : Service() {
             .build()
         try {
             if (Build.VERSION.SDK_INT >= 29) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE) else startForeground(1, n)
-        } catch (e: Exception) { Tracking.log("foreground service refused: $e") }
+        } catch (e: Exception) {
+            // Android 14+ refuses the connected-device type without USB access to an attached device.
+            Tracking.log("foreground service refused: $e")
+            refused = true
+            stopSelf()
+            return
+        }
         Tracking.acquire(this)
         running = true
     }
@@ -46,8 +53,8 @@ class TrackingService : Service() {
     }
 
     override fun onDestroy() {
+        if (!refused) Tracking.release()
         running = false
-        Tracking.release()
         super.onDestroy()
     }
 
@@ -56,7 +63,13 @@ class TrackingService : Service() {
         const val ACTION_STOP = "dev.ultraxr.STOP_TRACKING"
         @Volatile var running = false; private set
 
-        fun start(c: Context) { c.startForegroundService(Intent(c, TrackingService::class.java)) }
+        /** Starts the service if Android will allow it (needs USB access to the attached glasses). */
+        fun start(c: Context) {
+            val usb = c.getSystemService(Context.USB_SERVICE) as android.hardware.usb.UsbManager
+            val ok = usb.deviceList.values.any { it.vendorId == dev.ultraxr.glasses.GlassesLink.VID && usb.hasPermission(it) }
+            if (!ok) { Tracking.log("tracking service not started: no glasses with USB access"); return }
+            try { c.startForegroundService(Intent(c, TrackingService::class.java)) } catch (e: Exception) { Tracking.log("tracking service not started: $e") }
+        }
         fun stop(c: Context) { c.stopService(Intent(c, TrackingService::class.java)) }
     }
 }

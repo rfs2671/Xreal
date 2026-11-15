@@ -1,0 +1,76 @@
+diff --git a/include/basalt/utils/vio_config.h b/include/basalt/utils/vio_config.h
+index cebf67f..e6a4765 100644
+--- a/include/basalt/utils/vio_config.h
++++ b/include/basalt/utils/vio_config.h
+@@ -44,6 +44,8 @@ struct VioConfig {
+   VioConfig();
+   void load(const std::string& filename);
+   void save(const std::string& filename);
++  // ultra_vio: parse the same JSON from memory (no filesystem on Android).
++  void load_from_string(const std::string& json);
+ 
+   std::string optical_flow_type;
+   int optical_flow_detection_grid_size;
+diff --git a/src/utils/keypoints.cpp b/src/utils/keypoints.cpp
+index d7c11cb..4f80333 100644
+--- a/src/utils/keypoints.cpp
++++ b/src/utils/keypoints.cpp
+@@ -40,6 +40,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include <opencv2/features2d/features2d.hpp>
+ #include <opencv2/imgproc/imgproc.hpp>
+ 
++#ifndef BASALT_NO_OPENGV
+ #include <opengv/relative_pose/CentralRelativeAdapter.hpp>
+ #include <opengv/relative_pose/methods.hpp>
+ #include <opengv/sac/Ransac.hpp>
+@@ -48,6 +49,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #pragma GCC diagnostic ignored "-Wunused-parameter"
+ #include <opengv/sac_problems/relative_pose/CentralRelativePoseSacProblem.hpp>
+ #pragma GCC diagnostic pop
++#endif  // BASALT_NO_OPENGV
+ 
+ namespace basalt {
+ 
+@@ -359,6 +361,7 @@ void matchDescriptors(const std::vector<std::bitset<256>>& corner_descriptors_1,
+   }
+ }
+ 
++#ifndef BASALT_NO_OPENGV
+ void findInliersRansac(const KeypointsData& kd1, const KeypointsData& kd2,
+                        const double ransac_thresh, const int ransac_min_inliers,
+                        MatchData& md) {
+@@ -424,5 +427,6 @@ void findInliersRansac(const KeypointsData& kd1, const KeypointsData& kd2,
+       md.inliers.emplace_back(md.matches[ransac.inliers_[i]]);
+   }
+ }
++#endif  // BASALT_NO_OPENGV
+ 
+ }  // namespace basalt
+diff --git a/src/utils/vio_config.cpp b/src/utils/vio_config.cpp
+index 9db1775..4df3902 100644
+--- a/src/utils/vio_config.cpp
++++ b/src/utils/vio_config.cpp
+@@ -37,6 +37,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include <basalt/utils/vio_config.h>
+ 
+ #include <fstream>
++#include <sstream>
+ 
+ #include <cereal/archives/json.hpp>
+ #include <cereal/cereal.hpp>
+@@ -128,6 +129,15 @@ void VioConfig::load(const std::string& filename) {
+   }
+   is.close();
+ }
++
++void VioConfig::load_from_string(const std::string& json) {
++  std::istringstream is(json);
++
++  {
++    cereal::JSONInputArchive archive(is);
++    archive(*this);
++  }
++}
+ }  // namespace basalt
+ 
+ namespace cereal {

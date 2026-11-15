@@ -29,6 +29,8 @@ class OpenXrRuntimeService : Service() {
             UltraMonado(this)
         }.getOrElse {
             Log.w(TAG, "the OpenXR runtime did not start: ${it.message}")
+            // Undo what configureRuntime() took (tracking hold, shell window).
+            OpenXrGlassesLayer.host?.onApplicationDisconnected()
             return null
         }.also { monado = it }
         OpenXrGlassesLayer.open(runtime)

@@ -1,0 +1,7 @@
+/* Only the C API is exported. */
+{
+  global:
+    uvio_*;
+  local:
+    *;
+};

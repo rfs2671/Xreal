@@ -56,7 +56,8 @@ class UvcStream(
         for (f in info.formats) for (fr in f.frames) if (fr.width == width && fr.height == height && frm == null) { fmt = f; frm = fr }
         if (frm == null) { fmt = info.formats.firstOrNull { it.frames.isNotEmpty() }; frm = fmt?.frames?.first() }
         if (fmt == null || frm == null) return "no usable UVC format/frame descriptors"
-        val interval = frm.intervals100ns.minOrNull() ?: 166666
+        // 60 fps is the mode XR Gate uses; fall back to the fastest advertised one.
+        val interval = frm.intervals100ns.firstOrNull { it == 166666 } ?: frm.intervals100ns.minOrNull() ?: 166666
         chosen = "format#${fmt.index} ${fmt.guid} frame#${frm.index} ${frm.width}x${frm.height} " +
             "interval=${interval} (%.1f fps)".format(1e7 / interval)
         log("camera: requesting $chosen")
@@ -112,7 +113,9 @@ class UvcStream(
                 ?: return "bulk endpoint not exposed by Android"
             transport = "bulk ep=0x%02x".format(bulk.address)
             log("camera: $transport")
-            val size = maxOf(negotiatedPayloadSize, 16384).coerceAtMost(1 shl 20)
+            // One transfer per payload, as uvcvideo does: a larger buffer could merge payloads whose
+            // size is a multiple of the packet size, putting headers into the image.
+            val size = if (negotiatedPayloadSize > 0) negotiatedPayloadSize.coerceAtMost(1 shl 20) else 16384
             worker = thread(name = "uvc-bulk") {
                 val buf = ByteArray(size)
                 while (running) {

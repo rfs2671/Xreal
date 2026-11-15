@@ -28,9 +28,14 @@ class HidLink(private val conn: UsbDeviceConnection, val intf: UsbInterface) {
         return conn.controlTransfer(0x21, 0x09, 0x0200, intf.id, data, data.size, 500) to "set-report"
     }
 
+    /** Size of one interrupt packet; reads ask for exactly this so each read returns one report. */
+    val packetSize: Int = epIn?.maxPacketSize?.takeIf { it > 0 } ?: 64
+
     fun read(buf: ByteArray, timeoutMs: Int): Int {
         val e = epIn ?: return -1
-        return conn.bulkTransfer(e, buf, buf.size, timeoutMs)
+        // A usbfs IN transfer only completes on a short packet or a full buffer, so a larger buffer
+        // would merge several reports (or never complete for a single full-size reply).
+        return conn.bulkTransfer(e, buf, minOf(buf.size, packetSize), timeoutMs)
     }
 
     fun release() { conn.releaseInterface(intf) }

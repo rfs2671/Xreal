@@ -97,37 +97,33 @@ object Tracking : GlassesLink.Listener {
     }
     fun logText(): String = synchronized(logLines) { logLines.joinToString("\n") }
 
-    /** Starts the pipeline (reference counted: the service and foreground screens each hold it). */
+    /**
+     * Starts the pipeline (reference counted: screens, the service and the runtime each hold it).
+     * The native trackers and worker threads are created once and live for the process: only the
+     * USB link starts and stops, so there is no window in which a handle is destroyed under a
+     * thread that is still using it.
+     */
     @Synchronized fun acquire(context: Context) {
         users++
-        if (users > 1) return
         val app = context.applicationContext
-        appContext = app
-        settings = Settings(app)
-        running = true
-        thread(name = "tracking-init") { initNative(app) }
-        val l = GlassesLink(app, this)
-        l.wantedDisplayMode = if (settings.refresh90) McuProtocol.MODE_SBS_90 else McuProtocol.MODE_SBS_60
-        link = l
-        l.start()
-        vioThread = thread(name = "vio-poll") { vioLoop() }
-        handsThread = thread(name = "hands") { handsLoop() }
+        if (appContext == null) {
+            appContext = app
+            settings = Settings(app)
+            running = true
+            link = GlassesLink(app, this)
+            thread(name = "tracking-init") { initNative(app) }
+            vioThread = thread(name = "vio-poll", isDaemon = true) { vioLoop() }
+            handsThread = thread(name = "hands", isDaemon = true) { handsLoop() }
+        }
+        if (users > 1) return
+        link?.let { it.wantedDisplayMode = if (settings.refresh90) McuProtocol.MODE_SBS_90 else McuProtocol.MODE_SBS_60; it.start() }
     }
 
     @Synchronized fun release() {
         if (users == 0) return
         users--
         if (users > 0) return
-        running = false
-        link?.stop(); link = null
-        synchronized(handLock) { handLock.notifyAll() }
-        val v = vio; val h = handsHandle
-        vio = 0; handsHandle = 0
-        thread(name = "tracking-close") {
-            try { vioThread?.join(500); handsThread?.join(1500) } catch (_: Exception) {}
-            if (v != 0L) Native.vioDestroy(v)
-            if (h != 0L) Native.handsDestroy(h)
-        }
+        link?.stop()
     }
 
     fun recenter() { head.recenter(); log("recenter") }
@@ -140,14 +136,21 @@ object Tracking : GlassesLink.Listener {
             parseRig(calib)
             val h = Native.vioCreate(calib, config)
             if (h == 0L) { vioError = Native.lastError(); log("6DoF init failed: $vioError") }
-            else { vio = h; log("6DoF ready: ${Native.vioVersion()}") }
+            else {
+                // Basalt starts with zero velocity and gravity from one sample, so a start while the
+                // head moves can diverge (seen in simulation). Start only when the IMU says "still".
+                Native.vioSetOption(h, "startup_imu_gate", 1.0)
+                Native.vioSetOption(h, "num_threads", 2.0)
+                vio = h; log("6DoF ready: ${Native.vioVersion()}")
+            }
         } catch (e: Throwable) { vioError = e.toString(); log("6DoF init failed: $e") }
         if (settings.handTracking) try {
             val dir = File(app.filesDir, "hand-models").apply { mkdirs() }
             for (name in app.assets.list("hand-models").orEmpty()) {
                 val out = File(dir, name)
-                val len = app.assets.openFd("hand-models/$name").use { it.length }
-                if (!out.exists() || out.length() != len) app.assets.open("hand-models/$name").use { i -> out.outputStream().use { o -> i.copyTo(o) } }
+                // Size check when the asset is stored uncompressed; otherwise just copy again.
+                val len = try { app.assets.openFd("hand-models/$name").use { it.length } } catch (_: Exception) { -1L }
+                if (!out.exists() || len < 0 || out.length() != len) app.assets.open("hand-models/$name").use { i -> out.outputStream().use { o -> i.copyTo(o) } }
             }
             // Mercury reads its calibration from a file path, not from text.
             val calibFile = File(dir, "mercury_calib.json")

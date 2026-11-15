@@ -72,6 +72,8 @@ object XrHost : OpenXrGlassesLayer.Host {
                     setContentView(View(context).apply { setBackgroundColor(0xFF000000.toInt()) })
                 }
             }
+            // The system dismisses it when the display goes away (e.g. the glasses re-enumerate on a mode switch).
+            p.setOnDismissListener { if (shell === p) shell = null }
             p.show()
             shell = p
             Tracking.log("OpenXR shell window open on the glasses")
@@ -91,12 +93,28 @@ object XrHost : OpenXrGlassesLayer.Host {
 
     override fun glassesWindow(): Window? = shell?.window
 
+    override fun glassesDisplayOfWindow(): Display? = shell?.display
+
     override fun configureRuntime() {
-        // Runs on a binder thread when an application binds the runtime, before Monado starts.
+        // Runs in Service.onBind (main thread) when an application binds the runtime, before Monado starts.
+        val cold = !holdsTracking && Tracking.link?.state != dev.ultraxr.glasses.GlassesLink.State.STREAMING
         if (!holdsTracking) { Tracking.acquire(app); holdsTracking = true }
-        val latch = java.util.concurrent.CountDownLatch(1)
-        main.post { openShell(); latch.countDown() }
-        try { latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: InterruptedException) {}
+        if (cold) {
+            // The game was started before the launcher: give the glasses a moment to connect and
+            // switch to their 3D mode, so Monado is not configured for the 2D mode they start in.
+            val until = System.nanoTime() + 2_500_000_000L
+            while (System.nanoTime() < until) {
+                val m = glassesDisplay()?.mode
+                if (Tracking.link?.state == dev.ultraxr.glasses.GlassesLink.State.STREAMING && m != null && m.physicalWidth >= m.physicalHeight * 3) break
+                try { Thread.sleep(100) } catch (_: InterruptedException) { break }
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) openShell()
+        else {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            main.post { openShell(); latch.countDown() }
+            try { latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: InterruptedException) {}
+        }
         val s = Tracking.settings
         val d = shell?.display ?: glassesDisplay()
         val scale = s.fovScale

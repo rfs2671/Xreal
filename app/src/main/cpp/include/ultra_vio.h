@@ -30,7 +30,9 @@ UVIO_API void uvio_destroy(uvio_t*);
 
 /* IMU sample in the calibration's IMU frame. t_ns must be on the same clock as
  * images. gyro in rad/s, accel (specific force, reads +g when at rest) in
- * m/s^2. Samples whose t_ns is not strictly increasing are dropped. */
+ * m/s^2. Samples whose t_ns is not strictly increasing are dropped; a jump
+ * back by more than 1 s (on either stream) is treated as a restarted device
+ * clock: queued input is flushed and the estimator restarts. */
 UVIO_API void uvio_push_imu(uvio_t*, int64_t t_ns, const float gyro_rad_s[3],
                             const float accel_m_s2[3]);
 

@@ -76,6 +76,12 @@ JNIEXPORT jlong JNICALL Java_dev_ultraxr_tracking_Native_vioGetState(JNIEnv *env
     return s.states_out;
 }
 
+JNIEXPORT jboolean JNICALL Java_dev_ultraxr_tracking_Native_vioSetOption(JNIEnv *env, jclass, jlong h, jstring key, jdouble value) {
+    if (!h) return JNI_FALSE;
+    const std::string k = to_string(env, key);
+    return uvio_set_option(reinterpret_cast<uvio_t *>(h), k.c_str(), value) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL Java_dev_ultraxr_tracking_Native_vioReset(JNIEnv *, jclass, jlong h) {
     if (h) uvio_reset(reinterpret_cast<uvio_t *>(h));
 }
