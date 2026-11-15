@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(xrdiag C)
+add_library(xrdiag SHARED iso.c)
+target_compile_options(xrdiag PRIVATE -Wall -Wextra -O2)
+target_link_libraries(xrdiag log)
+target_link_options(xrdiag PRIVATE "-Wl,-z,max-page-size=16384")
