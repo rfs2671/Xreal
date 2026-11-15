@@ -88,6 +88,23 @@ jobs:
             screens/
             logcat.txt
 
+      - name: Test summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, re
+          files = glob.glob('app/build/outputs/androidTest-results/**/*.xml', recursive=True)
+          print('result files:', len(files))
+          for f in files:
+              s = open(f, errors='replace').read()
+              m = re.search(r'tests="(\d+)"[^>]*failures="(\d+)"', s)
+              print(f.split('/')[-1], m.group(0) if m else '')
+              for t in re.finditer(r'<testcase name="([^"]+)"[^>]*>\s*<(failure|error)[^>]*>(.{0,1500})', s, re.S):
+                  print('FAILED', t.group(1)); print(t.group(3)[:1500]); print('---')
+          PY
+          echo "== logcat extract =="
+          grep -E "FATAL EXCEPTION|AndroidRuntime|UnsatisfiedLink|dlopen failed|UltraXR|ultra_vio|ultra_hands|TestRunner|SIGSEGV|SIGILL|SIGABRT|backtrace|Abort message" logcat.txt | tail -n 70 || true
+
   release:
     needs: [apk, emulator]
     if: github.event_name == 'push'
