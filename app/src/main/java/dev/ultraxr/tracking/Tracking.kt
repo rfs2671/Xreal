@@ -149,8 +149,10 @@ object Tracking : GlassesLink.Listener {
                 val len = app.assets.openFd("hand-models/$name").use { it.length }
                 if (!out.exists() || out.length() != len) app.assets.open("hand-models/$name").use { i -> out.outputStream().use { o -> i.copyTo(o) } }
             }
-            val calib = app.assets.open("calibration/mercury_calib.json").bufferedReader().readText()
-            val h = Native.handsCreate(calib, dir.absolutePath, 2)
+            // Mercury reads its calibration from a file path, not from text.
+            val calibFile = File(dir, "mercury_calib.json")
+            app.assets.open("calibration/mercury_calib.json").use { i -> calibFile.outputStream().use { o -> i.copyTo(o) } }
+            val h = Native.handsCreate(calibFile.absolutePath, dir.absolutePath, 2)
             if (h == 0L) { handsError = Native.lastError(); log("hand tracking init failed: $handsError") }
             else { handsHandle = h; log("hand tracking ready: ${Native.handsVersion()}") }
         } catch (e: Throwable) { handsError = e.toString(); log("hand tracking init failed: $e") }

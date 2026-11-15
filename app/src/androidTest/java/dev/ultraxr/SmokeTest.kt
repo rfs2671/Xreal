@@ -80,8 +80,9 @@ class SmokeTest {
         assertTrue("native library: ${Native.loadError}", Native.loaded)
         val dir = File(ctx.filesDir, "hand-models-test").apply { mkdirs() }
         for (name in ctx.assets.list("hand-models").orEmpty()) ctx.assets.open("hand-models/$name").use { i -> File(dir, name).outputStream().use { o -> i.copyTo(o) } }
-        val calib = ctx.assets.open("calibration/mercury_calib.json").bufferedReader().readText()
-        val h = Native.handsCreate(calib, dir.absolutePath, 2)
+        val calib = File(dir, "mercury_calib.json")
+        ctx.assets.open("calibration/mercury_calib.json").use { i -> calib.outputStream().use { o -> i.copyTo(o) } }
+        val h = Native.handsCreate(calib.absolutePath, dir.absolutePath, 2)
         assertTrue("handsCreate: ${Native.lastError()}", h != 0L)
         val img = ByteArray(480 * 640) { 40 }
         val out = FloatArray(2 * 21 * 3)

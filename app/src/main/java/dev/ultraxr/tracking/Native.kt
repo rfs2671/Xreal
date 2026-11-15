@@ -26,7 +26,8 @@ object Native {
     @JvmStatic external fun vioVersion(): String
 
     // --- hands (Mercury)
-    @JvmStatic external fun handsCreate(calibJson: String, modelDir: String, threads: Int): Long
+    /** [calibPath] is the path of a calibration JSON file; [modelDir] holds the two .onnx models. */
+    @JvmStatic external fun handsCreate(calibPath: String, modelDir: String, threads: Int): Long
     @JvmStatic external fun handsDestroy(handle: Long)
     /**
      * Runs hand tracking on one stereo pair (blocking). Fills [out] with 2 x 21 x 3 floats
