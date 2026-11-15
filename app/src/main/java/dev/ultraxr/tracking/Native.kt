@@ -31,9 +31,10 @@ object Native {
     /**
      * Runs hand tracking on one stereo pair (blocking). Fills [out] with 2 x 21 x 3 floats
      * (left hand then right hand, metres, in the left camera frame) and returns a bit mask:
-     * bit 0 = left hand valid, bit 1 = right hand valid; negative on error.
+     * bit 0 = left hand valid, bit 1 = right hand valid; negative on error. [out26] receives
+     * 2 x 26 x 7 floats: the OpenXR joint set as px,py,pz,qx,qy,qz,qw in the same frame.
      */
-    @JvmStatic external fun handsProcess(handle: Long, tNs: Long, left: ByteArray, right: ByteArray, width: Int, height: Int, out: FloatArray): Int
+    @JvmStatic external fun handsProcess(handle: Long, tNs: Long, left: ByteArray, right: ByteArray, width: Int, height: Int, out: FloatArray, out26: FloatArray): Int
     @JvmStatic external fun handsVersion(): String
 
     @JvmStatic external fun lastError(): String

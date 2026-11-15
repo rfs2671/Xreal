@@ -266,6 +266,7 @@ object Tracking : GlassesLink.Listener {
     private fun handsLoop() {
         val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)
         val out = FloatArray(2 * Hand.JOINTS * 3)
+        val out26 = FloatArray(2 * 26 * 7)
         while (running) {
             var t: Long
             synchronized(handLock) {
@@ -277,14 +278,14 @@ object Tracking : GlassesLink.Listener {
             val h = handsHandle
             if (h == 0L) continue
             val t0 = System.nanoTime()
-            val mask = try { Native.handsProcess(h, t, l, r, 480, 640, out) } catch (e: Throwable) { handsError = e.toString(); -1 }
+            val mask = try { Native.handsProcess(h, t, l, r, 480, 640, out, out26) } catch (e: Throwable) { handsError = e.toString(); -1 }
             handsProcessMs = (System.nanoTime() - t0) / 1e6
             handsFrames++
             if (mask < 0) continue
             val body = head.bodyInApp(t)
             val found = ArrayList<Hand>(2); val states = ArrayList<HandState>(2)
             if (body != null) for (side in 0..1) {
-                if (mask and (1 shl side) == 0) { gestures[side].reset(); continue }
+                if (mask and (1 shl side) == 0) { gestures[side].reset(); poses26[side] = null; continue }
                 val world = FloatArray(Hand.JOINTS * 3)
                 val toApp = body * cam0InImu
                 for (j in 0 until Hand.JOINTS) {
@@ -294,6 +295,18 @@ object Tracking : GlassesLink.Listener {
                     val p = toApp.apply(doubleArrayOf(out[o].toDouble(), -out[o + 1].toDouble(), -out[o + 2].toDouble()))
                     world[j * 3] = p[0].toFloat(); world[j * 3 + 1] = p[1].toFloat(); world[j * 3 + 2] = p[2].toFloat()
                 }
+                // Full joint poses for OpenXR: Mercury frame -> camera frame is a half turn about X.
+                val w26 = FloatArray(26 * 7)
+                for (j in 0 until 26) {
+                    val o = (side * 26 + j) * 7
+                    val pose = toApp * Pose(doubleArrayOf(0.0, 0.0, 0.0), HALF_TURN_X) *
+                        Pose(doubleArrayOf(out26[o].toDouble(), out26[o + 1].toDouble(), out26[o + 2].toDouble()),
+                            Q.normalize(doubleArrayOf(out26[o + 3].toDouble(), out26[o + 4].toDouble(), out26[o + 5].toDouble(), out26[o + 6].toDouble())))
+                    val k = j * 7
+                    w26[k] = pose.p[0].toFloat(); w26[k + 1] = pose.p[1].toFloat(); w26[k + 2] = pose.p[2].toFloat()
+                    w26[k + 3] = pose.q[0].toFloat(); w26[k + 4] = pose.q[1].toFloat(); w26[k + 5] = pose.q[2].toFloat(); w26[k + 6] = pose.q[3].toFloat()
+                }
+                poses26[side] = w26
                 val hand = Hand(side == 1, world, t)
                 found += hand; states += gestures[side].update(hand)
             }
@@ -318,4 +331,9 @@ object Tracking : GlassesLink.Listener {
     }
 
     private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
+    private val HALF_TURN_X = doubleArrayOf(1.0, 0.0, 0.0, 0.0)
+    private val poses26 = arrayOfNulls<FloatArray>(2)
+
+    /** Latest full joint set of one hand in the app world (26 x px,py,pz,qx,qy,qz,qw), or null. */
+    fun handPoses26(side: Int): FloatArray? = poses26[side]
 }

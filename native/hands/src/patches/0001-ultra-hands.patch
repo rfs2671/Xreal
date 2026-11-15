@@ -1,0 +1,192 @@
+--- a/src/xrt/auxiliary/onnx/onnx_wrapper.cpp
++++ b/src/xrt/auxiliary/onnx/onnx_wrapper.cpp
+@@ -12,6 +12,8 @@
+ 
+ #include "onnx_wrapper.hpp"
+ 
++#include "ultra_hands_config.h"
++
+ 
+ namespace xrt::auxiliary::onnx {
+ 
+@@ -25,7 +27,12 @@
+ 	ORT_SAFE(*this, CreateSessionOptions(&opts));
+ 
+ 	ORT_SAFE(*this, SetSessionGraphOptimizationLevel(opts, ORT_ENABLE_ALL));
+-	ORT_SAFE(*this, SetIntraOpNumThreads(opts, 1));
++	// libultra_hands: thread count is configurable (default 1, as upstream).
++	ORT_SAFE(*this, SetIntraOpNumThreads(opts, ultra_hands_cfg_ort_intra_op_threads()));
++	ORT_SAFE(*this, SetInterOpNumThreads(opts, 1));
++	if (!ultra_hands_cfg_ort_allow_spinning()) {
++		ORT_SAFE(*this, AddSessionConfigEntry(opts, "session.intra_op.allow_spinning", "0"));
++	}
+ 
+ 	ORT_SAFE(*this, CreateEnv(ORT_LOGGING_LEVEL_FATAL, env_name.c_str(), &this->env));
+ 
+--- a/src/xrt/auxiliary/util/u_debug.c
++++ b/src/xrt/auxiliary/util/u_debug.c
+@@ -73,7 +73,14 @@
+ 
+ 	const struct prop_info *pi = __system_property_find(prefixed);
+ 	if (pi == NULL) {
+-		return NULL;
++		// libultra_hands: an app cannot set debug.* system properties, so
++		// fall back to the process environment (setenv() before create).
++		const char *raw = getenv(name);
++		if (raw == NULL) {
++			return NULL;
++		}
++		snprintf(chars, char_count, "%s", raw);
++		return chars;
+ 	}
+ 
+ 	struct android_read_arg a = {.chars = chars, .char_count = char_count};
+--- a/src/xrt/tracking/hand/mercury/hg_model.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
+@@ -1649,6 +1649,10 @@
+ void
+ release_onnx_state(onnx_state *state)
+ {
++	// libultra_hands: nothing to release if session creation failed.
++	if (!state->wrap) {
++		return;
++	}
+ 	OnnxWrapper &wrap = *state->wrap;
+ 
+ 	for (model_input_wrap &a : state->wraps) {
+--- a/src/xrt/tracking/hand/mercury/hg_sync.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include "hg_sync.hpp"
++#include "ultra_hands_config.h"
+ #include "hg_image_math.inl"
+ #include "tracking/t_hand_tracking.h"
+ #include "util/u_box_iou.hpp"
+@@ -1339,6 +1340,9 @@
+ 
+ 	// Stop all the workers before we release the ONNX state
+ 	u_worker_group_reference(&this->group, NULL);
++	// libultra_hands: upstream never drops its own pool reference, leaking the
++	// pool and its threads on every destroy.
++	u_worker_thread_pool_reference(&this->pool, NULL);
+ 
+ 	release_onnx_state(&this->views[0].keypoint[0]);
+ 	release_onnx_state(&this->views[0].keypoint[1]);
+@@ -2000,7 +2004,8 @@
+ 	hgt->views[0].view = 0;
+ 	hgt->views[1].view = 1;
+ 
+-	int num_threads = 4;
++	// libultra_hands: worker pool size is configurable (default 4, as upstream).
++	int num_threads = ultra_hands_cfg_worker_threads();
+ 	hgt->pool = u_worker_thread_pool_create(num_threads - 1, num_threads, "Hand Tracking");
+ 	hgt->group = u_worker_group_create(hgt->pool);
+ 
+--- a/src/xrt/tracking/hand/mercury/hg_sync.hpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+@@ -262,12 +262,12 @@
+ 
+ 	struct u_sink_debug debug_sink_ann = {};
+ 	struct u_sink_debug debug_sink_model = {};
+-	struct xrt_hand_masks_sink *hand_masks_sink;
++	struct xrt_hand_masks_sink *hand_masks_sink = nullptr;
+ 
+ 	float multiply_px_coord_for_undistort;
+ 
+ 
+-	struct t_stereo_camera_calibration *calib;
++	struct t_stereo_camera_calibration *calib = nullptr;
+ 
+ 	struct xrt_size calibration_one_view_size_px = {};
+ 
+@@ -278,9 +278,10 @@
+ 
+ 	struct model_output_visualizers visualizers;
+ 
+-	u_worker_thread_pool *pool;
++	// libultra_hands: initialised so that a failed create can be destroyed safely.
++	u_worker_thread_pool *pool = nullptr;
+ 
+-	u_worker_group *group;
++	u_worker_group *group = nullptr;
+ 
+ 
+ 	float baseline = {};
+@@ -294,7 +295,7 @@
+ 
+ 	enum u_logging_level log_level = U_LOGGING_INFO;
+ 
+-	lm::KinematicHandLM *kinematic_hands[2];
++	lm::KinematicHandLM *kinematic_hands[2] = {nullptr, nullptr};
+ 
+ 	// These are produced by the keypoint estimator and consumed by the nonlinear optimizer
+ 	// left hand, right hand THEN left view, right view
+--- a/src/xrt/tracking/hand/mercury/xr_mercury_runtime_c_api.cpp
++++ b/src/xrt/tracking/hand/mercury/xr_mercury_runtime_c_api.cpp
+@@ -3,6 +3,8 @@
+ #include "xr_mercury_runtime_c_api.h"
+ 
+ #include "hg_interface.h"
++#include "ultra_hands_config.h"
++#include "ultra_hands_ext.h"
+ 
+ #include "tracking/t_hand_tracking.h"
+ #include "tracking/t_tracking.h"
+@@ -296,6 +298,8 @@
+ 	}};
+ 	struct t_hand_tracking_sync *sync = nullptr;
+ 	bool swap_cameras = false;
++	// libultra_hands: last full 26-joint sets, [0]=left hand, [1]=right hand.
++	struct xrt_hand_joint_set last_hands[2] = {};
+ 
+ 	~RuntimeContext()
+ 	{
+@@ -437,6 +441,7 @@
+ 		return ctx;
+ 	} catch (const std::exception &e) {
+ 		ctx->last_error = e.what();
++		ultra_hands_cfg_set_create_error(e.what()); // libultra_hands: keep the reason
+ 		delete ctx;
+ 		return nullptr;
+ 	}
+@@ -477,6 +482,9 @@
+ 		int64_t out_timestamp_ns = 0;
+ 		t_ht_sync_process(ctx->sync, left_frame, right_frame, &left_hand, &right_hand, &out_timestamp_ns);
+ 
++		ctx->last_hands[0] = left_hand; // libultra_hands
++		ctx->last_hands[1] = right_hand;
++
+ 		out_frame->timestamp_ns = (uint64_t)out_timestamp_ns;
+ 		out_frame->source_timestamp_ns = source_timestamp_ns;
+ 		out_frame->sequence = sequence;
+@@ -506,3 +514,28 @@
+ 	if (!ctx) return "null Mercury runtime context";
+ 	return ctx->last_error.c_str();
+ }
++
++// libultra_hands: full XR_EXT_hand_tracking joint set of the last processed frame.
++extern "C" ULTRA_HANDS_EXPORT int
++ultra_hands_get_joints26(void *opaque, int hand, struct ultra_hands_joint_pose *out26)
++{
++	RuntimeContext *ctx = static_cast<RuntimeContext *>(opaque);
++	if (!ctx || !out26 || hand < 0 || hand > 1) return -1;
++	const struct xrt_hand_joint_set &src = ctx->last_hands[hand];
++	for (uint32_t i = 0; i < ULTRA_HANDS_JOINT26_COUNT; i++) {
++		const auto &rel = src.values.hand_joint_set_default[i].relation;
++		auto &o = out26[i];
++		o = {};
++		o.qw = 1.0f;
++		if (!src.is_active) continue;
++		o.px = rel.pose.position.x;
++		o.py = rel.pose.position.y;
++		o.pz = rel.pose.position.z;
++		o.qx = rel.pose.orientation.x;
++		o.qy = rel.pose.orientation.y;
++		o.qz = rel.pose.orientation.z;
++		o.qw = rel.pose.orientation.w;
++		o.flags = (uint32_t)rel.relation_flags;
++	}
++	return src.is_active ? 1 : 0;
++}

@@ -86,7 +86,7 @@ class SmokeTest {
         val img = ByteArray(480 * 640) { 40 }
         val out = FloatArray(2 * 21 * 3)
         var mask = -1
-        repeat(3) { mask = Native.handsProcess(h, 1_000_000_000L + it * 33_000_000L, img, img, 480, 640, out) }
+        repeat(3) { mask = Native.handsProcess(h, 1_000_000_000L + it * 33_000_000L, img, img, 480, 640, out, FloatArray(2 * 26 * 7)) }
         assertEquals("no hands in a flat grey image", 0, mask)
         Native.handsDestroy(h)
     }

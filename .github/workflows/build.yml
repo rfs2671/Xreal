@@ -99,5 +99,6 @@ jobs:
         run: |
           v=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | cut -d'"' -f2)
           tag="v$v-build${{ github.run_number }}"
-          gh release create "$tag" ultra-xr-*.apk --target "${{ github.sha }}" --title "Ultra XR $v (build ${{ github.run_number }})" \
+          cp extras/hello_xr-vulkan.apk hello_xr-vulkan.apk; cp extras/hello_xr-opengles.apk hello_xr-opengles.apk
+          gh release create "$tag" ultra-xr-*.apk hello_xr-vulkan.apk hello_xr-opengles.apk --target "${{ github.sha }}" --title "Ultra XR $v (build ${{ github.run_number }})" \
             --notes-file docs/RELEASE_NOTES.md --prerelease

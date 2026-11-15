@@ -19,7 +19,12 @@ import kotlin.math.sqrt
  */
 class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0.0)) {
     enum class Mode { NONE, ORIENTATION_ONLY, SIX_DOF }
-    class State(val pose: Pose, val mode: Mode, val velocity: DoubleArray, val vioAgeNs: Long)
+    class State(val pose: Pose, val mode: Mode, val velocity: DoubleArray, val vioAgeNs: Long,
+        /** Angular velocity about the app world's axes, rad/s. */
+        val angularVelocity: DoubleArray = doubleArrayOf(0.0, 0.0, 0.0))
+
+    /** Host time of the newest IMU sample (0 before the first). */
+    val latestImuNs: Long @Synchronized get() = lastImuNs
 
     // --- gyro/accel orientation, z-up world G
     private var qGI = Q.identity()
@@ -137,7 +142,8 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             recenterPending = false
         }
         head = fix * head
-        return State(head, if (sixDof) Mode.SIX_DOF else Mode.ORIENTATION_ONLY, Q.rotate(fix.q, vel), age)
+        val w = Q.rotate(Q.mul(fix.q, qBody), lastGyro)
+        return State(head, if (sixDof) Mode.SIX_DOF else Mode.ORIENTATION_ONLY, Q.rotate(fix.q, vel), age, w)
     }
 
     /** Transform from the IMU body frame at host time [tNs] to the app world (for hand joints). */

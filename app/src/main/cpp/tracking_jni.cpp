@@ -109,7 +109,7 @@ JNIEXPORT void JNICALL Java_dev_ultraxr_tracking_Native_handsDestroy(JNIEnv *, j
 }
 
 JNIEXPORT jint JNICALL Java_dev_ultraxr_tracking_Native_handsProcess(JNIEnv *env, jclass, jlong h, jlong t, jbyteArray left, jbyteArray right,
-                                                                     jint w, jint hgt, jfloatArray out) {
+                                                                     jint w, jint hgt, jfloatArray out, jfloatArray out26) {
     static uint64_t sequence = 0;
     if (!h || !left || !right || !out) return -1;
     if (env->GetArrayLength(left) < w * hgt || env->GetArrayLength(right) < w * hgt) return -1;
@@ -144,6 +144,22 @@ JNIEXPORT jint JNICALL Java_dev_ultraxr_tracking_Native_handsProcess(JNIEnv *env
         }
     }
     env->SetFloatArrayRegion(out, 0, 2 * XR_MERCURY_HAND_JOINT_COUNT * 3, buf);
+    // Full OpenXR joint set with orientations (px,py,pz,qx,qy,qz,qw per joint), same frame.
+    if (out26 && env->GetArrayLength(out26) >= static_cast<jsize>(2 * ULTRA_HANDS_JOINT26_COUNT * 7)) {
+        jfloat b26[2 * ULTRA_HANDS_JOINT26_COUNT * 7];
+        std::memset(b26, 0, sizeof(b26));
+        for (int s = 0; s < 2; s++) {
+            if (!(mask & (1 << s))) continue;
+            ultra_hands_joint_pose poses[ULTRA_HANDS_JOINT26_COUNT];
+            if (ultra_hands_get_joints26(reinterpret_cast<void *>(h), s, poses) != 1) { mask &= ~(1 << s); continue; }
+            for (uint32_t j = 0; j < ULTRA_HANDS_JOINT26_COUNT; j++) {
+                jfloat *o = b26 + (s * ULTRA_HANDS_JOINT26_COUNT + j) * 7;
+                o[0] = poses[j].px; o[1] = poses[j].py; o[2] = poses[j].pz;
+                o[3] = poses[j].qx; o[4] = poses[j].qy; o[5] = poses[j].qz; o[6] = poses[j].qw;
+            }
+        }
+        env->SetFloatArrayRegion(out26, 0, 2 * ULTRA_HANDS_JOINT26_COUNT * 7, b26);
+    }
     return mask;
 }
 

@@ -71,9 +71,13 @@ class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean) : GLSu
         val scale = s.fovScale.toDouble()
         if (stereo) {
             val half = width / 2
-            frustum(Tracking.displayTanH * scale, Tracking.displayTanV * scale)
             val ipd = s.ipdMm / 1000.0
+            // The glasses' optics converge at their virtual screen distance: each panel is seen turned
+            // towards the nose by this tangent, so each eye's frustum turns the same way (as Pocket XR's
+            // Monado driver does) and a point at infinity is seen straight ahead.
+            val shift = (ipd / 2) / VIRTUAL_SCREEN_M
             for (e in 0..1) {
+                frustum(Tracking.displayTanH * scale, Tracking.displayTanV * scale, if (e == 0) shift else -shift)
                 GLES30.glViewport(e * half, 0, half, height)
                 draw.eyeIndex = e
                 renderEye(sc, head, if (e == 0) -ipd / 2 else ipd / 2)
@@ -88,8 +92,8 @@ class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean) : GLSu
         avgCpuMs = avgCpuMs * 0.95 + (System.nanoTime() - now) / 1e6 * 0.05
     }
 
-    private fun frustum(tanH: Double, tanV: Double) {
-        Matrix.frustumM(proj, 0, (-tanH * NEAR).toFloat(), (tanH * NEAR).toFloat(), (-tanV * NEAR).toFloat(), (tanV * NEAR).toFloat(), NEAR.toFloat(), 60f)
+    private fun frustum(tanH: Double, tanV: Double, shift: Double = 0.0) {
+        Matrix.frustumM(proj, 0, ((shift - tanH) * NEAR).toFloat(), ((shift + tanH) * NEAR).toFloat(), (-tanV * NEAR).toFloat(), (tanV * NEAR).toFloat(), NEAR.toFloat(), 60f)
     }
 
     private fun renderEye(sc: Scene, head: HeadTracker.State, offsetX: Double) {
@@ -104,6 +108,8 @@ class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean) : GLSu
 
     companion object {
         private const val NEAR = 0.08
+        /** Distance at which the glasses show a flat picture in 3D mode (Pocket XR's value for XREAL glasses). */
+        const val VIRTUAL_SCREEN_M = 4.0
         private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
     }
 }

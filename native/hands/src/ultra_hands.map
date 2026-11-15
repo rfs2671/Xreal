@@ -1,0 +1,11 @@
+/* Only the C API is exported; everything else (Monado, cJSON, ...) is local. */
+{
+	global:
+		xr_mercury_runtime_create;
+		xr_mercury_runtime_destroy;
+		xr_mercury_runtime_process_gray8;
+		xr_mercury_runtime_last_error;
+		ultra_hands_*;
+	local:
+		*;
+};

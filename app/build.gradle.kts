@@ -28,6 +28,10 @@ android {
             keyPassword = "android"
         }
     }
+    packaging {
+        // Other apps dlopen libopenxr_monado.so from this app's library directory.
+        jniLibs { useLegacyPackaging = true }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -36,6 +40,8 @@ android {
 }
 
 dependencies {
+    implementation(files("libs/monado/monado-ipc.aar", "libs/monado/monado-auxiliary.aar"))
+    implementation("androidx.annotation:annotation:1.8.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

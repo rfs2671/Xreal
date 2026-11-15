@@ -1,0 +1,46 @@
+diff --git a/src/tests/hello_xr/build.gradle b/src/tests/hello_xr/build.gradle
+index fb2efce..45a537f 100644
+--- a/src/tests/hello_xr/build.gradle
++++ b/src/tests/hello_xr/build.gradle
+@@ -16,7 +16,7 @@ apply from: file('../../version.gradle')
+ 
+ android {
+     compileSdk 34
+-    ndkVersion "23.2.8568313"
++    ndkVersion "27.2.12479018"
+     buildToolsVersion = "34.0.0"
+     namespace 'org.khronos.openxr.hello_xr'
+ 
+@@ -29,13 +29,18 @@ android {
+         versionName = project.versionOpenXR.toString() + project.versionQualifier
+         versionCode = project.versionOpenXR.getVersionCode()
+ 
++        ndk {
++            abiFilters 'arm64-v8a'
++        }
++
+         externalNativeBuild {
+             cmake {
+                 arguments '-DBUILD_API_LAYERS=OFF',
+                         '-DBUILD_TESTS=ON',
+                         '-DBUILD_LOADER=ON',
+                         '-DBUILD_CONFORMANCE_TESTS=OFF',
+-                        '-DBUILD_ALL_EXTENSIONS=ON'
++                        '-DBUILD_ALL_EXTENSIONS=ON',
++                        '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                 targets "openxr_loader", "hello_xr"
+             }
+         }
+diff --git a/src/tests/hello_xr/main.cpp b/src/tests/hello_xr/main.cpp
+index 9676bb1..efc08a9 100644
+--- a/src/tests/hello_xr/main.cpp
++++ b/src/tests/hello_xr/main.cpp
+@@ -268,7 +268,7 @@ void android_main(struct android_app* app) {
+                 // If the timeout is negative, waits indefinitely until an event appears.
+                 const int timeoutMilliseconds =
+                     (!appState.Resumed && !program->IsSessionRunning() && app->destroyRequested == 0) ? -1 : 0;
+-                if (ALooper_pollAll(timeoutMilliseconds, nullptr, &events, (void**)&source) < 0) {
++                if (ALooper_pollOnce(timeoutMilliseconds, nullptr, &events, (void**)&source) < 0) {
+                     break;
+                 }
+ 

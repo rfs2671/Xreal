@@ -54,6 +54,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         super.onResume()
         // Coming back from a game: the launcher owns tracking again.
         if (TrackingService.running) TrackingService.stop(this)
+        if (!dev.ultraxr.xr.XrHost.applicationConnected) dev.ultraxr.xr.XrHost.closeShell()
         Tracking.addObserver(this)
         stage?.start()
         home.reanchor()

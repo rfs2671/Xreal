@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
@@ -10,6 +11,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Keeps the phone from locking (and taking the glasses' display away) while an OpenXR game runs. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Deliberately NOT requested: SYSTEM_ALERT_WINDOW. If granted, Monado's compositor would draw on the phone. -->
 
     <queries>
         <!-- Installed OpenXR apps, to list and launch them. -->
@@ -23,7 +27,8 @@
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
-        android:extractNativeLibs="false"
+        android:name=".UltraApp"
+        android:extractNativeLibs="true"
         android:theme="@style/AppTheme">
 
         <activity
@@ -51,6 +56,29 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|smallestScreenSize" />
         <activity android:name=".ui.SettingsActivity" android:exported="false" android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|smallestScreenSize" />
+
+        <!-- Monado's own service from monado-ipc.aar is replaced by ours. -->
+        <service android:name="org.freedesktop.monado.ipc.MonadoService" tools:node="remove" />
+
+        <!-- The OpenXR runtime. Exported: OpenXR applications bind it. -->
+        <service android:name=".openxr.OpenXrRuntimeService" android:exported="true" android:label="Ultra XR">
+            <meta-data android:name="org.khronos.openxr.OpenXRRuntime.SoFilename" android:value="libopenxr_monado.so" />
+            <meta-data android:name="org.khronos.openxr.OpenXRRuntime.MajorVersion" android:value="1" />
+            <intent-filter>
+                <action android:name="org.khronos.openxr.OpenXRRuntimeService" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="org.freedesktop.monado.ipc.CONNECT" />
+            </intent-filter>
+        </service>
+
+        <!-- Answers the OpenXR loader's "which runtime is active?" so no separate broker app is needed.
+             Only one installed app may own this authority: it cannot coexist with the Khronos broker app. -->
+        <provider
+            android:name=".openxr.OpenXrBrokerProvider"
+            android:authorities="org.khronos.openxr.runtime_broker"
+            android:exported="true"
+            tools:ignore="ExportedContentProvider" />
 
         <service android:name=".tracking.TrackingService" android:exported="false" android:foregroundServiceType="connectedDevice" />
     </application>

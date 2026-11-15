@@ -1,0 +1,93 @@
+# host: Linux 6.18.44-fc-v470 x86_64, 4 cores, Intel(R) Xeon(R) Processor @ 2.10GHz
+# host deps: OpenCV 4.6.0, ONNX Runtime 1.22.0 (PyPI wheel)
+# date: 2026-11-15T22:46:15Z
+== libultra_hands smoke test ==
+version: libultra_hands monado=6c9804934324+xrgate+ultra_hands
+sizeof: create_info=68 joint=44 hand_side=1072 frame=2200
+models_dir: /home/user/build/hands/repro/models
+calib_json: /home/user/ref/vladoshub_xr-gate/devices/xreal_ultra/configs/calibration_dataset/final/xreal_air2ultra/ZBBM5DZFMP/unified_480_ccw90/mercury_calib_unified_480_ccw90.json
+frames per sequence: 120, input 480x640 gray8, dt=33.3 ms
+ERROR [ort_safe] [/home/user/build/hands/repro/monado/src/xrt/auxiliary/onnx/onnx_wrapper.cpp:41]: Load model from /nonexistent/models/grayscale_detection_160x160.onnx failed:Load model /nonexistent/models/grayscale_detection_160x160.onnx failed. File doesn't exist
+ERROR [t_hand_tracking_sync_mercury_create] Failed to initialize ONNX runtime: Load model from /nonexistent/models/grayscale_detection_160x160.onnx failed:Load model /nonexistent/models/grayscale_detection_160x160.onnx failed. File doesn't exist
+create(bad models dir) -> NULL, ultra_hands_last_create_error: "t_hand_tracking_sync_mercury_create failed"
+create(bad calib)      -> NULL, ultra_hands_last_create_error: "failed to open calibration JSON: /nonexistent/calib.json"
+
+-- config worker_threads=4 ort_intra_op_threads=1 spinning=0 : create OK in 125.8 ms
+[blank black                 ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=3.74 median=3.75 p95=6.21 min=1.91 max=28.75 first=12.65
+[blank gray(128)             ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=3.93 median=3.78 p95=4.75 min=3.57 max=7.04 first=4.38
+[blank white                 ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=5.95 median=4.42 p95=8.96 min=1.95 max=78.61 first=4.01
+[uniform noise (per-pixel)   ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=6.68 median=5.28 p95=16.29 min=2.11 max=55.13 first=2.32
+[block noise (16x16)         ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=4.74 median=4.49 p95=5.95 min=2.07 max=15.56 first=3.37
+   noise summary: frames reporting a hand: per-pixel=0 block=0 (reported, not asserted)
+   bad-input rc=-2 last_error="bad gray8 input frame"
+[img left_hand_20cm          ] frames=120 errors=0 frames_with_hands=111 (left=111 right=0)  ms/frame: mean=19.00 median=17.10 p95=32.92 min=9.03 max=42.54 first=16.75
+   first frame with a hand: 9; last frame: hand_count=1 left.status=1 right.status=0
+    left : palm=(0.072 -0.070 -0.216) wrist=(0.047 -0.145 -0.196) index_tip=(0.149 0.046 -0.222) [m, cam0 frame]
+    left : |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.077 -0.111 -0.203); joint flags=51
+[img right_hand_20cm         ] frames=120 errors=0 frames_with_hands=111 (left=0 right=111)  ms/frame: mean=19.83 median=16.31 p95=34.52 min=10.33 max=119.61 first=32.83
+   first frame with a hand: 9; last frame: hand_count=1 left.status=0 right.status=1
+    right: palm=(0.101 -0.069 -0.213) wrist=(0.119 -0.143 -0.184) index_tip=(0.027 0.048 -0.233) [m, cam0 frame]
+    right: |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.092 -0.109 -0.199); joint flags=51
+[img left_hand_16cm          ] frames=120 errors=0 frames_with_hands=111 (left=111 right=0)  ms/frame: mean=16.17 median=13.94 p95=31.11 min=7.13 max=43.30 first=7.37
+   first frame with a hand: 9; last frame: hand_count=1 left.status=1 right.status=0
+    left : palm=(0.070 -0.061 -0.160) wrist=(0.046 -0.133 -0.132) index_tip=(0.148 0.053 -0.174) [m, cam0 frame]
+    left : |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.076 -0.101 -0.145); joint flags=51
+[img left_hand_30cm_white    ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=2.65 median=2.19 p95=4.58 min=1.76 max=8.02 first=3.52
+   first frame with a hand: -1; last frame: hand_count=0 left.status=0 right.status=0
+[img left_hand_40cm_dark     ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=2.00 median=1.94 p95=2.50 min=1.72 max=4.58 first=1.97
+   first frame with a hand: -1; last frame: hand_count=0 left.status=0 right.status=0
+
+-- config worker_threads=2 ort_intra_op_threads=1 spinning=0 : create OK in 110.9 ms
+[blank black                 ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=4.66 median=3.21 p95=14.12 min=1.91 max=22.49 first=3.34
+[blank gray(128)             ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=5.12 median=4.87 p95=10.69 min=2.18 max=18.17 first=3.55
+[blank white                 ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=4.68 median=4.20 p95=6.23 min=3.04 max=19.07 first=5.30
+[uniform noise (per-pixel)   ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=6.37 median=5.66 p95=14.94 min=2.13 max=39.61 first=4.70
+[block noise (16x16)         ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=4.08 median=3.72 p95=8.63 min=1.81 max=12.19 first=3.54
+   noise summary: frames reporting a hand: per-pixel=0 block=0 (reported, not asserted)
+   bad-input rc=-2 last_error="bad gray8 input frame"
+[img left_hand_20cm          ] frames=120 errors=0 frames_with_hands=111 (left=111 right=0)  ms/frame: mean=19.03 median=16.77 p95=31.99 min=8.34 max=49.28 first=18.83
+   first frame with a hand: 9; last frame: hand_count=1 left.status=1 right.status=0
+    left : palm=(0.072 -0.070 -0.216) wrist=(0.047 -0.145 -0.196) index_tip=(0.149 0.046 -0.222) [m, cam0 frame]
+    left : |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.077 -0.111 -0.203); joint flags=51
+[img right_hand_20cm         ] frames=120 errors=0 frames_with_hands=111 (left=0 right=111)  ms/frame: mean=23.54 median=19.26 p95=39.72 min=9.71 max=294.52 first=20.50
+   first frame with a hand: 9; last frame: hand_count=1 left.status=0 right.status=1
+    right: palm=(0.101 -0.069 -0.213) wrist=(0.119 -0.143 -0.184) index_tip=(0.027 0.048 -0.233) [m, cam0 frame]
+    right: |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.092 -0.109 -0.199); joint flags=51
+[img left_hand_16cm          ] frames=120 errors=0 frames_with_hands=111 (left=111 right=0)  ms/frame: mean=12.39 median=11.32 p95=19.72 min=6.37 max=43.45 first=7.74
+   first frame with a hand: 9; last frame: hand_count=1 left.status=1 right.status=0
+    left : palm=(0.070 -0.061 -0.160) wrist=(0.046 -0.133 -0.132) index_tip=(0.148 0.053 -0.174) [m, cam0 frame]
+    left : |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.076 -0.101 -0.145); joint flags=51
+[img left_hand_30cm_white    ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=2.11 median=2.03 p95=2.57 min=1.83 max=4.95 first=2.33
+   first frame with a hand: -1; last frame: hand_count=0 left.status=0 right.status=0
+[img left_hand_40cm_dark     ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=2.10 median=2.04 p95=2.38 min=1.85 max=4.90 first=1.94
+   first frame with a hand: -1; last frame: hand_count=0 left.status=0 right.status=0
+
+-- config worker_threads=4 ort_intra_op_threads=2 spinning=0 : create OK in 76.2 ms
+[blank black                 ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=4.68 median=4.05 p95=6.14 min=2.00 max=69.35 first=5.97
+[blank gray(128)             ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=3.86 median=3.84 p95=6.49 min=1.96 max=10.80 first=3.87
+[blank white                 ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=3.77 median=3.11 p95=6.75 min=2.06 max=22.81 first=2.26
+[uniform noise (per-pixel)   ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=4.57 median=4.31 p95=7.60 min=2.25 max=12.30 first=2.27
+[block noise (16x16)         ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=4.63 median=4.17 p95=8.32 min=2.04 max=12.07 first=6.52
+   noise summary: frames reporting a hand: per-pixel=0 block=0 (reported, not asserted)
+   bad-input rc=-2 last_error="bad gray8 input frame"
+[img left_hand_20cm          ] frames=120 errors=0 frames_with_hands=111 (left=111 right=0)  ms/frame: mean=12.44 median=12.04 p95=17.82 min=6.34 max=29.70 first=13.32
+   first frame with a hand: 9; last frame: hand_count=1 left.status=1 right.status=0
+    left : palm=(0.072 -0.070 -0.216) wrist=(0.047 -0.145 -0.196) index_tip=(0.149 0.046 -0.222) [m, cam0 frame]
+    left : |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.077 -0.111 -0.203); joint flags=51
+[img right_hand_20cm         ] frames=120 errors=0 frames_with_hands=111 (left=0 right=111)  ms/frame: mean=11.12 median=10.74 p95=17.88 min=6.99 max=22.55 first=16.59
+   first frame with a hand: 9; last frame: hand_count=1 left.status=0 right.status=1
+    right: palm=(0.101 -0.069 -0.213) wrist=(0.119 -0.143 -0.184) index_tip=(0.027 0.048 -0.233) [m, cam0 frame]
+    right: |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.092 -0.109 -0.199); joint flags=51
+[img left_hand_16cm          ] frames=120 errors=0 frames_with_hands=111 (left=111 right=0)  ms/frame: mean=11.58 median=11.52 p95=15.24 min=7.10 max=30.36 first=7.96
+   first frame with a hand: 9; last frame: hand_count=1 left.status=1 right.status=0
+    left : palm=(0.070 -0.061 -0.160) wrist=(0.046 -0.133 -0.132) index_tip=(0.148 0.053 -0.174) [m, cam0 frame]
+    left : |wrist->middle_proximal| = 0.120 m; index_metacarpal (26-set only)=(0.076 -0.101 -0.145); joint flags=51
+[img left_hand_30cm_white    ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=2.60 median=2.51 p95=3.34 min=1.98 max=4.03 first=2.97
+   first frame with a hand: -1; last frame: hand_count=0 left.status=0 right.status=0
+[img left_hand_40cm_dark     ] frames=120 errors=0 frames_with_hands=0 (left=0 right=0)  ms/frame: mean=2.55 median=2.52 p95=3.93 min=1.97 max=4.84 first=2.98
+   first frame with a hand: -1; last frame: hand_count=0 left.status=0 right.status=0
+
+create/destroy x5 OK
+
+RESULT: PASS (0 failed checks)
+# exit code: 0

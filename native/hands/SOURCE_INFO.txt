@@ -1,0 +1,19 @@
+Mercury hand-tracking ONNX models (unmodified)
+
+Upstream:  https://gitlab.freedesktop.org/monado/utilities/hand-tracking-models
+Commit:    37a8a81bc8f433ac6cbdf2471909d2bac74beca1 (Git LFS objects)
+Fetched:   via the gitlab.com mirror of the same repository
+           https://gitlab.com/glab-forks/freedesktop/monado/utilities/hand-tracking-models
+           (same commit). The freedesktop.org LFS object store
+           (fsn1.your-objectstorage.com) was not reachable from the build machine.
+Verified:  sha256 of each file equals the "oid sha256:" in the LFS pointer files of
+           the freedesktop.org repository at that commit (and of the pointers in
+           moshimeow/mercury_steamvr_driver @ e3948ace94a9f2cbd949adf50ffcc082002337cc,
+           the source XR Gate's download_mercury_models.sh uses).
+
+  1f1a039a266e13dc186bb884430ebd9c8216bdda680ab08a533d4c671f27ed36  grayscale_detection_160x160.onnx  (7299956 bytes)
+  40c0daa598cedb993b54fff17685231b7465d6db342656c401b01c2029efd1d5  grayscale_keypoint_jan18.onnx     (3966382 bytes)
+
+Both load in ONNX Runtime 1.22.0 and run (see ../test/smoke_output.txt).
+License: see ../LICENSES/README.md ("Models") - BSL-1.0 by upstream practice; the
+models repository itself carries no license file.

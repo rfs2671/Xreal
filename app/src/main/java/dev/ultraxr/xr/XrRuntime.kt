@@ -20,11 +20,12 @@ object XrRuntime {
             .sortedBy { it.loadLabel(c.packageManager).toString().lowercase() }
     }
 
-    fun statusLine(c: Context): String = (if (available) "Runtime ready" else "Runtime unavailable") + ": $detail; ${installedApps(c).size} OpenXR app(s) installed"
+    fun statusLine(c: Context): String = (if (available) "Runtime packaged and loaded" else "Runtime unavailable") + ": $detail; ${installedApps(c).size} OpenXR app(s) installed; ${XrHost.lastEvent}"
 
     /** Starts an OpenXR app with tracking kept alive behind it. */
     fun launch(c: Context, info: ResolveInfo) {
         TrackingService.start(c)
+        XrHost.openShell()
         val i = Intent(Intent.ACTION_MAIN).addCategory(CATEGORY_IMMERSIVE).setClassName(info.activityInfo.packageName, info.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try { c.startActivity(i) } catch (e: Exception) { Tracking.log("could not start ${info.activityInfo.packageName}: $e") }
     }

@@ -1,0 +1,851 @@
+Ultra XR: hand joints (XR_EXT_hand_tracking), a separate aim pose, one tracking space and recentring for the pocketxr
+driver. Apply after 0001 and 0002 on upstream commit ee03722885e777462708841223b60affe6873ac2 with: git apply
+Copyright 2026, Ultra XR contributors. GPL-3.0-or-later (the new file pocketxr_hands.c carries that SPDX tag; the
+changes to Pocket XR's and Monado's BSL-1.0 files are offered under GPL-3.0-or-later too). All of it is linked into
+libmonado-service.so only (and PocketFeed.java into the ipc AAR), never into libopenxr_monado.so, the library that
+OpenXR applications load.
+
+- drivers/pocketxr/pocketxr_hands.c (new): one xrt_device "Ultra XR hands" with the inputs
+  XRT_INPUT_HT_UNOBSTRUCTED_LEFT and _RIGHT, fed by pocketxr_feed_hand / PocketFeed.nativeHand.
+- drivers/pocketxr/pocketxr_hmd.c: head, controllers and hands share one tracking origin (before, the builder gave the
+  head and each controller its own, 1.6 m up and at (-0.2 or 0.2, 1.3, -0.5)); an origin offset applied to every pose
+  (default 1.6 m up) with pocketxr_set_origin_offset and pocketxr_recenter; an aim pose fed apart from the grip
+  (pocketxr_feed_controller_aim); the head reports position tracking; devices get default function pointers.
+- targets/service-lib/service_target.cpp, ipc PocketFeed.java: nativeHand, nativeConfigureHands, nativeControllerAim,
+  nativeSetOriginOffset, nativeRecenter.
+
+diff --git a/src/xrt/drivers/CMakeLists.txt b/src/xrt/drivers/CMakeLists.txt
+index 95161446e..19056395f 100644
+--- a/src/xrt/drivers/CMakeLists.txt
++++ b/src/xrt/drivers/CMakeLists.txt
+@@ -507,7 +507,10 @@ if(XRT_BUILD_DRIVER_SURVIVE)
+ endif()
+ 
+ if(XRT_BUILD_DRIVER_ANDROID)
+-	add_library(drv_pocketxr STATIC pocketxr/pocketxr_hmd.c pocketxr/pocketxr_interface.h)
++	add_library(
++		drv_pocketxr STATIC pocketxr/pocketxr_hands.c pocketxr/pocketxr_hmd.c
++				    pocketxr/pocketxr_interface.h
++	)
+ 	target_link_libraries(drv_pocketxr PRIVATE xrt-interfaces aux_util aux_math)
+ 
+ 	add_library(
+diff --git a/src/xrt/drivers/pocketxr/pocketxr_hands.c b/src/xrt/drivers/pocketxr/pocketxr_hands.c
+new file mode 100644
+index 000000000..b4f19b881
+--- /dev/null
++++ b/src/xrt/drivers/pocketxr/pocketxr_hands.c
+@@ -0,0 +1,287 @@
++// Copyright 2026, Ultra XR contributors.
++// SPDX-License-Identifier: GPL-3.0-or-later
++/*!
++ * @file
++ * @brief  Hand joints fed in by the app, served as XR_EXT_hand_tracking.
++ *
++ * The app tracks the hands itself (the glasses' cameras) and feeds 26 joints a hand, in the same space as the head
++ * pose. This device keeps the last two samples of each hand and answers from them: one device with the two
++ * "unobstructed" hand tracking inputs, which is what the system builder looks for (u_system_devices_get_ht_device)
++ * and what makes the OpenXR state tracker report supportsHandTracking and create hand trackers.
++ *
++ * This file is only linked into the service library (libmonado-service.so), never into the library that OpenXR
++ * applications load (libopenxr_monado.so).
++ *
++ * @ingroup drv_pocketxr
++ */
++
++#include "os/os_time.h"
++#include "xrt/xrt_defines.h"
++#include "xrt/xrt_device.h"
++
++#include "math/m_api.h"
++#include "math/m_mathinclude.h" // IWYU pragma: keep
++
++#include "util/u_device.h"
++#include "util/u_logging.h"
++#include "util/u_misc.h"
++
++#include "pocketxr_interface.h"
++
++#include <pthread.h>
++#include <stdio.h>
++#include <string.h>
++
++#define PXH_FLOATS_PER_JOINT 8
++#define PXH_DEFAULT_PREDICT_NS (30000000LL)
++#define PXH_DEFAULT_TIMEOUT_NS (200000000LL)
++//! Two samples further apart than this are not one motion: no speed is taken from them.
++#define PXH_MAX_SAMPLE_GAP_NS (150000000LL)
++
++struct pxh_sample
++{
++	int64_t timestamp_ns;
++	struct xrt_pose poses[XRT_HAND_JOINT_COUNT];
++	float radii[XRT_HAND_JOINT_COUNT];
++};
++
++struct pxh_hand
++{
++	//! The newest sample and the one before it.
++	struct pxh_sample newest, older;
++	bool has_newest, has_older;
++	//! False once the app said the hand is not seen.
++	bool active;
++	//! When the newest feed arrived, on CLOCK_MONOTONIC: for the timeout, whatever timestamps the app uses.
++	int64_t arrived_ns;
++};
++
++struct pocketxr_hands
++{
++	struct xrt_device base;
++};
++
++static pthread_mutex_t g_hands_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct pocketxr_hands *g_hands = NULL;
++static struct pxh_hand g_hand[2];
++static int64_t g_max_predict_ns = PXH_DEFAULT_PREDICT_NS;
++static int64_t g_timeout_ns = PXH_DEFAULT_TIMEOUT_NS;
++
++static void
++pocketxr_hands_destroy(struct xrt_device *xdev)
++{
++	pthread_mutex_lock(&g_hands_lock);
++	if (g_hands == (struct pocketxr_hands *)xdev) {
++		g_hands = NULL;
++	}
++	memset(g_hand, 0, sizeof(g_hand));
++	pthread_mutex_unlock(&g_hands_lock);
++
++	u_device_free(xdev);
++}
++
++static xrt_result_t
++pocketxr_hands_get_tracked_pose(struct xrt_device *xdev,
++                                enum xrt_input_name name,
++                                int64_t at_timestamp_ns,
++                                struct xrt_space_relation *out_relation)
++{
++	// The hands have no pose of their own: controller-style poses come from the two controller devices.
++	return XRT_ERROR_INPUT_UNSUPPORTED;
++}
++
++static xrt_result_t
++pocketxr_hands_get_hand_tracking(struct xrt_device *xdev,
++                                 enum xrt_input_name name,
++                                 int64_t desired_timestamp_ns,
++                                 struct xrt_hand_joint_set *out_value,
++                                 int64_t *out_timestamp_ns)
++{
++	int32_t hand;
++	if (name == XRT_INPUT_HT_UNOBSTRUCTED_LEFT) {
++		hand = 0;
++	} else if (name == XRT_INPUT_HT_UNOBSTRUCTED_RIGHT) {
++		hand = 1;
++	} else {
++		return XRT_ERROR_INPUT_UNSUPPORTED;
++	}
++
++	// Zeroed: not active, and every joint's flags clear.
++	U_ZERO(out_value);
++	*out_timestamp_ns = desired_timestamp_ns;
++
++	const int64_t now_ns = os_monotonic_get_ns();
++
++	pthread_mutex_lock(&g_hands_lock);
++	const struct pxh_hand h = g_hand[hand];
++	const int64_t max_predict_ns = g_max_predict_ns;
++	const int64_t timeout_ns = g_timeout_ns;
++	pthread_mutex_unlock(&g_hands_lock);
++
++	if (!h.has_newest || !h.active || now_ns - h.arrived_ns > timeout_ns) {
++		return XRT_SUCCESS;
++	}
++
++	// The speed between the last two samples, when they are one motion.
++	const int64_t gap_ns = h.has_older ? h.newest.timestamp_ns - h.older.timestamp_ns : 0;
++	const bool has_speed = gap_ns > 1000000LL && gap_ns < PXH_MAX_SAMPLE_GAP_NS;
++	const float per_s = has_speed ? (float)(1e9 / (double)gap_ns) : 0.0f;
++
++	// How far from the newest sample the answer is: on at most the limit, back at most to the older sample.
++	int64_t ahead_ns = desired_timestamp_ns - h.newest.timestamp_ns;
++	if (ahead_ns > max_predict_ns) {
++		ahead_ns = max_predict_ns;
++	}
++	if (ahead_ns < -gap_ns) {
++		ahead_ns = -gap_ns;
++	}
++	if (!has_speed) {
++		ahead_ns = 0;
++	}
++	const float ahead_s = (float)((double)ahead_ns / 1e9);
++
++	enum xrt_space_relation_flags flags = (enum xrt_space_relation_flags)(
++	    XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
++	    XRT_SPACE_RELATION_POSITION_VALID_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT);
++	if (has_speed) {
++		flags = (enum xrt_space_relation_flags)(flags | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT);
++	}
++
++	for (uint32_t i = 0; i < XRT_HAND_JOINT_COUNT; i++) {
++		struct xrt_hand_joint_value *joint = &out_value->values.hand_joint_set_default[i];
++		struct xrt_space_relation *r = &joint->relation;
++
++		r->relation_flags = flags;
++		r->pose = h.newest.poses[i];
++		joint->radius = h.newest.radii[i];
++
++		if (!has_speed) {
++			continue;
++		}
++
++		const struct xrt_vec3 a = h.older.poses[i].position;
++		const struct xrt_vec3 b = h.newest.poses[i].position;
++		r->linear_velocity.x = (b.x - a.x) * per_s;
++		r->linear_velocity.y = (b.y - a.y) * per_s;
++		r->linear_velocity.z = (b.z - a.z) * per_s;
++
++		r->pose.position.x = b.x + r->linear_velocity.x * ahead_s;
++		r->pose.position.y = b.y + r->linear_velocity.y * ahead_s;
++		r->pose.position.z = b.z + r->linear_velocity.z * ahead_s;
++
++		if (ahead_ns < 0) {
++			// Between the two samples: the orientation is turned back toward the older one too.
++			const float t = (float)((double)-ahead_ns / (double)gap_ns);
++			math_quat_slerp(&h.newest.poses[i].orientation, &h.older.poses[i].orientation, t,
++			                &r->pose.orientation);
++		}
++	}
++
++	/*
++	 * The joints above are in the fed space; the hand pose carries that space into the runtime's (the origin
++	 * offset, see pocketxr_set_origin_offset). The hand tracker (b_hand_tracker.cpp) chains joint, hand pose and
++	 * tracking origin. Every flag is set so the joints' own flags are what comes out.
++	 */
++	out_value->hand_pose.relation_flags = (enum xrt_space_relation_flags)XRT_SPACE_RELATION_BITMASK_ALL;
++	pocketxr_get_origin_offset(&out_value->hand_pose.pose);
++	out_value->is_active = true;
++	*out_timestamp_ns = h.newest.timestamp_ns + ahead_ns;
++
++	return XRT_SUCCESS;
++}
++
++struct xrt_device *
++pocketxr_hands_create(void)
++{
++	struct pocketxr_hands *hands = U_DEVICE_ALLOCATE(struct pocketxr_hands, U_DEVICE_ALLOC_NO_FLAGS, 2, 0);
++	if (hands == NULL) {
++		return NULL;
++	}
++
++	// Everything this device does not do answers "not implemented" instead of being a null pointer.
++	u_device_populate_function_pointers(&hands->base, pocketxr_hands_get_tracked_pose, pocketxr_hands_destroy);
++	hands->base.update_inputs = u_device_noop_update_inputs;
++	hands->base.get_hand_tracking = pocketxr_hands_get_hand_tracking;
++
++	hands->base.name = XRT_DEVICE_HAND_TRACKER;
++	hands->base.device_type = XRT_DEVICE_TYPE_HAND_TRACKER;
++	hands->base.tracking_origin = pocketxr_get_origin();
++	hands->base.supported.hand_tracking = true;
++	hands->base.supported.orientation_tracking = true;
++	hands->base.supported.position_tracking = true;
++
++	snprintf(hands->base.str, XRT_DEVICE_NAME_LEN, "Ultra XR hands");
++	snprintf(hands->base.serial, XRT_DEVICE_NAME_LEN, "Ultra XR hands");
++
++	hands->base.inputs[0].name = XRT_INPUT_HT_UNOBSTRUCTED_LEFT;
++	hands->base.inputs[1].name = XRT_INPUT_HT_UNOBSTRUCTED_RIGHT;
++
++	pthread_mutex_lock(&g_hands_lock);
++	memset(g_hand, 0, sizeof(g_hand));
++	g_hands = hands;
++	pthread_mutex_unlock(&g_hands_lock);
++
++	return &hands->base;
++}
++
++void
++pocketxr_configure_hands(int64_t max_predict_ns, int64_t timeout_ns)
++{
++	pthread_mutex_lock(&g_hands_lock);
++	g_max_predict_ns = max_predict_ns < 0 ? 0 : max_predict_ns;
++	g_timeout_ns = timeout_ns <= 0 ? PXH_DEFAULT_TIMEOUT_NS : timeout_ns;
++	pthread_mutex_unlock(&g_hands_lock);
++}
++
++void
++pocketxr_feed_hand(int32_t hand, int64_t timestamp_ns, const float *joints, int active)
++{
++	if (hand < 0 || hand > 1) {
++		return;
++	}
++
++	const int64_t now_ns = os_monotonic_get_ns();
++
++	if (!active || joints == NULL) {
++		pthread_mutex_lock(&g_hands_lock);
++		g_hand[hand].active = false;
++		g_hand[hand].has_newest = false;
++		g_hand[hand].has_older = false;
++		g_hand[hand].arrived_ns = now_ns;
++		pthread_mutex_unlock(&g_hands_lock);
++		return;
++	}
++
++	struct pxh_sample sample;
++	sample.timestamp_ns = timestamp_ns;
++	for (uint32_t i = 0; i < XRT_HAND_JOINT_COUNT; i++) {
++		const float *f = &joints[i * PXH_FLOATS_PER_JOINT];
++		sample.poses[i].position = (struct xrt_vec3){.x = f[0], .y = f[1], .z = f[2]};
++		struct xrt_quat q = {.x = f[3], .y = f[4], .z = f[5], .w = f[6]};
++		const float n2 = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
++		if (n2 > 1e-12f && isfinite(n2)) {
++			math_quat_normalize(&q);
++		} else {
++			q = (struct xrt_quat)XRT_QUAT_IDENTITY;
++		}
++		sample.poses[i].orientation = q;
++		sample.radii[i] = f[7];
++	}
++
++	pthread_mutex_lock(&g_hands_lock);
++	if (g_hands != NULL) {
++		struct pxh_hand *h = &g_hand[hand];
++		if (h->has_newest && timestamp_ns > h->newest.timestamp_ns) {
++			h->older = h->newest;
++			h->has_older = true;
++		} else if (h->has_newest) {
++			// Not newer than what is held (a repeat, or the clock went back): start again from this one.
++			h->has_older = false;
++		}
++		h->newest = sample;
++		h->has_newest = true;
++		h->active = true;
++		h->arrived_ns = now_ns;
++	}
++	pthread_mutex_unlock(&g_hands_lock);
++}
+diff --git a/src/xrt/drivers/pocketxr/pocketxr_hmd.c b/src/xrt/drivers/pocketxr/pocketxr_hmd.c
+index 41f043b89..63de54734 100644
+--- a/src/xrt/drivers/pocketxr/pocketxr_hmd.c
++++ b/src/xrt/drivers/pocketxr/pocketxr_hmd.c
+@@ -18,6 +18,7 @@
+ #include "math/m_api.h"
+ #include "math/m_mathinclude.h" // IWYU pragma: keep
+ #include "math/m_relation_history.h"
++#include "math/m_space.h"
+ 
+ #include "util/u_device.h"
+ #include "util/u_distortion_mesh.h"
+@@ -63,6 +64,56 @@ static float g_ipd_m = 0.0f;
+  */
+ static float g_eye_shift_tan = 0.0f;
+ 
++/*
++ * Ultra XR: one tracking origin for the head, the controllers and the hands, so everything the app feeds is in one
++ * space. Left to themselves (U_DEVICE_ALLOC_TRACKING_NONE) each device has its own origin, and the builder puts the
++ * head's 1.6 m up and the hands' at (-0.2 or 0.2, 1.3, -0.5): poses fed in one space come out in three.
++ */
++static struct xrt_tracking_origin g_origin = {
++    .name = "Ultra XR",
++    .type = XRT_TRACKING_TYPE_OTHER,
++    .initial_offset = XRT_POSE_IDENTITY,
++};
++
++/*!
++ * Where the app's tracking space sits in the runtime's (the STAGE space): fed space to stage. The 1.6 m is the
++ * nominal standing height the builder gave the head before, for a tracker that starts at zero.
++ */
++static struct xrt_pose g_origin_offset = {
++    .orientation = XRT_QUAT_IDENTITY,
++    .position = {0.0f, 1.6f, 0.0f},
++};
++
++void
++pocketxr_get_origin_offset(struct xrt_pose *out_offset)
++{
++	pthread_mutex_lock(&g_lock);
++	*out_offset = g_origin_offset;
++	pthread_mutex_unlock(&g_lock);
++}
++
++struct xrt_tracking_origin *
++pocketxr_get_origin(void)
++{
++	return &g_origin;
++}
++
++//! Moves a relation in the fed space into the runtime's.
++static void
++apply_origin_offset(struct xrt_space_relation *relation)
++{
++	if (relation->relation_flags == 0) {
++		return;
++	}
++	struct xrt_pose offset;
++	pocketxr_get_origin_offset(&offset);
++
++	struct xrt_relation_chain xrc = {0};
++	m_relation_chain_push_relation(&xrc, relation);
++	m_relation_chain_push_pose_if_not_identity(&xrc, &offset);
++	m_relation_chain_resolve(&xrc, relation);
++}
++
+ static inline struct pocketxr_hmd *
+ pocketxr_hmd(struct xrt_device *xdev)
+ {
+@@ -102,6 +153,7 @@ pocketxr_hmd_get_tracked_pose(struct xrt_device *xdev,
+ 	if ((relation.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) != 0) {
+ 		math_quat_normalize(&relation.pose.orientation);
+ 	}
++	apply_origin_offset(&relation);
+ 
+ 	*out_relation = relation;
+ 	return XRT_SUCCESS;
+@@ -146,6 +198,9 @@ pocketxr_hmd_create(void)
+ 	    (enum u_device_alloc_flags)(U_DEVICE_ALLOC_HMD | U_DEVICE_ALLOC_TRACKING_NONE);
+ 
+ 	struct pocketxr_hmd *hmd = U_DEVICE_ALLOCATE(struct pocketxr_hmd, flags, 1, 0);
++	hmd->base.tracking_origin = &g_origin;
++	// Ultra XR: what this device does not do answers "not implemented" instead of being a null pointer.
++	u_device_populate_function_pointers(&hmd->base, pocketxr_hmd_get_tracked_pose, pocketxr_hmd_destroy);
+ 
+ 	size_t idx = 0;
+ 	hmd->base.hmd->blend_modes[idx++] = XRT_BLEND_MODE_OPAQUE;
+@@ -166,7 +221,8 @@ pocketxr_hmd_create(void)
+ 	hmd->base.device_type = XRT_DEVICE_TYPE_HMD;
+ 	hmd->base.inputs[0].name = XRT_INPUT_GENERIC_HEAD_POSE;
+ 	hmd->base.supported.orientation_tracking = true;
+-	hmd->base.supported.position_tracking = false;
++	// Ultra XR: the app feeds a position (pocketxr_feed_pose6).
++	hmd->base.supported.position_tracking = true;
+ 
+ 	pthread_mutex_lock(&g_lock);
+ 	const int32_t width = g_width_px;
+@@ -337,6 +393,8 @@ struct pocketxr_controller
+ {
+ 	struct xrt_device base;
+ 	struct m_relation_history *relation_hist;
++	//! Ultra XR: the aim pose when it is fed on its own (pocketxr_feed_controller_aim), else the grip's is used.
++	struct m_relation_history *aim_hist;
+ 	int32_t hand;
+ 
+ 	// Under g_lock.
+@@ -346,6 +404,7 @@ struct pocketxr_controller
+ 	float stick_x;
+ 	float stick_y;
+ 	int64_t last_ns;
++	int64_t last_aim_ns;
+ };
+ 
+ static struct pocketxr_controller *g_controllers[2] = {NULL, NULL};
+@@ -368,6 +427,7 @@ pocketxr_controller_destroy(struct xrt_device *xdev)
+ 	pthread_mutex_unlock(&g_lock);
+ 
+ 	m_relation_history_destroy(&c->relation_hist);
++	m_relation_history_destroy(&c->aim_hist);
+ 	u_device_free(&c->base);
+ }
+ 
+@@ -415,8 +475,13 @@ pocketxr_controller_get_tracked_pose(struct xrt_device *xdev,
+ 
+ 	pthread_mutex_lock(&g_lock);
+ 	const int64_t last_ns = c->last_ns;
++	const int64_t last_aim_ns = c->last_aim_ns;
+ 	pthread_mutex_unlock(&g_lock);
+ 
++	// Ultra XR: an aim pose fed on its own is used while it is as fresh as the controller's state.
++	const bool own_aim = name == XRT_INPUT_TOUCH_AIM_POSE && last_aim_ns != 0 && last_ns != 0 &&
++	                     last_ns - last_aim_ns < PX_STALE_NS;
++
+ 	int64_t at = at_timestamp_ns;
+ 	if (last_ns != 0 && at > last_ns + PX_PREDICT_FULL_NS) {
+ 		const double over = (double)(at - last_ns - PX_PREDICT_FULL_NS);
+@@ -424,7 +489,7 @@ pocketxr_controller_get_tracked_pose(struct xrt_device *xdev,
+ 	}
+ 
+ 	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
+-	m_relation_history_get(c->relation_hist, at, &relation);
++	m_relation_history_get(own_aim ? c->aim_hist : c->relation_hist, at, &relation);
+ 
+ 	if ((relation.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) != 0) {
+ 		math_quat_normalize(&relation.pose.orientation);
+@@ -437,6 +502,7 @@ pocketxr_controller_get_tracked_pose(struct xrt_device *xdev,
+ 		relation.angular_velocity = (struct xrt_vec3){0};
+ 		relation.linear_velocity = (struct xrt_vec3){0};
+ 	}
++	apply_origin_offset(&relation);
+ 
+ 	*out_relation = relation;
+ 	return XRT_SUCCESS;
+@@ -456,6 +522,8 @@ pocketxr_controller_create(int32_t hand)
+ {
+ 	enum u_device_alloc_flags flags = (enum u_device_alloc_flags)(U_DEVICE_ALLOC_TRACKING_NONE);
+ 	struct pocketxr_controller *c = U_DEVICE_ALLOCATE(struct pocketxr_controller, flags, PX_INPUT_COUNT, 1);
++	c->base.tracking_origin = &g_origin;
++	u_device_populate_function_pointers(&c->base, pocketxr_controller_get_tracked_pose, pocketxr_controller_destroy);
+ 
+ 	c->hand = hand;
+ 	c->base.update_inputs = pocketxr_controller_update_inputs;
+@@ -488,6 +556,7 @@ pocketxr_controller_create(int32_t hand)
+ 	c->base.outputs[0].name = XRT_OUTPUT_NAME_TOUCH_HAPTIC;
+ 
+ 	m_relation_history_create(&c->relation_hist);
++	m_relation_history_create(&c->aim_hist);
+ 
+ 	pthread_mutex_lock(&g_lock);
+ 	g_controllers[hand] = c;
+@@ -546,6 +615,114 @@ pocketxr_feed_controller(int32_t hand,
+ 	pthread_mutex_unlock(&g_lock);
+ }
+ 
++void
++pocketxr_feed_controller_aim(int32_t hand,
++                             int64_t timestamp_ns,
++                             float px,
++                             float py,
++                             float pz,
++                             float x,
++                             float y,
++                             float z,
++                             float w,
++                             float ang_x,
++                             float ang_y,
++                             float ang_z,
++                             float vel_x,
++                             float vel_y,
++                             float vel_z)
++{
++	if (hand < 0 || hand > 1) {
++		return;
++	}
++
++	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
++	relation.relation_flags = (enum xrt_space_relation_flags)(
++	    XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
++	    XRT_SPACE_RELATION_POSITION_VALID_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
++	    XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT);
++	relation.pose.position = (struct xrt_vec3){.x = px, .y = py, .z = pz};
++	relation.linear_velocity = (struct xrt_vec3){.x = vel_x, .y = vel_y, .z = vel_z};
++	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
++	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
++
++	pthread_mutex_lock(&g_lock);
++	struct pocketxr_controller *c = g_controllers[hand];
++	if (c != NULL) {
++		m_relation_history_push(c->aim_hist, &relation, timestamp_ns);
++		c->last_aim_ns = timestamp_ns;
++	}
++	pthread_mutex_unlock(&g_lock);
++}
++
++void
++pocketxr_set_origin_offset(float px, float py, float pz, float x, float y, float z, float w)
++{
++	struct xrt_pose offset = {
++	    .orientation = {.x = x, .y = y, .z = z, .w = w},
++	    .position = {.x = px, .y = py, .z = pz},
++	};
++	if (!math_quat_validate(&offset.orientation)) {
++		const float n = sqrtf(x * x + y * y + z * z + w * w);
++		if (!(n > 1e-6f)) {
++			offset.orientation = (struct xrt_quat)XRT_QUAT_IDENTITY;
++		} else {
++			math_quat_normalize(&offset.orientation);
++		}
++	}
++
++	pthread_mutex_lock(&g_lock);
++	g_origin_offset = offset;
++	pthread_mutex_unlock(&g_lock);
++}
++
++int
++pocketxr_recenter(void)
++{
++	struct xrt_space_relation head = XRT_SPACE_RELATION_ZERO;
++	int64_t head_ns = 0;
++
++	pthread_mutex_lock(&g_lock);
++	const bool have = g_hmd != NULL && m_relation_history_get_latest(g_hmd->relation_hist, &head_ns, &head);
++	const float keep_y = g_origin_offset.position.y;
++	pthread_mutex_unlock(&g_lock);
++
++	if (!have || (head.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) == 0) {
++		return 0;
++	}
++
++	// Where the head looks, on the floor plane: a yaw only, so the horizon stays level.
++	math_quat_normalize(&head.pose.orientation);
++	const struct xrt_vec3 forward = {0.0f, 0.0f, -1.0f};
++	struct xrt_vec3 looking;
++	math_quat_rotate_vec3(&head.pose.orientation, &forward, &looking);
++	float yaw = 0.0f;
++	if (looking.x * looking.x + looking.z * looking.z > 1e-6f) {
++		yaw = atan2f(-looking.x, -looking.z);
++	}
++
++	struct xrt_pose flat = XRT_POSE_IDENTITY;
++	const struct xrt_vec3 up = {0.0f, 1.0f, 0.0f};
++	math_quat_from_angle_vector(yaw, &up, &flat.orientation);
++	if ((head.relation_flags & XRT_SPACE_RELATION_POSITION_VALID_BIT) != 0) {
++		flat.position.x = head.pose.position.x;
++		flat.position.z = head.pose.position.z;
++	}
++
++	// The head's flat pose goes to the origin, facing -z; the height offset stays as it was set.
++	struct xrt_pose offset;
++	math_pose_invert(&flat, &offset);
++	offset.position.y = keep_y;
++
++	pthread_mutex_lock(&g_lock);
++	g_origin_offset = offset;
++	pthread_mutex_unlock(&g_lock);
++
++	U_LOG_I("Ultra XR: recentred, the fed space turned %.1f degrees and moved (%.2f, %.2f) m on the floor",
++	        -yaw * 180.0 / M_PI, offset.position.x, offset.position.z);
++	return 1;
++}
++
+ static void
+ pocketxr_prober_destroy(struct xrt_auto_prober *p)
+ {
+@@ -569,7 +746,9 @@ pocketxr_prober_autoprobe(struct xrt_auto_prober *xap,
+ 	out_xdevs[0] = xdev;
+ 	out_xdevs[1] = pocketxr_controller_create(0);
+ 	out_xdevs[2] = pocketxr_controller_create(1);
+-	return 3;
++	// Ultra XR: the hands' joints for XR_EXT_hand_tracking (pocketxr_hands.c).
++	out_xdevs[3] = pocketxr_hands_create();
++	return out_xdevs[3] != NULL ? 4 : 3;
+ }
+ 
+ struct xrt_auto_prober *
+diff --git a/src/xrt/drivers/pocketxr/pocketxr_interface.h b/src/xrt/drivers/pocketxr/pocketxr_interface.h
+index a3ab3c052..208ac443c 100644
+--- a/src/xrt/drivers/pocketxr/pocketxr_interface.h
++++ b/src/xrt/drivers/pocketxr/pocketxr_interface.h
+@@ -119,6 +119,87 @@ pocketxr_feed_controller(int32_t hand,
+                          float stick_x,
+                          float stick_y);
+ 
++/*
++ *
++ * Ultra XR additions.
++ *
++ */
++
++struct xrt_device;
++struct xrt_pose;
++struct xrt_tracking_origin;
++
++//! The one tracking origin the head, the controllers and the hands share.
++struct xrt_tracking_origin *
++pocketxr_get_origin(void);
++
++//! The current offset from the fed space to the runtime's (see pocketxr_set_origin_offset).
++void
++pocketxr_get_origin_offset(struct xrt_pose *out_offset);
++
++//! Makes the device that serves XR_EXT_hand_tracking for both hands. Called by the auto prober.
++struct xrt_device *
++pocketxr_hands_create(void);
++
++/*!
++ * One controller's aim pose, when it is not rigidly the grip's (a hand's pointing ray). On CLOCK_MONOTONIC, in the
++ * head pose's space. While none was fed within 150 ms of the controller's newest state the aim pose is the grip pose,
++ * as in Pocket XR. Any thread.
++ */
++void
++pocketxr_feed_controller_aim(int32_t hand,
++                             int64_t timestamp_ns,
++                             float px,
++                             float py,
++                             float pz,
++                             float x,
++                             float y,
++                             float z,
++                             float w,
++                             float ang_x,
++                             float ang_y,
++                             float ang_z,
++                             float vel_x,
++                             float vel_y,
++                             float vel_z);
++
++/*!
++ * One hand's joints for XR_EXT_hand_tracking, on CLOCK_MONOTONIC. Any thread. Dropped when no device exists yet.
++ *
++ * @param hand         0 left, 1 right.
++ * @param timestamp_ns When the joints are true (the camera frame's time, not when it was processed).
++ * @param joints       26 joints in XrHandJointEXT order (palm, wrist, thumb metacarpal ... little tip), 8 floats
++ *                     each: position x, y, z in metres, orientation x, y, z, w, radius in metres. In the head pose's
++ *                     space; orientations follow the OpenXR hand joint convention (-z toward the finger tip, +y out
++ *                     of the back of the hand).
++ * @param active       0 when the hand is not seen: the application gets isActive false. Joints may then be NULL.
++ */
++void
++pocketxr_feed_hand(int32_t hand, int64_t timestamp_ns, const float *joints, int active);
++
++/*!
++ * How hand joints are carried past their newest sample: positions go on at the speed between the last two samples
++ * for at most this long (default 30 ms; 0 holds the newest sample), and a hand silent for the timeout stops being
++ * active (default 200 ms).
++ */
++void
++pocketxr_configure_hands(int64_t max_predict_ns, int64_t timeout_ns);
++
++/*!
++ * Where the fed space sits in the runtime's STAGE space: fed space to stage. The default is 1.6 m up, the nominal
++ * standing height, for a tracker that starts at zero. Takes effect on the next pose asked for: head, controllers
++ * and hands move together. No reference space change event is sent.
++ */
++void
++pocketxr_set_origin_offset(float px, float py, float pz, float x, float y, float z, float w);
++
++/*!
++ * Recentre: the offset is set so the head's newest pose is over the STAGE origin and faces -z (yaw only, the
++ * height offset is kept). Returns 1 when done, 0 when no head pose has been fed yet.
++ */
++int
++pocketxr_recenter(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/src/xrt/ipc/android/src/main/java/org/freedesktop/monado/ipc/PocketFeed.java b/src/xrt/ipc/android/src/main/java/org/freedesktop/monado/ipc/PocketFeed.java
+index 478d52c67..434c78d84 100644
+--- a/src/xrt/ipc/android/src/main/java/org/freedesktop/monado/ipc/PocketFeed.java
++++ b/src/xrt/ipc/android/src/main/java/org/freedesktop/monado/ipc/PocketFeed.java
+@@ -81,4 +81,60 @@ public final class PocketFeed {
+             float squeeze,
+             float stickX,
+             float stickY);
++
++    /*
++     * Ultra XR additions.
++     */
++
++    /**
++     * One hand's joints for XR_EXT_hand_tracking: hand 0 left, 1 right, at the camera frame's own time on
++     * System.nanoTime. joints holds 26 joints in XrHandJointEXT order (palm, wrist, thumb metacarpal, proximal,
++     * distal, tip, then index, middle, ring and little metacarpal, proximal, intermediate, distal, tip), 8 floats
++     * each: position x, y, z in metres, orientation x, y, z, w, radius in metres; 208 floats. Same space as the
++     * head pose. With active false (the hand is not seen) the application gets isActive false and joints may be
++     * null. A hand not fed for the timeout (200 ms unless configured) goes inactive by itself.
++     */
++    public static native void nativeHand(int hand, long timestampNs, float[] joints, boolean active);
++
++    /**
++     * How hand joints are carried past their newest sample: positions go on at the speed between the last two
++     * samples for at most maxPredictMs (default 30; 0 holds the newest sample), and a hand not fed for timeoutMs
++     * (default 200) goes inactive.
++     */
++    public static native void nativeConfigureHands(float maxPredictMs, float timeoutMs);
++
++    /**
++     * One controller's aim pose (a hand's pointing ray), when it is not the grip's. Same clock and space as
++     * nativeController. While none was fed within 150 ms of the controller's newest state, the aim pose is the grip
++     * pose. Feed it before nativeController for the same sample.
++     */
++    public static native void nativeControllerAim(
++            int hand,
++            long timestampNs,
++            float px,
++            float py,
++            float pz,
++            float x,
++            float y,
++            float z,
++            float w,
++            float angX,
++            float angY,
++            float angZ,
++            float velX,
++            float velY,
++            float velZ);
++
++    /**
++     * Where the fed space sits in the runtime's STAGE space (fed space to stage): a position in metres and an
++     * orientation. The default is 1.6 m up. Head, controllers and hands move together, from the next frame.
++     */
++    public static native void nativeSetOriginOffset(
++            float px, float py, float pz, float x, float y, float z, float w);
++
++    /**
++     * Recentre: the head's newest pose becomes the STAGE origin, facing forward (yaw only; the height offset is
++     * kept). False when no head pose has been fed yet.
++     */
++    public static native boolean nativeRecenter();
+ }
+diff --git a/src/xrt/targets/service-lib/service_target.cpp b/src/xrt/targets/service-lib/service_target.cpp
+index 91a93b161..99874171b 100644
+--- a/src/xrt/targets/service-lib/service_target.cpp
++++ b/src/xrt/targets/service-lib/service_target.cpp
+@@ -264,6 +264,68 @@ Java_org_freedesktop_monado_ipc_PocketFeed_nativeController(JNIEnv *env,
+ 	                         trigger, squeeze, stick_x, stick_y);
+ }
+ 
++/*
++ * Ultra XR additions to PocketFeed.
++ */
++
++extern "C" JNIEXPORT void JNICALL
++Java_org_freedesktop_monado_ipc_PocketFeed_nativeHand(
++    JNIEnv *env, jclass clazz, jint hand, jlong timestamp_ns, jfloatArray joints, jboolean active)
++{
++	// 26 joints of 8 floats: position, orientation (x, y, z, w), radius.
++	constexpr jsize count = 26 * 8;
++	jfloat values[count];
++	if (!active || joints == nullptr || env->GetArrayLength(joints) < count) {
++		pocketxr_feed_hand(hand, timestamp_ns, nullptr, 0);
++		return;
++	}
++	env->GetFloatArrayRegion(joints, 0, count, values);
++	pocketxr_feed_hand(hand, timestamp_ns, values, 1);
++}
++
++extern "C" JNIEXPORT void JNICALL
++Java_org_freedesktop_monado_ipc_PocketFeed_nativeConfigureHands(
++    JNIEnv *env, jclass clazz, jfloat max_predict_ms, jfloat timeout_ms)
++{
++	pocketxr_configure_hands((int64_t)(max_predict_ms * 1e6f), (int64_t)(timeout_ms * 1e6f));
++}
++
++extern "C" JNIEXPORT void JNICALL
++Java_org_freedesktop_monado_ipc_PocketFeed_nativeControllerAim(JNIEnv *env,
++                                                               jclass clazz,
++                                                               jint hand,
++                                                               jlong timestamp_ns,
++                                                               jfloat px,
++                                                               jfloat py,
++                                                               jfloat pz,
++                                                               jfloat x,
++                                                               jfloat y,
++                                                               jfloat z,
++                                                               jfloat w,
++                                                               jfloat ang_x,
++                                                               jfloat ang_y,
++                                                               jfloat ang_z,
++                                                               jfloat vel_x,
++                                                               jfloat vel_y,
++                                                               jfloat vel_z)
++{
++	pocketxr_feed_controller_aim(hand, timestamp_ns, px, py, pz, x, y, z, w, ang_x, ang_y, ang_z, vel_x, vel_y,
++	                             vel_z);
++}
++
++extern "C" JNIEXPORT void JNICALL
++Java_org_freedesktop_monado_ipc_PocketFeed_nativeSetOriginOffset(
++    JNIEnv *env, jclass clazz, jfloat px, jfloat py, jfloat pz, jfloat x, jfloat y, jfloat z, jfloat w)
++{
++	pocketxr_set_origin_offset(px, py, pz, x, y, z, w);
++}
++
++extern "C" JNIEXPORT jboolean JNICALL
++Java_org_freedesktop_monado_ipc_PocketFeed_nativeRecenter(JNIEnv *env, jclass clazz)
++{
++	return pocketxr_recenter() != 0 ? JNI_TRUE : JNI_FALSE;
++}
++
+ extern "C" JNIEXPORT void JNICALL
+ Java_org_freedesktop_monado_ipc_MonadoImpl_nativeStartServer(JNIEnv *env, jobject thiz, jobject context)
+ {
