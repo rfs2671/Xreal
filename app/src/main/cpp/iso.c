@@ -45,7 +45,7 @@ static void destroy(iso_t *s) {
 }
 
 // Returns a handle, or -errno.
-JNIEXPORT jlong JNICALL Java_dev_xrealdiag_usb_IsoNative_start(
+JNIEXPORT jlong JNICALL Java_dev_ultraxr_usb_IsoNative_start(
         JNIEnv *env, jclass cls, jint fd, jint endpoint, jint pkt_size, jint pkts, jint n_urbs) {
     (void)env; (void)cls;
     if (pkt_size <= 0 || pkts <= 0 || n_urbs <= 0) return -EINVAL;
@@ -87,7 +87,7 @@ JNIEXPORT jlong JNICALL Java_dev_xrealdiag_usb_IsoNative_start(
 // Reaps one URB. Packet payloads are concatenated into `out`; meta[0] = packet count,
 // meta[1] = packets with a non-zero status, meta[2..] = each packet's length.
 // Returns bytes copied, 0 on timeout, or -errno.
-JNIEXPORT jint JNICALL Java_dev_xrealdiag_usb_IsoNative_reap(
+JNIEXPORT jint JNICALL Java_dev_ultraxr_usb_IsoNative_reap(
         JNIEnv *env, jclass cls, jlong handle, jobject out, jintArray meta, jint timeout_ms) {
     (void)cls;
     iso_t *s = (iso_t *)(intptr_t)handle;
@@ -131,7 +131,7 @@ JNIEXPORT jint JNICALL Java_dev_xrealdiag_usb_IsoNative_reap(
     return total;
 }
 
-JNIEXPORT void JNICALL Java_dev_xrealdiag_usb_IsoNative_stop(JNIEnv *env, jclass cls, jlong handle) {
+JNIEXPORT void JNICALL Java_dev_ultraxr_usb_IsoNative_stop(JNIEnv *env, jclass cls, jlong handle) {
     (void)env; (void)cls;
     iso_t *s = (iso_t *)(intptr_t)handle;
     if (!s) return;

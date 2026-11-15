@@ -1,4 +1,4 @@
-package dev.xrealdiag.proto
+package dev.ultraxr.proto
 
 /**
  * Reassembles UVC payloads (iso packets or bulk transfers) into video frames.

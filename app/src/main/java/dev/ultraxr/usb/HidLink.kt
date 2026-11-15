@@ -1,4 +1,4 @@
-package dev.xrealdiag.usb
+package dev.ultraxr.usb
 
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice

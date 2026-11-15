@@ -1,4 +1,4 @@
-package dev.xrealdiag.proto
+package dev.ultraxr.proto
 
 /**
  * Air 2 Ultra SLAM camera frame decoder. Each UVC frame (advertised as 640x241 at

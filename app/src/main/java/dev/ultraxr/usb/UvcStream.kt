@@ -1,11 +1,11 @@
-package dev.xrealdiag.usb
+package dev.ultraxr.usb
 
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbInterface
-import dev.xrealdiag.proto.UvcDescriptors
-import dev.xrealdiag.proto.UvcFrameAssembler
+import dev.ultraxr.proto.UvcDescriptors
+import dev.ultraxr.proto.UvcFrameAssembler
 import java.nio.ByteBuffer
 import kotlin.concurrent.thread
 

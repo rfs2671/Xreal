@@ -1,4 +1,4 @@
-package dev.xrealdiag.proto
+package dev.ultraxr.proto
 
 /**
  * Air 2 Ultra IMU HID reports (interface 2). Offsets from XR Gate's xreal_imu_codec (MIT):

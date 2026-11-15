@@ -1,4 +1,4 @@
-package dev.xrealdiag.display
+package dev.ultraxr.display
 
 import android.app.Presentation
 import android.content.Context

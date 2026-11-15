@@ -1,4 +1,4 @@
-package dev.xrealdiag.display
+package dev.ultraxr.display
 
 /**
  * Gyro-only orientation, integrated from the glasses' IMU. This exists so the test

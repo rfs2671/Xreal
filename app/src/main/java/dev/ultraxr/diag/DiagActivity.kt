@@ -1,4 +1,4 @@
-package dev.xrealdiag
+package dev.ultraxr.diag
 
 import android.Manifest
 import android.app.Activity
@@ -31,16 +31,16 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import dev.xrealdiag.display.HeadPose
-import dev.xrealdiag.display.StereoPresentation
-import dev.xrealdiag.display.StereoRenderer
-import dev.xrealdiag.proto.CameraDecoder
-import dev.xrealdiag.proto.McuProtocol
-import dev.xrealdiag.proto.UvcDescriptors
-import dev.xrealdiag.usb.HidLink
-import dev.xrealdiag.usb.ImuReader
-import dev.xrealdiag.usb.McuClient
-import dev.xrealdiag.usb.UvcStream
+import dev.ultraxr.display.HeadPose
+import dev.ultraxr.display.StereoPresentation
+import dev.ultraxr.display.StereoRenderer
+import dev.ultraxr.proto.CameraDecoder
+import dev.ultraxr.proto.McuProtocol
+import dev.ultraxr.proto.UvcDescriptors
+import dev.ultraxr.usb.HidLink
+import dev.ultraxr.usb.ImuReader
+import dev.ultraxr.usb.McuClient
+import dev.ultraxr.usb.UvcStream
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -54,13 +54,13 @@ import kotlin.concurrent.thread
  * Hardware feasibility test for Pixel + XREAL Air 2 Ultra: IMU, SLAM cameras and
  * stereo display output, all at the same time, with a report to send back.
  */
-class MainActivity : Activity() {
+class DiagActivity : Activity() {
     companion object {
         const val VID = 0x3318
         const val PID_ULTRA = 0x0426
         const val MCU_INTERFACE = 0
         const val IMU_INTERFACE = 2
-        private const val ACTION_USB = "dev.xrealdiag.USB_PERMISSION"
+        private const val ACTION_USB = "dev.ultraxr.USB_PERMISSION"
         private const val RAW_FRAMES_TO_DUMP = 8
         private const val IMU_REPORTS_TO_DUMP = 4000
     }

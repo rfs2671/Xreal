@@ -1,6 +1,6 @@
-package dev.xrealdiag.usb
+package dev.ultraxr.usb
 
-import dev.xrealdiag.proto.McuProtocol
+import dev.ultraxr.proto.McuProtocol
 
 /** Request/response exchange with the glasses' MCU (HID interface 0 on the Air 2 Ultra). */
 class McuClient(private val link: HidLink) {

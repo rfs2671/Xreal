@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "dev.xrealdiag"
+    namespace = "dev.ultraxr"
     compileSdk = 35
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "dev.xrealdiag"
+        applicationId = "dev.ultraxr"
         minSdk = 29
         targetSdk = 35
         versionCode = 1

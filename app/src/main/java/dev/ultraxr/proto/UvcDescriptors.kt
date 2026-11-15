@@ -1,4 +1,4 @@
-package dev.xrealdiag.proto
+package dev.ultraxr.proto
 
 /**
  * Minimal USB / UVC descriptor walker over the raw configuration descriptor

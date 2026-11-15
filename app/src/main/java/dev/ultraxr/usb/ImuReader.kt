@@ -1,6 +1,6 @@
-package dev.xrealdiag.usb
+package dev.ultraxr.usb
 
-import dev.xrealdiag.proto.ImuCodec
+import dev.ultraxr.proto.ImuCodec
 import java.io.OutputStream
 import kotlin.concurrent.thread
 

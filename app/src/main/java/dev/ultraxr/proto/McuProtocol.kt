@@ -1,4 +1,4 @@
-package dev.xrealdiag.proto
+package dev.ultraxr.proto
 
 import java.util.zip.CRC32
 

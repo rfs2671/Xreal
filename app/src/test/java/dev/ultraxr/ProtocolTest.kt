@@ -1,10 +1,10 @@
-package dev.xrealdiag
+package dev.ultraxr
 
-import dev.xrealdiag.proto.CameraDecoder
-import dev.xrealdiag.proto.ImuCodec
-import dev.xrealdiag.proto.McuProtocol
-import dev.xrealdiag.proto.UvcDescriptors
-import dev.xrealdiag.proto.UvcFrameAssembler
+import dev.ultraxr.proto.CameraDecoder
+import dev.ultraxr.proto.ImuCodec
+import dev.ultraxr.proto.McuProtocol
+import dev.ultraxr.proto.UvcDescriptors
+import dev.ultraxr.proto.UvcFrameAssembler
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
