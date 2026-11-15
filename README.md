@@ -1,105 +1,124 @@
-# Pixel + XREAL Air 2 Ultra: open XR stack
+# Ultra XR
 
-Goal: a standalone Android APK that turns a Pixel 10 Pro XL and XREAL Air 2 Ultra into a
-6DoF, hand-tracked, stereoscopic OpenXR device, without XREAL's SDK, Nebula or a Beam Pro.
+A standalone XR launcher, tracker and OpenXR runtime for a **Pixel phone and XREAL Air 2 Ultra
+glasses**, connected by one USB-C cable. No Nebula, no XREAL SDK, no Beam Pro, no PC, no root.
 
-**Where this is today:** milestone 0, a hardware diagnostic APK. It builds and its protocol
-code passes unit tests. **Nothing in this repository has been run on a phone or on the
-glasses yet.** Every hardware claim below is "expected from other projects' Linux results"
-until a report from the real devices says otherwise.
+It reads the glasses' two tracking cameras and motion sensor directly over USB, computes 6DoF
+head tracking and hand tracking on the phone, renders side-by-side 3D on the glasses, and
+hosts an OpenXR runtime so Android OpenXR games can use all of it.
 
-## Milestone 0: the diagnostic APK
+> **Read this first.** This app has been built and tested automatically, including against
+> simulated sensor streams and on an Android emulator. **It has never been run with real
+> glasses.** The first thing it asks you to do is a one-minute hardware check, which tells you
+> (and, if you share the report, the developers) exactly which parts work on your hardware.
+> The table under [What is verified](#what-is-verified) is precise about this.
 
-`dist/xreal-ultra-diag-0.1.0-debug.apk` (also built by the `build` GitHub Actions workflow).
+## Install
 
-It answers one question: can the Pixel read the Ultra's IMU and both SLAM cameras over USB
-*while* driving the glasses' display in side-by-side 3D? If not, nothing else in the plan
-is possible on this phone.
+1. On the phone, download `ultra-xr-<version>.apk` from the newest
+   [release](../../releases) and open it. Allow your browser or file app to install apps
+   when Android asks.
+2. Plug the glasses straight into the phone and open **Ultra XR**. Allow the camera
+   permission (Android requires it for USB devices with cameras; the phone's own cameras are
+   never used) and the USB prompt.
+3. Tap **Run check** on the banner and follow the prompts in the glasses.
 
-### Run it
+If you have the Khronos "OpenXR Runtime Broker" app installed, remove it first: Android lets
+only one app answer the OpenXR runtime lookup, and Ultra XR does that itself.
 
-1. Sideload the APK (allow installs from your browser or file manager).
-2. Plug the glasses straight into the phone. If Android asks "mirror or desktop", either is fine.
-3. Open **XREAL Ultra Diag**, press **START**, allow the camera permission and the USB prompt.
-4. Look through the glasses. Each eye should see one corner marker (left red, right blue)
-   and squares at different depths that move when you turn your head. Press **Yes, 3D** or **No**.
-5. Leave it running for at least 2 minutes (10 or more for useful battery and heat numbers),
-   moving your head and pointing the glasses at a textured scene.
-6. Press **Save report** (writes a zip to Downloads) and send that zip back. **Share report**
-   sends just the text.
+Do not grant Ultra XR "Display over other apps". It never asks for it, and with it granted
+OpenXR games would draw on the phone instead of the glasses.
 
-If the glasses reconnect when the display mode changes and the streams stop, press **Stop**
-then **START** again; the glasses stay in 3D mode.
+## Using it
 
-### What it tests
+- **Home screen:** two status chips (glasses, tracking), the featured game, your installed
+  OpenXR apps, and three buttons: Recenter, Check, Settings.
+- **Lumen** (built in): orbs hang in your room. Touch one to burst it, pinch one to pick it up
+  and throw it through a ring, step aside when a comet comes at you. With no hand in view,
+  look at an orb to burst it. If position tracking is not available, everything stays within
+  reach and the game still plays.
+- **OpenXR apps:** any installed app that declares itself an OpenXR immersive app is listed
+  and starts with one tap. Pinch is the trigger, a fist is the grip.
+- **Recovery is automatic:** the app reconnects if the USB streams stall, restarts position
+  tracking if it diverges while keeping the world where it was, and falls back to
+  rotation-only tracking in between.
+- With no glasses attached, Lumen runs as a preview on the phone screen.
 
-| Step | What it does | Counts as a pass when |
+## What is verified
+
+| Area | Status | How |
 |---|---|---|
-| `usb.device`, `usb.open` | Finds `3318:0426`, gets permission, dumps every interface, endpoint and the raw descriptors | Android lets the app open the device |
-| `mcu`, `mcu.set_sbs` | Reads the display mode from the glasses' controller (HID interface 0) and asks for 3840x1080 side-by-side | The glasses answer and accept the mode |
-| `imu.open`, `imu.stream` | Starts the IMU (HID interface 2), decodes gyro and accelerometer | Over 50 samples/s arrive (about 1000 expected) |
-| `camera.open`, `camera.frames` | Standard UVC negotiation for 640x241, then isochronous or bulk streaming, whichever the device has | Complete frames arrive for both eyes |
-| `camera.decode` | Unshuffles frames to 640x480 grey and scores the result at the shuffle seams | Seam score near 1 on a textured scene; you also see both live images on the phone |
-| `display.*` | Lists displays and modes, opens a stereo GL window on the glasses, measures frame rate | The surface is 3840x1080 and you confirm 3D by eye |
-| `simultaneous` | Counts seconds in which IMU, camera and rendering were all live | 10 or more such seconds |
+| App builds, installs as a signed arm64 APK, 16 KB page aligned | **Verified in CI** | GitHub Actions build |
+| Launcher, settings, check screen and game start and render | **Emulator-tested** | instrumented tests on an Android 14 emulator, no glasses |
+| Native 6DoF and hand libraries load and run inside the app | **Emulator-tested** | same tests, on empty images |
+| USB protocol code: display mode packets, IMU reports, camera unshuffle, UVC parsing | **Unit-tested** against the formats documented by XR Gate and ar-drivers-rs | 7 tests |
+| Clock sync, stereo pairing, image orientation, sensor fusion, recovery, recentering, gestures | **Simulation-tested**, including a byte-exact simulated glasses stream | 13 tests |
+| Game rules | **Unit-tested** with scripted head and hands | 7 tests |
+| 6DoF estimator (Basalt) through this app's API | **Simulation-tested** on a rendered stereo + IMU sequence: see `native/vio/NOTES.md` | host test |
+| Hand tracker (Mercury) through this app's API | **Host-tested**: no false detections on empty images; detects a photographed hand at 16-20 cm | host test |
+| OpenXR runtime driver (head, controllers, hand joints, recentre) | **Host-tested** through Monado's own tracker code | 30 checks |
+| Pixel 10 Pro XL opens the glasses over USB, claims the camera interface | **Unverified** | needs your hardware |
+| Camera and IMU streams arrive on Android as they do on Linux | **Unverified** | needs your hardware |
+| Pixel outputs 3840x1080 to the glasses | **Unverified** | needs your hardware |
+| 6DoF accuracy, drift, latency on the phone | **Unverified** | needs your hardware |
+| Hand tracking range and accuracy with the real cameras | **Unverified** | needs your hardware |
+| An OpenXR game presenting on the glasses through the runtime | **Unverified** | needs your hardware |
+| Battery life and heat | **Unverified** (measured and logged by the hardware check) | needs your hardware |
+| Meta Quest games | **Not supported**, see [docs/QUEST.md](docs/QUEST.md) | |
 
-Every second it also logs IMU rate, camera rate and bitrate, render fps and late frames,
-battery percent, current, voltage, battery temperature, thermal status and thermal headroom.
-The zip contains the report, the first 8 raw camera frames and the first 4000 raw IMU
-reports, so the decoders can be checked against real data offline.
+Nothing in the "Unverified" rows is simulated or faked in the app: each either works on the
+device or is reported as failing by the hardware check.
 
-### Build
+## Known limits you should expect
+
+1. **Calibration is from another unit.** Camera and IMU calibration come from XR Gate's
+   measurements of one specific pair of Air 2 Ultra glasses. Lenses vary between units, so
+   position tracking and hand positions may be less accurate on yours until a per-unit
+   calibration exists. The app reads your glasses' factory configuration and includes it in
+   the check report, which is what is needed to add this.
+2. **Field of view is a best estimate** (about 43 x 25 degrees per eye). If virtual objects
+   swim against the room when you turn your head, adjust **World scale** in Settings.
+3. **The phone screen stays on (dimmed) while an OpenXR game runs.** Android stops the game
+   and the glasses' display if the phone locks.
+4. **No controllers.** Hands give a trigger and a grip only. Games that need thumbsticks or
+   buttons are not playable yet.
+5. **OpenXR apps are told the phone's refresh rate**, and the runtime's frame pacing is not
+   locked to the glasses' display, so expect an occasional dropped frame.
+6. **Hand tracking needs about a third of a second** of continuous view before a hand appears.
+
+## How it is built
+
+| Part | Reused from | Notes |
+|---|---|---|
+| Camera unshuffle, frame footer, IMU and display-mode protocol, clock sync, image orientation, calibration | [XR Gate](https://github.com/vladoshub/xr-gate) (MIT) | ported from its Linux capture service to Android USB host |
+| 6DoF | [Basalt](https://gitlab.com/VladyslavUsenko/basalt) (BSD-3) | same commit and configuration XR Gate uses |
+| Hand tracking | [Monado](https://monado.freedesktop.org) Mercury (BSL-1.0) with XR Gate's patches and C API | models from Monado's hand-tracking-models |
+| OpenXR runtime | Monado with [Pocket XR](https://github.com/pocket-xr/pocket-xr)'s Android driver patch (GPL-3) | plus a patch adding hand joints, aim pose and recentring |
+| IMU command set | [ar-drivers-rs](https://github.com/badicsalex/ar-drivers-rs) (MIT) | |
+
+New in this project: the Android USB layer (including isochronous video over usbdevfs), the
+pose fusion and recovery logic, the launcher, the game, the hardware check, and the glue
+between the pieces. See [native/README.md](native/README.md) for rebuilding the native
+libraries and [docs/INVESTIGATION.md](docs/INVESTIGATION.md) for the survey of existing
+projects.
+
+## Build
 
 ```
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
 
-Needs JDK 17+, Android SDK platform 35, NDK 27.2.12479018 and CMake 3.22.1.
+Needs JDK 17+, Android SDK platform 35, NDK 27.2.12479018 and CMake 3.22.1. The APK is
+signed with the fixed key in `app/debug.keystore` so builds install over each other. The
+`build` workflow runs the unit tests, an emulator smoke test, and publishes a release.
 
-## What was reused, and what could not be
+## If something fails
 
-The four named projects were cloned and read. Details in [docs/INVESTIGATION.md](docs/INVESTIGATION.md).
-
-| Project | What it really is | Used here |
-|---|---|---|
-| **XR Gate** (MIT) | Linux/Windows stack for exactly this headset: camera + IMU capture, Basalt 6DoF, Mercury hand tracking, Monado and SteamVR drivers, per-device calibration | The Ultra's camera unshuffle table, frame footer layout, IMU report layout and display-mode protocol are taken from it. Its Basalt and Mercury setup is the plan for 6DoF and hands. It has no Android build. |
-| **Pocket XR** (GPL-3) | Android spatial desktop that also ships a patched Monado as an Android OpenXR runtime | Confirms the Android USB approach (pure user-space HID, CAMERA permission for USB video). Its Monado patch, a pose-fed HMD driver that presents to the glasses' display, is the planned OpenXR base. It has never been run on an Air 2 Ultra and cannot read its cameras. |
-| **godot-xreal** (Apache/MIT) | Godot wrapper around XREAL's closed SDK 3.1.0 libraries, patched at fixed offsets, tested only on Beam Pro | Not usable: it is the vendor SDK this project is meant to replace, and it exposes no camera images. |
-| **OVRPort** (GPL-3) + openxr-dispatcher-open (MIT) | Patches Quest APKs to run on other OpenXR headsets | Deferred to the Quest milestone. Its core libraries are closed and downloaded at patch time, and patched games expect Touch controllers. |
-
-## Blockers and open questions
-
-Hardware, answered only by a diagnostic report:
-
-1. Does the Pixel put the display in 3840x1080, or only mirror at 1920x1080? Without the wide mode there is no full-resolution stereo.
-2. Does Android let an app claim the Ultra's video interface, and is the stream isochronous or bulk? Both paths are implemented; neither is tested.
-3. Does the camera stream without vendor-specific start commands? On Linux it does.
-4. Can the USB 2.0 link carry about 148 Mbit/s of camera data next to the IMU without drops?
-5. Do camera and IMU timestamps share a clock on this path? Visual-inertial tracking needs that.
-6. How much battery and heat does capture plus rendering cost before any tracking runs?
-
-Software, not started:
-
-7. Basalt and its dependencies have to be built for Android arm64 and run in real time on Tensor G5.
-8. XR Gate's calibration files are for one specific pair of glasses; each unit needs its own calibration (XR Gate has the tooling, on Linux).
-9. Mercury hand tracking needs an ONNX runtime on Android, sharing the camera frames with Basalt.
-10. Pocket XR's Monado patch is GPL-3 and feeds 3DoF poses; it needs a 6DoF and hand-joint feed, and has only been tested with PC streaming on a Samsung phone.
-11. There are no controllers. Games that need them require a gesture-to-controller layer (XR Gate has one for SteamVR) or Bluetooth controllers.
-12. Quest APKs: separate, experimental, after native OpenXR games work.
-
-## Roadmap
-
-1. **M0 diagnostic** (this): built, untested on hardware.
-2. **M1 capture service:** turn the proven capture path into a background service with recorded datasets.
-3. **M2 6DoF:** Basalt on Android against recorded data, then live; measure drift and latency.
-4. **M3 OpenXR:** Monado Android runtime fed by M2, presenting side-by-side; run a native OpenXR sample.
-5. **M4 hands:** Mercury on the same frames, exposed through `XR_EXT_hand_tracking`.
-6. **M5 benchmarks:** accuracy, frame rate, motion-to-photon latency, battery and thermals on the real devices.
-7. **M6 Quest compatibility:** experimental.
-
-Each milestone is only marked done after it has been measured on the phone and glasses.
+Open **Check**, run it, and tap **Share report** (text) or **Save to Downloads** (a zip that
+also holds the first raw camera frames and IMU packets). The report lists each step with what
+was measured, the USB descriptors, the display modes Android offered, and the app log.
 
 ## Licence
 
-MIT. Protocol facts and the camera chunk table come from XR Gate and ar-drivers-rs (both MIT).
-This project is not affiliated with XREAL, Google or Meta.
+GPL-3.0-or-later (the embedded Pocket XR Monado driver is GPL-3). Third-party licence texts
+are under `native/*/LICENSES`. Not affiliated with XREAL, Google, Meta, Khronos or Collabora.

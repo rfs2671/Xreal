@@ -65,16 +65,21 @@ object OpenXrGlassesLayer {
         return display.displayId != Display.DEFAULT_DISPLAY
     }
 
-    fun open(monado: MonadoImpl) {
-        main.post {
-            if (layer != null || connected) return@post
+    fun open(monado: MonadoImpl) = open(monado, 0)
+
+    private fun open(monado: MonadoImpl, attempt: Int) {
+        main.postDelayed({
+            if (layer != null || connected) return@postDelayed
             val window = host?.glassesWindow()
             val token = window?.decorView?.windowToken
+            // A window that was only just shown has no token until its first layout pass. Monado waits
+            // up to 2 s for the surface, so retry for most of that before giving up on the glasses.
+            if (window != null && token == null && attempt < 25) { open(monado, attempt + 1); return@postDelayed }
             if (window == null || token == null || !canShow()) {
                 // The application then shows Monado's side by side picture in its own activity, on the phone.
                 Log.i(TAG, "no window on the glasses: the application draws on its own screen")
                 connected(false)
-                return@post
+                return@postDelayed
             }
             val surface = SurfaceView(window.context).apply {
                 setZOrderOnTop(true)
@@ -116,13 +121,13 @@ object OpenXrGlassesLayer {
             if (shown.isFailure) {
                 Log.w(TAG, "no window for the application: ${shown.exceptionOrNull()?.message}")
                 connected(false)
-                return@post
+                return@postDelayed
             }
             layer = root
             layerManager = manager
             connected(true)
             Log.i(TAG, "an OpenXR application owns the glasses")
-        }
+        }, if (attempt == 0) 0L else 60L)
     }
 
     private fun connected(onGlasses: Boolean) {
