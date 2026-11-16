@@ -306,3 +306,48 @@ Writes (need a build with writes enabled, issued only after your approval):
 4. `python tools\ultra-dp\prepare.py`
 5. Send me `ultra_prepare_report.txt`. Expected last lines: all five items OK, glasses
    `G428X00969`, DP `1140`, SOC `12.1.00.502_20250408`, safety lock not set, hardware writes DISABLED.
+
+## Stage 1-only build (write-enabled for Stage 1; NOT yet run)
+Owner-reported: `prepare.py` passed all five checks on the Windows laptop (both image hashes
+verified, 25 simulator tests, Stage 0 on the real glasses). On that basis, and with the owner's
+authorization to *prepare* it, `ultra_dp_writer.py` is now a **Stage 1-only** build:
+
+- `HARDWARE_WRITE_STAGES = {"stage1"}`. On real glasses, Stage 2 and restore are refused
+  before any packet; they still run in the offline simulator.
+- Hardware writes are pinned to one unit: glasses id `G428X00969` with SOC
+  `12.1.00.502_20250408`. Any other id or SOC version is refused.
+- The only image Stage 1 can send: official Air 2 Ultra DP `1140`, 50,632 bytes, project 0x1200,
+  SHA-256 `E88B8E64957473281FE96DCF4B7C3390AB1DB6A0002321E7B87C5C8FF2974F95`, as 107 packets whose
+  stream hash equals XREAL's reference (`B8AAA9B9…C0FDA9`).
+- All earlier checks are unchanged. 28 simulator tests pass, including: hardware path Stage 2 and
+  restore refused (zero packets); wrong glasses id or SOC refused; Stage 1 cannot send the
+  corrected image; an aborted Stage 1 locks the tool and nothing further can be sent by this build.
+- **No write has been executed.** Stage 1 itself still needs the owner's separate go-ahead.
+
+Consequence of "Stage 1 only": if Stage 1 aborts, this build cannot attempt a restore. That is
+deliberate; a restore build would be a separate decision made with the Stage 0 output in hand.
+
+### Stage 1 instructions (only after you decide to run it)
+1. Laptop on mains power; sleep set to Never; close Nebula, browsers on xreal.com and anything
+   else using the glasses; glasses on their own cable in the port that showed a picture; no
+   other USB-C devices. Keep the glasses still on a table.
+2. Get this build (download the repository again), open a terminal in its folder.
+3. `python tools\ultra-dp\prepare.py` — all five OK, "hardware writes in this build: stage1 only",
+   "pinned unit … MATCH", safety lock not set.
+4. `python tools\ultra-dp\ultra_dp_writer.py --stage1 --stock ultra-dp-work\ultra_dp_1140_official.bin`
+5. Read the prompt; type `STAGE1 G428X00969`. Do not touch the cable or laptop until it prints
+   "STAGE 1 complete" (the transfer is 107 packets; the wait afterwards can be up to ~40 s).
+6. Check that the laptop still shows a picture in the glasses. Send me the full terminal output.
+7. If it prints **WRITE ABORTED**: do nothing else. Unplug, wait 10 s, replug, run
+   `python tools\ultra-dp\ultra_dp_writer.py --stage0`, send both outputs.
+Stage 1 does not fix the Pixel. It only tests the write path with the official image.
+
+### Remaining risk of Stage 1
+- First update write ever sent to this Ultra by this tool; only reads are hardware-verified.
+- An interruption mid-write (cable, sleep, crash) leaves the bridge in an unknown state; recovery
+  on an Ultra is unverified, and this build cannot attempt it.
+- The official file may not be byte-identical to your factory image (no read-back); Stage 1
+  would replace it irreversibly.
+- What the Ultra does at FINISH is unknown; a refusal there would also count as an aborted write.
+- Worst case: no display on any host until XREAL services the glasses; warranty may be affected.
+- A pass proves a complete write works. It does not prove interrupted-write recovery.

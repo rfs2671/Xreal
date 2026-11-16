@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Staged DP-bridge firmware writer for the XREAL Air 2 Ultra (Windows; hidapi).
 
-STATUS: BUILT AND TESTED OFFLINE ONLY. Real-hardware writes are DISABLED in this file
-(HARDWARE_WRITES_ENABLED = False). With that switch off, Stage 1 and Stage 2 refuse to send
-anything to real glasses; only Stage 0 (read-only) touches hardware. The switch is changed
-only in a separate release, after the owner's separate explicit approval.
+STATUS: STAGE 1-ONLY BUILD. On real glasses this file can perform exactly one write operation:
+Stage 1 (the official image), and only on the one pair of glasses pinned below. Stage 2 and
+restore are DISABLED on hardware in this build (HARDWARE_WRITE_STAGES); they run only in the
+offline simulator. The write code has been tested offline only; no write has ever been executed
+on an Air 2 Ultra with it. Running Stage 1 requires the owner's separate decision.
 
 Stages (each is its own invocation; none starts the next):
   --stage0                         read-only: identify, read versions, verify image files
@@ -27,7 +28,10 @@ from __future__ import annotations
 import argparse, hashlib, json, struct, sys, time, zlib
 from pathlib import Path
 
-HARDWARE_WRITES_ENABLED = False          # see module docstring
+HARDWARE_WRITE_STAGES = frozenset({"stage1"})   # stage2 and restore are NOT enabled on hardware in this build
+# Hardware writes are additionally pinned to the owner's unit, as read by the Windows diagnostic.
+PINNED_GLASSES_ID = "G428X00969"
+PINNED_SOC = "12.1.00.502_20250408"
 
 VID, PID_APP, PID_BOOT, CONTROL_IF = 0x3318, 0x0426, 0x0425, 0
 REPORT = 512
@@ -236,8 +240,9 @@ ABORT_NOTICE = """
   1. Do NOT run anything else now. This tool sent nothing after the failure and will not retry.
   2. Unplug the glasses, wait 10 seconds, plug them back in (this resets the update state).
   3. Run:  --stage0   and keep its output.
-  4. If Stage 0 can still talk to the glasses, the recovery ATTEMPT is:  --restore --stock <official file>
-     Restore will make you unplug and replug again while it watches; it will not run otherwise.
+  4. Send that output before doing anything else. The recovery ATTEMPT would be --restore (the official
+     image again, after the tool watches an unplug/replug). Restore is DISABLED on hardware in this
+     build and needs its own approval.
      Recovery after an interrupted write has never been verified on an Air 2 Ultra.
   The tool is now LOCKED: Stage 1 and Stage 2 are refused until a restore completes.
   5. If Stage 0 cannot talk to the glasses, stop and contact XREAL support.
@@ -320,13 +325,14 @@ class Session:
             link.close()
         self.log("  glasses %(glasses_id)s  DP %(dp)r  SOC %(soc)r" % info)
         self.log("  safety lock: " + ("SET - an earlier write was aborted (%s)" % self.lock.read_text().strip() if self.lock.exists() else "not set"))
-        self.log("  hardware writes in this build: " + ("ENABLED" if HARDWARE_WRITES_ENABLED else "DISABLED"))
+        self.log("  hardware writes in this build: " + (", ".join(sorted(HARDWARE_WRITE_STAGES)) + " only" if HARDWARE_WRITE_STAGES else "DISABLED"))
+        self.log("  pinned unit: %s / SOC %s -> %s" % (PINNED_GLASSES_ID, PINNED_SOC, "MATCH" if (info["glasses_id"], info["soc"]) == (PINNED_GLASSES_ID, PINNED_SOC) else "NO MATCH (writes will be refused)"))
         self.log("  nothing was written")
         return info
 
-    def _write_stage(self, label: str, img: bytes, dp_allowed: set, phrase_prefix: str, why: str, clears_lock: bool) -> dict:
-        if self.hardware and not HARDWARE_WRITES_ENABLED:
-            raise Refused("real-hardware writes are disabled in this build (offline-tested only); nothing was sent")
+    def _write_stage(self, stage: str, label: str, img: bytes, dp_allowed: set, phrase_prefix: str, why: str, clears_lock: bool) -> dict:
+        if self.hardware and stage not in HARDWARE_WRITE_STAGES:
+            raise Refused("%s is disabled on real hardware in this build; nothing was sent" % stage)
         if self.lock.exists() and not clears_lock:
             raise Refused("an earlier write was aborted (%s). Only --restore is allowed." % self.lock.read_text().strip())
         if self.lock.exists():
@@ -334,6 +340,8 @@ class Session:
         link = self._open()
         try:
             before = identify(link)
+            if self.hardware and (before["glasses_id"], before["soc"]) != (PINNED_GLASSES_ID, PINNED_SOC):
+                raise Refused("this build writes only to glasses %s with SOC %s; found %s / %s" % (PINNED_GLASSES_ID, PINNED_SOC, before["glasses_id"], before["soc"]))
             if before["dp"] not in dp_allowed:
                 raise Refused("DP version %r is not one of %s for this stage" % (before["dp"], sorted(dp_allowed)))
             self._confirm("%s %s" % (phrase_prefix, before["glasses_id"]),
@@ -363,7 +371,7 @@ class Session:
 
     def stage1(self, stock: Path) -> dict:
         img = load_image(stock, STOCK_SHA, "official image")
-        r = self._write_stage("STAGE 1: write the OFFICIAL image (same version 1140 as reported)", img, {NAME}, "STAGE1",
+        r = self._write_stage("stage1", "STAGE 1: write the OFFICIAL image (same version 1140 as reported)", img, {NAME}, "STAGE1",
                               "  The glasses offer no read-back, so it CANNOT be verified that this file is byte-identical to what is\n"
                               "  installed now. A success shows a complete write works on this unit. It does NOT show that an\n"
                               "  interrupted write is recoverable.", False)
@@ -388,7 +396,7 @@ class Session:
             raise Refused("Stage 1 receipt is for other glasses or another SOC version")
         if self.ask("Did the laptop show a normal picture in the glasses AFTER Stage 1? Type YES: ").strip() != "YES":
             raise Refused("Stage 2 needs a working laptop picture after Stage 1; nothing was written")
-        r = self._write_stage("STAGE 2: write the CORRECTED image (HDCP will be off while it is installed)", img, {NAME}, "STAGE2",
+        r = self._write_stage("stage2", "STAGE 2: write the CORRECTED image (HDCP will be off while it is installed)", img, {NAME}, "STAGE2",
                               "  Rollback is --restore with the official image.", False)
         self.receipt.unlink()
         self.log("STAGE 2 complete. Test on the laptop first, then on the Pixel.")
@@ -397,7 +405,7 @@ class Session:
     def restore(self, stock: Path) -> dict:
         img = load_image(stock, STOCK_SHA, "official image")
         if self.receipt.exists(): self.receipt.unlink()                    # a restore always invalidates Stage 1
-        return self._write_stage("RESTORE: write the OFFICIAL image", img, {NAME, "1109"}, "RESTORE",
+        return self._write_stage("restore", "RESTORE: write the OFFICIAL image", img, {NAME, "1109"}, "RESTORE",
                                  "  After an aborted write, this runs only once the tool has watched the glasses unplug and return.", True)
 
 

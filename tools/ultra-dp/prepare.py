@@ -109,7 +109,7 @@ def step_stage0() -> bool:
 def main() -> int:
     WORK.mkdir(exist_ok=True)
     say("Air 2 Ultra DP fix: preparation (nothing is written to the glasses)")
-    say("Python %s on %s; hardware writes in this build: %s" % (sys.version.split()[0], sys.platform, "ENABLED" if W.HARDWARE_WRITES_ENABLED else "DISABLED"))
+    say("Python %s on %s; hardware writes in this build: %s" % (sys.version.split()[0], sys.platform, (", ".join(sorted(W.HARDWARE_WRITE_STAGES)) + " only") if W.HARDWARE_WRITE_STAGES else "DISABLED"))
     results = {}
     for name, fn in (("official firmware", step_official), ("patch sources", step_patch_sources), ("corrected image", step_build),
                      ("simulator tests", step_tests), ("stage 0", step_stage0)):
