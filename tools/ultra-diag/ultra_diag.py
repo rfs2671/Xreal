@@ -138,11 +138,30 @@ def enumerate_devices(hid):
             d["product_id"], d.get("interface_number"), d.get("usage_page", 0), d.get("usage", 0), d.get("product_string")))
     return devs, out
 
+def no_device_help(hid) -> None:
+    """Read-only: tell 'Windows does not see the glasses on USB at all' from 'seen, but not as HID'."""
+    try: print("  HID devices of any vendor visible to this tool: %d (0 would mean the HID library itself is not working)" % len(hid.enumerate(0, 0)))
+    except Exception as e: print("  HID enumeration failed:", e)
+    if sys.platform != "win32":
+        return
+    import subprocess
+    cmd = "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_3318' } | Format-Table -AutoSize Status,Class,FriendlyName,InstanceId | Out-String -Width 220"
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=30).stdout.strip()
+    except Exception as e:
+        print("  Could not ask Windows for its USB device list:", e); return
+    if out:
+        print("  Windows DOES see XREAL USB devices, but none as a usable HID interface:\n" + out)
+        print("  -> send this output; a driver or permission problem, not the cable.")
+    else:
+        print("  Windows sees NO USB device with XREAL's vendor id 3318 at all.")
+        print("  -> the glasses are not connected as a USB device: port, cable or adapter. See docs/WINDOWS_FIX.md, 'If no device is found'.")
+
 def report(hid) -> int:
     devs, lines = enumerate_devices(hid)
     print("\n".join(lines)); lines.append("")
     if not devs:
-        print("\nNo XREAL device. Use a direct USB-C (data + DP) connection."); return 2
+        print("\nNo XREAL HID interface found."); no_device_help(hid); return 2
     boots = [d for d in devs if d["product_id"] == PID_BOOT]
     apps = [d for d in devs if d["product_id"] == PID_APP and d.get("interface_number") == CONTROL_INTERFACE]
     if boots and not apps:

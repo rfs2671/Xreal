@@ -21,6 +21,14 @@ version, and whether every response CRC is valid. It stops without sending anyth
 sees the bootloader PID 0x0425 or more than one Ultra. The *project code 0x1200 is inferred
 from the PID* (XREAL's own updater table); no read message for it is known.
 
+**If no device is found** (`HID interfaces found: 0`): the tool now also asks Windows whether
+any USB device with XREAL's vendor id is present. If Windows sees none, the glasses are not on
+USB at all: (1) use the glasses' own cable, plugged straight into the laptop, no hub, dock or
+adapter; (2) try every USB-C port; the port needs USB data, and for a picture, DisplayPort (often
+marked with a D-shaped or Thunderbolt icon); (3) check the glasses power on (a brief panel flash
+or the laptop's "device connected" sound); (4) flip the USB-C plug and re-seat it at the glasses'
+temple end. If Windows does see them but the tool does not, send the output.
+
 ### Step 2 — One free experiment: does the picture work on the laptop?
 With the stock firmware, tell me whether the laptop shows a picture at 1920x1080@60.
 Working on the laptop and black on the Pixel is what the Air 2 Pro fault looks like, and it
