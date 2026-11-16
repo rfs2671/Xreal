@@ -223,3 +223,65 @@ request to XREAL for an official Ultra DP firmware that tolerates a zero pixel-c
 measurement and an early HDCP start — the same two fixes, which XREAL can build, sign, ship and
 flash through its own updater with a verified recovery path. That changes nothing on the
 glasses and carries no risk. `DISPLAY.md` and this file are written to attach to that report.
+
+---
+
+## Round 3: the Ultra DP update protocol, reverse-engineered offline
+
+Method: XREAL's own web-updater SDK (downloaded from its update site, **not committed**) was run
+in Node against an in-memory fake HID device (`tools/fw-analysis/vendor_sim.cjs`). Nothing
+touched USB or real glasses. Every frame the vendor code emits was recorded and checked.
+
+### Verified offline (static analysis + simulation)
+
+| Question | Result |
+|---|---|
+| Ultra `upgradeInDp` message IDs | PREPARE=110, START=111, TRANSMIT=112, FINISH=113: **same as Air 2 / Air 2 Pro** |
+| Framing | Same: `0xFD`, CRC32 (LE) over `[5..5+len)`, len(17+payload), msgid at [15..16], payload at [22]; **512-byte reports** (PID 0x0426) instead of 64 |
+| Differences from Air 2 | START is one 64-byte frame (Air 2: 42+22); TRANSMIT 490 B/frame (Air 2: 42); Ultra **checks FINISH status**, Air 2 ignores it; PREPARE timeout 16 s, others 2 s |
+| Independent of `upgradeInSOC`? | **Yes at SDK level**: separate function, separate message IDs (SOC = 62–65), no shared state. The *website* orders them in the UI only |
+| Client-side validation | **None** (no CRC, project, version or hash check before sending) |
+| Retries / recovery in vendor code | **None**: stop-and-wait, first failure returns `false`, no resend, no abort command |
+| Frames sent after a failure | 0 in every simulated failure case (status error, timeout, USB error) |
+| Our protocol kit reproduces vendor frames | Byte-identical for Air 2 |
+| Ultra DP image | `1140` payload is byte-identical to Air 2 Pro; container CRC valid; project 0x1200 |
+| Page hazard | The page would also run the SOC step with its own (older) SOC image, i.e. **downgrade** the SOC (server 498 vs. installed 502), and skips DP when the version string already reads `1140` |
+
+### Not verified: requires a real Ultra (or XREAL)
+
+- What the device validates at FINISH and what it does with a partial image.
+- Whether PREPARE resets the write offset (needed to know if an aborted transfer can be restarted).
+- Whether the bridge's bank-0 fallback image exists on Ultra silicon (documented for Air/Air 2 only).
+- **New:** the Ultra's SOC image contains DP7911 handlers named *Factory_Backup_FW_Upgrade_Finish*,
+  *User_Backup_FW_Upgrade*, *FAC_Write_DP_Backup_FW_CRC* and a *7911 need_upgrade* check. The
+  Air 2 MCU image (151 KB, downloaded and searched) contains **none** of these. So on the Ultra
+  the 110–113 messages are probably served by a much larger SOC that manages backup slots and
+  may re-write the DP bridge from a backup. That could be a safety net, or could silently
+  revert a patched image. It is undecoded and **unverified**.
+- Whether 512-byte frames work through Android's interrupt OUT endpoint (read-only test: repeat
+  version reads at 512 bytes).
+- Whether the two patches fix the display on these glasses (unchanged: matching symptoms only).
+
+### Pixel-native updater: design only, nothing built
+
+Transport is feasible (interface 0 already works, protocol is plain stop-and-wait). Hard gates
+a future write-capable updater would need: PID 0x0426 and project 0x1200; exact SHA-256
+allowlist for input; stock Ultra `1140` image verified and present before any write; no retries;
+require a physical replug after any failure; post-write DP version read; SOC never touched; and
+a user-visible warning. **No such code exists in this repository and none will be added without
+your separate explicit approval.**
+
+### Updated verdict
+
+| Factor | Status |
+|---|---|
+| Defect present in Ultra bridge firmware | GREEN (byte-identical) |
+| Patched image buildable | GREEN |
+| Ultra DP transport = proven 110–113 | **GREEN (static + simulation)**, upgraded from RED |
+| Independent of SOC at SDK level | **GREEN**; device-side role of SOC unknown (AMBER) |
+| Pixel-native write path | AMBER: feasible, not built, deliberately |
+| Recovery from an interrupted write on Ultra | **RED**: no vendor retry/restore logic, device behaviour unverified, SOC backup-slot semantics undecoded |
+| Read-only confirmation of defect | RED (needs modified MCU) |
+
+**Still NO-GO for flashing.** The transport blocker is gone; the recovery blocker is not, and it
+is the one that matters. Zero-risk path unchanged: send XREAL the evidence for an official fix.
