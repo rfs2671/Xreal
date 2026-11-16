@@ -4,3 +4,4 @@ app/.cxx/
 local.properties
 *.iml
 .idea/
+__pycache__/
