@@ -88,7 +88,7 @@ class Framing(unittest.TestCase):
     def test_source_has_no_soc_update_ids(self):
         src = (Path(__file__).parent / "ultra_dp_writer.py").read_text()
         self.assertEqual(src.count("dev.write("), 1)                      # single hardware write call site
-        self.assertEqual(W.HARDWARE_WRITE_STAGES, frozenset({"stage1"}))             # Stage 1-only build
+        self.assertEqual(W.HARDWARE_WRITE_STAGES, frozenset({"stage1", "stage2", "restore"}))
 
 @unittest.skipUnless(HAVE, "image files not supplied")
 class WithImages(unittest.TestCase):
@@ -251,28 +251,63 @@ class WithImages(unittest.TestCase):
     def _hw(self, dev, answers):
         it = iter(answers); log = []
         return W.Session(lambda: dev, Path(self.tmp), log=log.append, ask=lambda p: next(it, ""), sleep=lambda x: None, hardware=True, presence=lambda: 4), log
-    def test_hardware_path_stage2_and_restore_disabled_in_this_build(self):
+    def test_hardware_path_full_sequence_is_three_separate_confirmed_commands(self):
         dev = FakeUltra(self.stock)
-        s, _ = self._hw(dev, ["STAGE1 G428X00969"]); s.stage1(STOCK); n = len(write_frames(dev))      # receipt now exists
-        self.assertEqual(n, 107)
+        s, log = self._hw(dev, ["STAGE1 G428X00969", "YES", "STAGE2 G428X00969"]); s.stage1(STOCK)   # extra answers must NOT be consumed
+        self.assertEqual(len(write_frames(dev)), 107); self.assertEqual(dev.installed, self.stock)
+        s, _ = self._hw(dev, ["YES", "STAGE2 G428X00969"]); s.stage2(STOCK, PATCHED)
+        self.assertEqual(dev.installed, self.patched); self.assertEqual(W.sha(b"".join(write_frames(dev)[107:])), W.VENDOR_STREAM_SHA[W.PATCHED_SHA])
+        s, _ = self._hw(dev, ["RESTORE G428X00969"]); s.restore(STOCK)
+        self.assertEqual(dev.installed, self.stock); self.assertEqual(len(write_frames(dev)), 321)
+    def test_hardware_path_stage2_and_restore_pinned_and_gated(self):
+        dev = FakeUltra(self.stock); s, _ = self._hw(dev, ["YES", "STAGE2 G428X00969"])
+        with self.assertRaises(W.Refused): s.stage2(STOCK, PATCHED)                      # no Stage 1 receipt
+        for attr, val in (("glasses_id", "G428X00970"), ("soc", "12.1.00.498_20241115")):
+            dev = FakeUltra(self.patched); setattr(dev, attr, val); s, _ = self._hw(dev, ["RESTORE " + dev.glasses_id])
+            with self.assertRaises(W.Refused): s.restore(STOCK)
+            self.assertEqual(write_frames(dev), [])
+    def test_stage2_abort_then_restore_attempt(self):
+        dev = FakeUltra(self.stock); s, _ = self._hw(dev, ["STAGE1 G428X00969"]); s.stage1(STOCK)
+        dev.fault = lambda i, m: "usb" if i == 70 else None
         s, _ = self._hw(dev, ["YES", "STAGE2 G428X00969"])
-        with self.assertRaises(W.Refused): s.stage2(STOCK, PATCHED)
-        s, _ = self._hw(dev, ["RESTORE G428X00969"])
-        with self.assertRaises(W.Refused): s.restore(STOCK)
-        self.assertEqual(len(write_frames(dev)), n); self.assertEqual(dev.installed, self.stock)
+        with self.assertRaises(W.WriteAborted): s.stage2(STOCK, PATCHED)
+        self.assertTrue(s.lock.exists()); n = len(write_frames(dev)); dev.fault = lambda i, m: None
+        for call, ans in ((lambda s: s.stage1(STOCK), ["STAGE1 G428X00969"]), (lambda s: s.stage2(STOCK, PATCHED), ["YES", "STAGE2 G428X00969"])):
+            s2, _ = session(dev, ans, self.tmp)
+            with self.assertRaises(W.Refused): call(s2)
+        self.assertEqual(len(write_frames(dev)), n)
+        s3, _ = session(dev, ["RESTORE G428X00969"], self.tmp); s3.restore(STOCK)         # tool watches the replug first
+        self.assertEqual(dev.installed, self.stock); self.assertFalse(s3.lock.exists()); self.assertFalse(s3.receipt.exists())
+        s4, _ = session(dev, ["YES", "STAGE2 G428X00969"], self.tmp)
+        with self.assertRaises(W.Refused): s4.stage2(STOCK, PATCHED)                     # Stage 1 must be repeated after a restore
+    def test_restore_allowed_when_bridge_version_is_unreadable_or_fallback(self):
+        for dpv in ("", "1109"):
+            self.setUp(); dev = FakeUltra(self.patched); dev.dp = dpv
+            def hook(d): d.dp = "1140"
+            dev.after_finish = hook
+            s, _ = session(dev, ["STAGE1 G428X00969"], self.tmp)
+            with self.assertRaises(W.Refused): s.stage1(STOCK)                           # Stage 1/2 still need a readable 1140
+            self.assertEqual(write_frames(dev), [])
+            s, _ = self._hw(dev, ["RESTORE G428X00969"]); s.restore(STOCK)
+            self.assertEqual(dev.installed, self.stock)
+    def test_restore_that_does_not_bring_1140_back_stays_locked(self):
+        dev = FakeUltra(self.patched); dev.dp = ""; s, _ = self._hw(dev, ["RESTORE G428X00969"])
+        with self.assertRaises(W.WriteAborted): s.restore(STOCK)
+        self.assertTrue(s.lock.exists())
     def test_hardware_path_stage1_only_for_pinned_unit(self):
         for attr, val in (("glasses_id", "G428X00970"), ("soc", "12.1.00.498_20241115")):
             dev = FakeUltra(self.stock); setattr(dev, attr, val); s, _ = self._hw(dev, ["STAGE1 " + dev.glasses_id])
             with self.assertRaises(W.Refused): s.stage1(STOCK)
             self.assertEqual(write_frames(dev), [])
-    def test_hardware_path_stage1_abort_locks_and_restore_stays_disabled(self):
+    def test_hardware_path_stage1_abort_locks_until_witnessed_restore(self):
         dev = FakeUltra(self.stock, lambda i, m: ("status", 5) if i == 60 else None); s, _ = self._hw(dev, ["STAGE1 G428X00969"])
         with self.assertRaises(W.WriteAborted): s.stage1(STOCK)
         self.assertTrue(s.lock.exists()); dev.fault = lambda i, m: None
-        for call, ans in ((lambda s: s.stage1(STOCK), ["STAGE1 G428X00969"]), (lambda s: s.restore(STOCK), ["RESTORE G428X00969"])):
-            s2, _ = self._hw(dev, ans)
-            with self.assertRaises(W.Refused): call(s2)
-        self.assertEqual(len(write_frames(dev)), 61)
+        s2, _ = self._hw(dev, ["STAGE1 G428X00969"])
+        with self.assertRaises(W.Refused): s2.stage1(STOCK)
+        s3, _ = self._hw(dev, ["RESTORE G428X00969"])                                     # presence never drops: no replug seen
+        with self.assertRaises(W.Refused): s3.restore(STOCK)
+        self.assertEqual(len(write_frames(dev)), 61); self.assertTrue(s3.lock.exists())
     def test_stage1_never_sends_the_corrected_image(self):
         dev = FakeUltra(self.stock); s, _ = self._hw(dev, ["STAGE1 G428X00969"])
         with self.assertRaises(W.Refused): s.stage1(PATCHED)

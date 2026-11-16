@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Staged DP-bridge firmware writer for the XREAL Air 2 Ultra (Windows; hidapi).
 
-STATUS: STAGE 1-ONLY BUILD. On real glasses this file can perform exactly one write operation:
-Stage 1 (the official image), and only on the one pair of glasses pinned below. Stage 2 and
-restore are DISABLED on hardware in this build (HARDWARE_WRITE_STAGES); they run only in the
-offline simulator. The write code has been tested offline only; no write has ever been executed
-on an Air 2 Ultra with it. Running Stage 1 requires the owner's separate decision.
+STATUS: FULL STAGED BUILD. On real glasses this file can perform Stage 1, Stage 2 and restore,
+each as its own command with its own typed confirmation, and only on the one pair of glasses
+pinned below. The write code has been tested offline only (simulator); no write has been executed
+on an Air 2 Ultra by its author. Every write is the owner's own decision at the keyboard.
+Recovery after a failed or interrupted write is NOT guaranteed and has never been verified on an Ultra.
 
 Stages (each is its own invocation; none starts the next):
   --stage0                         read-only: identify, read versions, verify image files
@@ -28,7 +28,7 @@ from __future__ import annotations
 import argparse, hashlib, json, struct, sys, time, zlib
 from pathlib import Path
 
-HARDWARE_WRITE_STAGES = frozenset({"stage1"})   # stage2 and restore are NOT enabled on hardware in this build
+HARDWARE_WRITE_STAGES = frozenset({"stage1", "stage2", "restore"})
 # Hardware writes are additionally pinned to the owner's unit, as read by the Windows diagnostic.
 PINNED_GLASSES_ID = "G428X00969"
 PINNED_SOC = "12.1.00.502_20250408"
@@ -177,13 +177,21 @@ class Link:
         except Exception: pass
 
 
-def identify(link: Link) -> dict:
-    """Read-only. Each value is read twice and must agree."""
+DP_UNREADABLE = "(unreadable)"
+
+def identify(link: Link, dp_optional: bool = False) -> dict:
+    """Read-only. Each value is read twice and must agree. With dp_optional (restore only) a bridge
+    that does not report a version is tolerated, because that is exactly when a restore is needed."""
     out = {}
     for key, mid in (("glasses_id", R_GLASSES_ID), ("dp", R_DP_VERSION), ("soc", R_SOC_VERSION)):
-        a, b = link.read_text(mid), link.read_text(mid)
-        if a != b or not a:
-            raise Refused("unstable or empty answer for %s (%r / %r)" % (key, a, b))
+        try:
+            a, b = link.read_text(mid), link.read_text(mid)
+            if a != b or not a:
+                raise Refused("unstable or empty answer for %s (%r / %r)" % (key, a, b))
+        except Refused:
+            if key == "dp" and dp_optional:
+                out[key] = DP_UNREADABLE; continue
+            raise
         out[key] = a
     if not out["soc"].startswith("12."):
         raise Refused("SOC version %r is not an Air 2 Ultra (project 12) version" % out["soc"])
@@ -240,10 +248,11 @@ ABORT_NOTICE = """
   1. Do NOT run anything else now. This tool sent nothing after the failure and will not retry.
   2. Unplug the glasses, wait 10 seconds, plug them back in (this resets the update state).
   3. Run:  --stage0   and keep its output.
-  4. Send that output before doing anything else. The recovery ATTEMPT would be --restore (the official
-     image again, after the tool watches an unplug/replug). Restore is DISABLED on hardware in this
-     build and needs its own approval.
-     Recovery after an interrupted write has never been verified on an Air 2 Ultra.
+  4. If Stage 0 shows the glasses (id and SOC) still answer, the recovery ATTEMPT is:
+         --restore --stock <official file>
+     Restore makes you unplug and replug again while it watches, then writes the official image.
+     Recovery is NOT guaranteed: it has never been verified on an Air 2 Ultra.
+     If restore itself aborts, stop completely. Do not try a third time.
   The tool is now LOCKED: Stage 1 and Stage 2 are refused until a restore completes.
   5. If Stage 0 cannot talk to the glasses, stop and contact XREAL support.
 """
@@ -339,7 +348,7 @@ class Session:
             self._witness_replug()                       # mandatory, observed by the tool
         link = self._open()
         try:
-            before = identify(link)
+            before = identify(link, dp_optional=(stage == "restore"))
             if self.hardware and (before["glasses_id"], before["soc"]) != (PINNED_GLASSES_ID, PINNED_SOC):
                 raise Refused("this build writes only to glasses %s with SOC %s; found %s / %s" % (PINNED_GLASSES_ID, PINNED_SOC, before["glasses_id"], before["soc"]))
             if before["dp"] not in dp_allowed:
@@ -382,6 +391,8 @@ class Session:
     def stage2(self, stock: Path, patched: Path) -> dict:
         load_image(stock, STOCK_SHA, "official image (rollback)")          # rollback file must be present and valid
         img = load_image(patched, PATCHED_SHA, "corrected image")
+        if self.lock.exists():
+            raise Refused("an earlier write was aborted (%s). Only --restore is allowed." % self.lock.read_text().strip())
         if not self.receipt.exists():
             raise Refused("no Stage 1 receipt; Stage 1 must succeed on these glasses first")
         rc = json.loads(self.receipt.read_text())
@@ -405,7 +416,7 @@ class Session:
     def restore(self, stock: Path) -> dict:
         img = load_image(stock, STOCK_SHA, "official image")
         if self.receipt.exists(): self.receipt.unlink()                    # a restore always invalidates Stage 1
-        return self._write_stage("restore", "RESTORE: write the OFFICIAL image", img, {NAME, "1109"}, "RESTORE",
+        return self._write_stage("restore", "RESTORE: write the OFFICIAL image", img, {NAME, "1109", DP_UNREADABLE}, "RESTORE",
                                  "  After an aborted write, this runs only once the tool has watched the glasses unplug and return.", True)
 
 

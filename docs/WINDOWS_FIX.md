@@ -351,3 +351,29 @@ Stage 1 does not fix the Pixel. It only tests the write path with the official i
 - What the Ultra does at FINISH is unknown; a refusal there would also count as an aborted write.
 - Worst case: no display on any host until XREAL services the glasses; warranty may be affected.
 - A pass proves a complete write works. It does not prove interrupted-write recovery.
+
+## Full staged build (Stage 1, Stage 2, restore) — prepared, NOT run by the author
+Authorized by the owner for preparation; every write is the owner's own action at the keyboard.
+`HARDWARE_WRITE_STAGES = {stage1, stage2, restore}`; this supersedes the Stage 1-only section
+above. Unchanged: pinned unit (`G428X00969`, SOC `12.1.00.502_20250408`), PID 0x0426 interface 0,
+two-file SHA-256 allowlist with project/CRC/bank-0/packet-stream checks, typed confirmation per
+command, Stage 2 needs a Stage 1 receipt (same glasses and SOC, under 24 h, single use) and a
+typed YES for the laptop picture, no retries, durable lock, tool-witnessed replug before a
+restore that follows an abort, SOC version must be identical after every write.
+New: restore tolerates a bridge that reports `1109` or no version at all (that is when it is
+needed), still only for the pinned glasses id and SOC; Stage 2 checks the lock before anything else.
+32 simulator tests pass (full three-command sequence on the hardware path; Stage 1 does not
+consume Stage 2's confirmations; abort in Stage 2 then witnessed restore; failed restore stays
+locked; restore with unreadable/fallback version; wrong unit refused for every stage).
+**Recovery is not guaranteed.** The simulator proves the tool's behaviour, not the glasses'.
+
+### Run order (Windows, from the repository folder)
+```
+python tools\ultra-dp\prepare.py
+python tools\ultra-dp\ultra_dp_writer.py --stage1 --stock ultra-dp-work\ultra_dp_1140_official.bin
+python tools\ultra-dp\ultra_dp_writer.py --stage2 --stock ultra-dp-work\ultra_dp_1140_official.bin --patched ultra-dp-work\ultra_dp_1140_corrected.bin
+```
+Rollback / recovery attempt:
+```
+python tools\ultra-dp\ultra_dp_writer.py --restore --stock ultra-dp-work\ultra_dp_1140_official.bin
+```
