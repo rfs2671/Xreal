@@ -136,3 +136,87 @@ This moves "Ultra transport (512-byte frames on interface 0)" from *statically v
 **hardware-verified for read-only queries on Windows**. It says nothing about the update
 messages (never sent), recovery, or whether the fix applies; Step 2 (laptop picture test) is
 still open.
+
+## Completed hardware tests (owner, recorded; not to be repeated)
+| Test | Result |
+|---|---|
+| Windows read-only diagnostic | **Passed.** PID 0x0426, interface 0, 512-byte reports, 7 queries, all CRCs valid, DP `1140`, SOC `…502` |
+| Picture from the Windows laptop, direct USB-C | **Works** (desktop mirrored correctly) |
+| Picture from the Pixel 10 Pro XL, same glasses | **Black** in every mode |
+
+Works-on-laptop / black-on-Pixel with bridge firmware whose payload is byte-identical to the
+Air 2 Pro's is the published fault pattern. The glasses, panels, cable and bridge hardware are
+therefore good, and "the fix applies" moves from *unknown* to **likely** (still not proven: the
+register-level cause was never read on an Ultra).
+
+## Recovery procedure for the Ultra: what exists and what does not
+**No recovery procedure for the Ultra can be proven offline.** XREAL's Ultra message table
+(read from its updater) contains exactly: version reads, DP update 110–113, SOC update 62–65,
+boot/app jumps and two progress events. There is **no** image read-back, no backup/restore
+command and no update-status query for the Ultra (the Air family has `R_DP7911_FW_IS_UPDATE`
+and `W_UPDATE_DP`; the Ultra table does not). So the only recovery mechanism available to
+anyone outside XREAL is: **write the official Ultra image again through the same 110–113 path.**
+
+Why that path should survive a bad bridge image (evidence, not proof):
+- The control channel is served by the SOC over USB HID, a different chip from the DP bridge.
+  On the Pixel today the bridge is in a failed video state and the control channel works fully.
+- The patched image passes the same CRC-32 and bank-0 checks as the official one, so the
+  "rejected image" paths are not expected to be exercised at all.
+- The patched code is byte-identical to code already reported running on the same bridge
+  family (Air 2 Pro), and your stock payload is byte-identical to that model's stock payload.
+
+What is unknown and cannot be learned without a write: what the Ultra does at FINISH; what an
+*interrupted* transfer leaves behind; whether the bridge has the internal `1109` fallback on the
+Ultra; and whether the SOC's backup logic restores or reverts the bridge (undecoded, blocked).
+
+## Staged installation strategy (DESIGN — nothing built, each stage needs your approval)
+The idea: **prove the restore path before a single changed byte is written.**
+
+- **Stage 0 — Preconditions (no writes).** Laptop on mains power, sleep/hibernate and USB
+  selective suspend off, glasses' own cable direct to the port that already showed a picture,
+  Nebula and any browser tab on XREAL's site closed, exactly one XREAL device. Tool re-runs the
+  read-only diagnostic, verifies both image files by SHA-256 (stock `E88B8E64…974F95`,
+  patched `644CD71F…39BDE9`), records DP and SOC versions.
+- **Stage 1 — Write the official image onto itself.** Same bytes that are already in the
+  bridge. Content risk is nil; this exercises PREPARE/START/TRANSMIT/FINISH, the FINISH status,
+  re-enumeration and timing on *your* unit. Pass = FINISH status 0, device back, DP `1140`, SOC
+  unchanged, **picture on the laptop still works**. After Stage 1 passes, "restore" is no longer
+  a theory: it is the operation that just succeeded. If Stage 1 fails in any way: stop, replug,
+  report; the patched image is never written.
+- **Stage 2 — Write the patched image.** Only after Stage 1 passed in the same session setup.
+  Pass = FINISH 0, device back, DP `1140`, SOC unchanged, picture on the laptop still works.
+- **Stage 3 — Test on the Pixel.** Picture appears; Android's HDCP level reads none.
+- **Rollback.** Stage 1 again (official image). Also the response to: laptop picture worse
+  after Stage 2, or no improvement on the Pixel.
+- **Rules in every stage.** No retries; any non-ack, timeout or USB error stops the tool and
+  requires unplug/replug before anything else; only messages 110–113 and the version reads can
+  be sent; SOC messages (62–68) do not exist in the tool; hash allowlist of exactly two files.
+- **The transfer is small:** 50,632 bytes = 1 START + 104 TRANSMIT frames; seconds, not minutes,
+  which keeps the interruption window short.
+
+## Must be verified before installation
+Already verified: model and transport on Windows (hardware); fault pattern (hardware); patched
+file structure, header, CRC-32, bank-0 tag, payload identity with the Air 2 Pro fix (offline);
+update protocol and frame layout from XREAL's own code (offline simulation).
+
+Still required, in order:
+1. **Your approval to build the writer**, then your review of its code. It does not exist.
+2. **Offline proof of the writer before it touches hardware:** its frames must be byte-identical
+   to the frames XREAL's own SDK emits for the same file in the simulation harness
+   (`tools/fw-analysis`), and it must stop after every injected failure (bad status, timeout,
+   USB error) with zero further frames.
+3. **Stage 0 preconditions** met on the day.
+4. **Stage 1 passing on your glasses** before Stage 2 is allowed.
+5. **Your acceptance of the residual risks**, which no software evidence removes:
+   - an interruption *during* a write (even Stage 1) on an Ultra has never been observed;
+     the expected remedy (replug, rewrite) is inferred from the Air family;
+   - if the SOC silently restores its backup, the fix simply will not stick (harmless, but then
+     only XREAL can fix it);
+   - HDCP is off while the patched image is installed;
+   - worst case, the display path stays dead until XREAL services the glasses, and a
+     third-party firmware write may affect warranty.
+Optional but the only thing that removes risk 5a/5b: XREAL's answer to `docs/XREAL_ESCALATION.md`.
+
+## Current verdict
+**NO-GO for flashing today; conditional GO to *build and offline-test* the staged writer if you
+approve that step.** Flashing itself needs a second, separate approval after items 1–4.

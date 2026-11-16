@@ -58,6 +58,7 @@ OpenXR games would draw on the phone instead of the glasses.
 | Hand tracker (Mercury) through this app's API | **Host-tested**: no false detections on empty images; detects a photographed hand at 16-20 cm | host test |
 | OpenXR runtime driver (head, controllers, hand joints, recentre) | **Host-tested** through Monado's own tracker code | 30 checks |
 | Pixel 10 Pro XL opens the glasses over USB; cameras (bulk UVC) and IMU deliver data; the display controller accepts mode commands | **Hardware-verified** by the owner's 0.3.1 report | Pixel 10 Pro XL |
+| Picture on the glasses from a Windows laptop (direct USB-C) | **Works** (owner-verified), so glasses and cable are good; see docs/WINDOWS_FIX.md | Windows laptop |
 | Picture on the glasses from the Pixel | **Fails on hardware in every mode**: detected at 1920x1080@60, frames presented, panels black. Not fixable by an app; see docs/DISPLAY.md | Pixel 10 Pro XL |
 | Stereo pairs reaching the tracker, timed on the shared clock | **Hardware-verified** in 0.4.0: 2,636 pairs at 30 per second, none rejected, no reconnects | Pixel 10 Pro XL |
 | 6DoF position tracking on the phone | **Hardware-verified to track** with the glasses' own factory calibration (0.5.0: 18 s tracked, 0.15 m of movement measured, 16 ms per frame, 114 features, no divergence). Accuracy and drift not yet measured | Pixel 10 Pro XL |
