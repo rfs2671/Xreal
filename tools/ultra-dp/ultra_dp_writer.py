@@ -8,10 +8,14 @@ only in a separate release, after the owner's separate explicit approval.
 
 Stages (each is its own invocation; none starts the next):
   --stage0                         read-only: identify, read versions, verify image files
-  --stage1 --stock F               write the OFFICIAL image onto the glasses (same bytes as installed)
+  --stage1 --stock F               write the OFFICIAL image onto the glasses. It has the same version
+                                   (1140) the glasses report; whether it is byte-identical to what is
+                                   installed CANNOT be verified, because the glasses offer no read-back
   --stage2 --stock F --patched F   write the corrected image; needs a Stage 1 receipt for the
                                    same glasses and its own approval
-  --restore --stock F              write the OFFICIAL image back (rollback / recovery attempt)
+  --restore --stock F              write the OFFICIAL image back (rollback / recovery attempt). After an
+                                   aborted write the tool itself must first watch the glasses disappear
+                                   from USB and come back (it does not take your word for the replug)
 
 What this tool can send: version reads (0x15, 0x16, 0x26) and DP update 110-113. It contains no
 SOC/MCU/DSP update, boot-jump or mode message, and refuses to build one.
@@ -44,6 +48,7 @@ ALLOWED = {STOCK_SHA: "official Air 2 Ultra DP 1140", PATCHED_SHA: "Ultra DP 114
 VENDOR_STREAM_SHA = {STOCK_SHA: "B8AAA9B96B47DDC04948E0B6982911351F44BBFACD4D7CD3C2C39F3371C0FDA9",
                      PATCHED_SHA: "EE868E736E41E9D9FF998595EA13F2640EB8F9DFE6F61DBFB0A53F12934B10C8"}
 RECEIPT_MAX_AGE_S = 24 * 3600
+STATE_DIR = Path.home() / ".ultra-dp-writer"
 
 
 class Refused(Exception):
@@ -181,6 +186,12 @@ def identify(link: Link) -> dict:
     return out
 
 
+def count_xreal_hardware() -> int:
+    """Number of XREAL HID interfaces currently on USB (any model, any mode). Sends nothing."""
+    import hid
+    return len(hid.enumerate(VID, 0))
+
+
 def open_hardware():
     """Open exactly one Ultra control interface, or raise Refused. Sends nothing."""
     try:
@@ -226,13 +237,16 @@ ABORT_NOTICE = """
   2. Unplug the glasses, wait 10 seconds, plug them back in (this resets the update state).
   3. Run:  --stage0   and keep its output.
   4. If Stage 0 can still talk to the glasses, the recovery ATTEMPT is:  --restore --stock <official file>
+     Restore will make you unplug and replug again while it watches; it will not run otherwise.
      Recovery after an interrupted write has never been verified on an Air 2 Ultra.
+  The tool is now LOCKED: Stage 1 and Stage 2 are refused until a restore completes.
   5. If Stage 0 cannot talk to the glasses, stop and contact XREAL support.
 """
 
 class Session:
-    def __init__(self, opener, state_dir: Path, log=print, ask=input, sleep=time.sleep, hardware=True):
+    def __init__(self, opener, state_dir: Path, log=print, ask=input, sleep=time.sleep, hardware=True, presence=None):
         self.opener, self.dir, self.log, self.ask, self.sleep, self.hardware = opener, Path(state_dir), log, ask, sleep, hardware
+        self.presence = presence
         self.lock = self.dir / "ABORTED_WRITE.lock"
         self.receipt = self.dir / "stage1_receipt.json"
 
@@ -244,6 +258,40 @@ class Session:
         self.log(text)
         if self.ask('Type exactly  %s  to continue, anything else cancels: ' % phrase).strip() != phrase:
             raise Refused("not confirmed; nothing was written")
+
+    def _set_lock(self, text: str) -> None:
+        """Written and flushed to disk BEFORE the first update packet. If this fails, nothing is sent."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        with open(self.lock, "w") as f:
+            f.write(text); f.flush()
+            try:
+                import os; os.fsync(f.fileno())
+            except OSError:
+                pass
+        if not self.lock.exists():
+            raise Refused("could not create the safety lock file; nothing was written")
+
+    def _witness_replug(self) -> None:
+        """After an aborted write: the tool itself must see the glasses leave USB and return."""
+        if self.presence is None:
+            raise Refused("cannot observe USB presence; restore after an aborted write is not possible")
+        POLL, GONE_POLLS, LIMIT = 0.5, 10, 240           # 5 s continuously absent; 2 minutes per phase
+        self.log("\nAn earlier write was aborted. UNPLUG the glasses from the laptop now (waiting up to 2 minutes)...")
+        gone = 0
+        for _ in range(LIMIT):
+            gone = gone + 1 if self.presence() == 0 else 0
+            if gone >= GONE_POLLS: break
+            self.sleep(POLL)
+        else:
+            raise Refused("the glasses were not seen unplugged for 5 seconds; nothing was written")
+        self.log("  seen unplugged for 5 seconds. PLUG the glasses back in now (waiting up to 2 minutes)...")
+        for _ in range(LIMIT):
+            if self.presence() > 0: break
+            self.sleep(POLL)
+        else:
+            raise Refused("the glasses did not come back; nothing was written")
+        self.sleep(4.0)                                  # let Windows finish enumerating
+        self.log("  seen reconnected.")
 
     def _reopen_and_verify(self, before: dict) -> dict:
         last = None
@@ -271,6 +319,8 @@ class Session:
         finally:
             link.close()
         self.log("  glasses %(glasses_id)s  DP %(dp)r  SOC %(soc)r" % info)
+        self.log("  safety lock: " + ("SET - an earlier write was aborted (%s)" % self.lock.read_text().strip() if self.lock.exists() else "not set"))
+        self.log("  hardware writes in this build: " + ("ENABLED" if HARDWARE_WRITES_ENABLED else "DISABLED"))
         self.log("  nothing was written")
         return info
 
@@ -278,7 +328,9 @@ class Session:
         if self.hardware and not HARDWARE_WRITES_ENABLED:
             raise Refused("real-hardware writes are disabled in this build (offline-tested only); nothing was sent")
         if self.lock.exists() and not clears_lock:
-            raise Refused("an earlier write was aborted (%s). Only --restore is allowed, after a replug." % self.lock.read_text().strip())
+            raise Refused("an earlier write was aborted (%s). Only --restore is allowed." % self.lock.read_text().strip())
+        if self.lock.exists():
+            self._witness_replug()                       # mandatory, observed by the tool
         link = self._open()
         try:
             before = identify(link)
@@ -286,11 +338,10 @@ class Session:
                 raise Refused("DP version %r is not one of %s for this stage" % (before["dp"], sorted(dp_allowed)))
             self._confirm("%s %s" % (phrase_prefix, before["glasses_id"]),
                           "\n%s\n  glasses %s, DP %r, SOC %r\n%s\n  Laptop on mains power, sleep off, do not touch the cable." % (label, before["glasses_id"], before["dp"], before["soc"], why))
-            self.dir.mkdir(parents=True, exist_ok=True)
-            self.lock.write_text("%s started %s for %s\n" % (label, time.strftime("%Y-%m-%d %H:%M:%S"), before["glasses_id"]))
+            self._set_lock("%s started %s for %s\n" % (label, time.strftime("%Y-%m-%d %H:%M:%S"), before["glasses_id"]))
             try:
                 write_image(link, img, self.log)
-            except WriteAborted:
+            except BaseException:                        # includes Ctrl+C and unexpected errors: stay locked
                 self.log(ABORT_NOTICE); raise
         finally:
             link.close()
@@ -312,8 +363,10 @@ class Session:
 
     def stage1(self, stock: Path) -> dict:
         img = load_image(stock, STOCK_SHA, "official image")
-        r = self._write_stage("STAGE 1: write the OFFICIAL image (same bytes as installed)", img, {NAME}, "STAGE1",
-                              "  This proves a complete write works on this unit. It does NOT prove an interrupted write is recoverable.", False)
+        r = self._write_stage("STAGE 1: write the OFFICIAL image (same version 1140 as reported)", img, {NAME}, "STAGE1",
+                              "  The glasses offer no read-back, so it CANNOT be verified that this file is byte-identical to what is\n"
+                              "  installed now. A success shows a complete write works on this unit. It does NOT show that an\n"
+                              "  interrupted write is recoverable.", False)
         self.receipt.write_text(json.dumps(dict(glasses_id=r["after"]["glasses_id"], soc=r["after"]["soc"], image=STOCK_SHA, time=time.time())))
         self.log("STAGE 1 complete. Stage 2 is NOT started. Confirm the laptop picture still works before deciding on Stage 2.")
         return r
@@ -345,7 +398,7 @@ class Session:
         img = load_image(stock, STOCK_SHA, "official image")
         if self.receipt.exists(): self.receipt.unlink()                    # a restore always invalidates Stage 1
         return self._write_stage("RESTORE: write the OFFICIAL image", img, {NAME, "1109"}, "RESTORE",
-                                 "  If an earlier write was aborted you must have unplugged and replugged the glasses since.", True)
+                                 "  After an aborted write, this runs only once the tool has watched the glasses unplug and return.", True)
 
 
 def main(argv=None) -> int:
@@ -354,9 +407,8 @@ def main(argv=None) -> int:
     for s in ("stage0", "stage1", "stage2", "restore"):
         g.add_argument("--" + s, action="store_true")
     ap.add_argument("--stock", type=Path); ap.add_argument("--patched", type=Path)
-    ap.add_argument("--state-dir", type=Path, default=Path.home() / ".ultra-dp-writer")
     a = ap.parse_args(argv)
-    s = Session(open_hardware, a.state_dir)
+    s = Session(open_hardware, STATE_DIR, presence=count_xreal_hardware)   # fixed location: the lock cannot be side-stepped by an option
     try:
         if a.stage0: s.stage0(a.stock, a.patched)
         elif a.stage1: s.stage1(a.stock)
@@ -367,7 +419,12 @@ def main(argv=None) -> int:
     except WriteAborted as e:
         print("WRITE ABORTED:", e); return 3
     except OSError as e:
-        print("CANNOT REACH THE GLASSES (nothing written by this run):", e); return 4
+        print("CANNOT REACH THE GLASSES:", e)
+        if s.lock.exists(): print("The tool is LOCKED after an incomplete write. See the notice above.")
+        return 4
+    except KeyboardInterrupt:
+        print("INTERRUPTED.", "The tool is LOCKED after an incomplete write; see the notice above." if s.lock.exists() else "Nothing was written.")
+        return 5
     return 0
 
 

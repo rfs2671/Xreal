@@ -177,12 +177,15 @@ The idea: **prove the restore path before a single changed byte is written.**
   Nebula and any browser tab on XREAL's site closed, exactly one XREAL device. Tool re-runs the
   read-only diagnostic, verifies both image files by SHA-256 (stock `E88B8E64…974F95`,
   patched `644CD71F…39BDE9`), records DP and SOC versions.
-- **Stage 1 — Write the official image onto itself.** Same bytes that are already in the
-  bridge. Content risk is nil; this exercises PREPARE/START/TRANSMIT/FINISH, the FINISH status,
+- **Stage 1 — Write the official Ultra image.** It carries the same version (`1140`) the
+  glasses report, and is the only image XREAL publishes for the Ultra. **Whether it is
+  byte-identical to what is installed cannot be verified: the glasses offer no read-back.** If
+  the factory image differs from the published one, Stage 1 changes it, and the original cannot
+  be recovered. Stage 1 exercises PREPARE/START/TRANSMIT/FINISH, the FINISH status,
   re-enumeration and timing on *your* unit. Pass = FINISH status 0, device back, DP `1140`, SOC
-  unchanged, **picture on the laptop still works**. After Stage 1 passes, "restore" is no longer
-  a theory: it is the operation that just succeeded. If Stage 1 fails in any way: stop, replug,
-  report; the patched image is never written.
+  unchanged, **picture on the laptop still works**. A pass shows a complete write of the
+  official image works; it does not show an interrupted write is recoverable. If Stage 1 fails
+  in any way: stop; the patched image is never written.
 - **Stage 2 — Write the patched image.** Only after Stage 1 passed in the same session setup.
   Pass = FINISH 0, device back, DP `1140`, SOC unchanged, picture on the laptop still works.
 - **Stage 3 — Test on the Pixel.** Picture appears; Android's HDCP level reads none.
@@ -246,7 +249,7 @@ works on hardware. Enabling writes is a separate release after a separate approv
 | Invalid acknowledgement at PREPARE, START, first/middle/last TRANSMIT, FINISH; status 250; corrupt reply | Stops at that packet, zero packets afterwards, lock set |
 | Timeout mid-transfer; USB disconnect mid-transfer | Same |
 | After FINISH: glasses gone, SOC version changed, DP `1109`, different glasses | Reported as aborted, lock set, no receipt |
-| After an abort | Stage 1/2 refused; no automatic retry; restore without replug is rejected by the simulated glasses and the tool stops again; restore after a replug succeeds *on the simulated glasses* |
+| After an abort | Stage 1/2 refused; no automatic retry; restore is refused before any packet unless the tool itself watched the glasses leave USB for 5 s and return; after that it succeeds *on the simulated glasses* |
 | Glasses never return | Tool reports it cannot reach them; sends nothing |
 | This build on "real hardware" path | Stage 1 and restore refused, zero bytes sent; Stage 0 sends only reads |
 
@@ -257,7 +260,7 @@ that an interrupted write is recoverable.**
 
 ### Remaining risks (unchanged by this work)
 1. Interrupted write on an Ultra: outcome and recoverability unknown.
-2. What the Ultra checks at FINISH, and whether it accepts the official image rewritten onto itself: unknown until Stage 1.
+2. What the Ultra checks at FINISH, and whether it accepts the official image: unknown until Stage 1. Whether the installed image is byte-identical to the official file: unknowable (no read-back).
 3. The SOC may hold a backup and revert the corrected image (harmless, fix would not stick) — undecoded.
 4. The correction is proven on an Air 2 Pro, likely but unproven on the Ultra.
 5. HDCP is off while the corrected image is installed; no way to tell images apart by version.
@@ -276,3 +279,30 @@ Writes (need a build with writes enabled, issued only after your approval):
 6. **Stage 2 (separate decision):** `--stage2 --stock <official> --patched <corrected>`; type `YES`, then `STAGE2 G428X00969`. Check the laptop picture, then the Pixel.
 7. **Rollback at any time:** `--restore --stock <official>`; type `RESTORE G428X00969`.
 8. **If anything says WRITE ABORTED:** do nothing else; unplug, wait 10 s, replug; run `--stage0`; send me the output before any restore attempt.
+
+## Safety revisions after owner review (still offline-only; hardware writes still disabled)
+1. **Replug is enforced, not requested.** After an aborted write, restore first makes the tool
+   watch USB: the glasses must be absent for 5 continuous seconds and then return, or restore is
+   refused before any packet. The glasses have no battery, so leaving USB removes their power.
+   Tested: never unplugged, unplugged too briefly, never returned, presence unobservable → all refused.
+2. **Stage 1 wording corrected** (above, and in the tool's own prompt): same *version*, byte
+   identity with the installed image unverifiable.
+3. **Lock hardening.** The lock file is flushed to disk before the first update packet; if it
+   cannot be created nothing is sent. Ctrl+C, unexpected errors, a failed post-write check and a
+   failed restore all leave it set. While set, Stage 1 and Stage 2 are refused; nothing retries
+   by itself. The lock location is fixed (the command-line option to move it was removed).
+4. **One-command preparation:** `python tools\ultra-dp\prepare.py` downloads the official
+   Ultra firmware from XREAL's update service, verifies its SHA-256, downloads the two patch
+   source files from the public project at a pinned commit (SHA-256 checked), builds the corrected
+   image locally and verifies its SHA-256, runs the 25 simulator tests, then runs Stage 0.
+   Run end to end in the development environment: steps 1–4 OK; Stage 0 needs your glasses.
+5. **Stage 0 on your laptop:** not yet run. It is the last step of `prepare.py`; send
+   `ultra_prepare_report.txt`.
+
+### Simplest way to run it (Windows)
+1. Install Python 3.10+ from python.org (tick "Add python.exe to PATH").
+2. Download this repository (Code > Download ZIP), unzip, open a terminal in that folder.
+3. Plug the glasses directly into the laptop.
+4. `python tools\ultra-dp\prepare.py`
+5. Send me `ultra_prepare_report.txt`. Expected last lines: all five items OK, glasses
+   `G428X00969`, DP `1140`, SOC `12.1.00.502_20250408`, safety lock not set, hardware writes DISABLED.

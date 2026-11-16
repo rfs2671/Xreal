@@ -58,12 +58,23 @@ class FakeUltra:
     def close(self): pass
 
 
-def session(dev, answers, tmp):
-    log = []; it = iter(answers)
+def session(dev, answers, tmp, presence="replug"):
+    """presence: 'replug' = the user really unplugs and replugs when asked; 'stay' = never unplugs;
+    'gone' = unplugs and never returns; 'blip' = unplugged for under 5 seconds."""
+    log = []; it = iter(answers); st = {"n": 0}
     def opener():
         if not dev.present: raise OSError("not connected")
         return dev
-    s = W.Session(opener, Path(tmp), log=log.append, ask=lambda prompt: next(it, ""), sleep=lambda x: None, hardware=False)
+    def pres():
+        st["n"] += 1; n = st["n"]
+        if presence == "stay": return 4
+        if presence == "gone": return 0
+        if presence == "blip": return 0 if n % 6 else 4
+        if n <= 3: return 4                               # still plugged for a moment
+        if n <= 20: return 0                              # unplugged
+        if n == 21: dev.replug(); dev.present = True      # power-cycled: update state cleared
+        return 4
+    s = W.Session(opener, Path(tmp), log=log.append, ask=lambda prompt: next(it, ""), sleep=lambda x: None, hardware=False, presence=pres)
     return s, log
 
 def write_frames(dev): return [f for f in dev.sent if struct.unpack_from("<H", f, W.OFF_MSGID)[0] in W.WRITES]
@@ -186,18 +197,57 @@ class WithImages(unittest.TestCase):
             s2, _ = session(dev, answers, self.tmp)
             with self.assertRaises(W.Refused): call(s2)
         self.assertEqual(len(write_frames(dev)), 51)
-        # recovery attempt WITHOUT a replug: the modelled device rejects it at FINISH; writer stops again
-        s3, _ = session(dev, ["RESTORE G428X00969"], self.tmp)
-        with self.assertRaises(W.WriteAborted): s3.restore(STOCK)
-        self.assertTrue(s3.lock.exists())
-        # recovery attempt AFTER a replug, on a device model whose control channel survived
-        dev.replug(); s4, _ = session(dev, ["RESTORE G428X00969"], self.tmp); s4.restore(STOCK)
+        # restore WITHOUT an observed replug is refused before any packet, whatever the user types
+        for mode in ("stay", "blip", "gone"):
+            s3, _ = session(dev, ["RESTORE G428X00969"], self.tmp, presence=mode)
+            with self.assertRaises(W.Refused): s3.restore(STOCK)
+            self.assertTrue(s3.lock.exists()); self.assertEqual(len(write_frames(dev)), 51)
+        s3 = W.Session(lambda: dev, Path(self.tmp), log=lambda x: None, ask=lambda p: "RESTORE G428X00969", sleep=lambda x: None, hardware=False, presence=None)
+        with self.assertRaises(W.Refused): s3.restore(STOCK)
+        self.assertEqual(len(write_frames(dev)), 51)
+        # restore AFTER the tool watched a real unplug/replug, on a device model whose control channel survived
+        s4, log = session(dev, ["RESTORE G428X00969"], self.tmp); s4.restore(STOCK)
+        self.assertTrue(any("seen unplugged" in l for l in log) and any("seen reconnected" in l for l in log))
         self.assertEqual(dev.installed, self.stock); self.assertFalse(s4.lock.exists()); self.assertFalse(s4.receipt.exists())
+    def test_failed_restore_stays_locked(self):
+        dev, s = self._abort(lambda i, m: ("status", 5) if i == 50 else None, 51)
+        dev.fault = lambda i, m: ("status", 5) if i == 3 else None
+        s2, _ = session(dev, ["RESTORE G428X00969"], self.tmp)
+        with self.assertRaises(W.WriteAborted): s2.restore(STOCK)
+        self.assertTrue(s2.lock.exists())
+        s3, _ = session(dev, ["STAGE1 G428X00969"], self.tmp)
+        with self.assertRaises(W.Refused): s3.stage1(STOCK)
+    def test_ctrl_c_or_unexpected_error_mid_transfer_leaves_lock(self):
+        for exc in (KeyboardInterrupt, RuntimeError, MemoryError):
+            self.setUp()
+            def fault(i, m, exc=exc):
+                if i == 20: raise exc("boom")
+            dev = FakeUltra(self.stock, fault); s, log = session(dev, ["STAGE1 G428X00969"], self.tmp)
+            with self.assertRaises(exc): s.stage1(STOCK)
+            self.assertTrue(s.lock.exists()); self.assertFalse(s.receipt.exists()); self.assertEqual(len(write_frames(dev)), 21)
+            s2, _ = session(dev, ["STAGE1 G428X00969"], self.tmp)
+            with self.assertRaises(W.Refused): s2.stage1(STOCK)
+            self.assertEqual(len(write_frames(dev)), 21)
+    def test_lock_is_on_disk_before_first_update_packet_and_blocks_if_unwritable(self):
+        seen = []
+        def fault(i, m):
+            if i == 0: seen.append((Path(self.tmp) / "ABORTED_WRITE.lock").exists())
+        dev = FakeUltra(self.stock, fault); s, _ = session(dev, ["STAGE1 G428X00969"], self.tmp); s.stage1(STOCK)
+        self.assertEqual(seen, [True])
+        blocker = Path(tempfile.mkdtemp()) / "file"; blocker.write_text("x")             # state dir cannot be created
+        dev = FakeUltra(self.stock); s, _ = session(dev, ["STAGE1 G428X00969"], blocker / "sub")
+        with self.assertRaises((OSError, W.Refused)): s.stage1(STOCK)
+        self.assertEqual(write_frames(dev), [])
+    def test_plain_rollback_without_lock_needs_no_replug(self):
+        dev = FakeUltra(self.patched); s, log = session(dev, ["RESTORE G428X00969"], self.tmp, presence="stay"); s.restore(STOCK)
+        self.assertEqual(dev.installed, self.stock)
+    def test_cli_has_no_state_dir_option(self):
+        with self.assertRaises(SystemExit): W.main(["--stage0", "--state-dir", "x"])
     def test_recovery_impossible_when_device_never_returns(self):
         dev, s = self._abort(lambda i, m: "usb" if i == 30 else None, 31)
-        s2, _ = session(dev, ["RESTORE G428X00969"], self.tmp)
-        with self.assertRaises(OSError): s2.restore(STOCK)                               # tool cannot fix a device that is gone
-        self.assertEqual(len(write_frames(dev)), 31)
+        s2, _ = session(dev, ["RESTORE G428X00969"], self.tmp, presence="gone")
+        with self.assertRaises(W.Refused): s2.restore(STOCK)                             # tool cannot fix a device that is gone
+        self.assertEqual(len(write_frames(dev)), 31); self.assertTrue(s2.lock.exists())
     def test_hardware_writes_disabled_in_this_build(self):
         dev = FakeUltra(self.stock); log = []
         s = W.Session(lambda: dev, Path(self.tmp), log=log.append, ask=lambda p: "STAGE1 G428X00969", sleep=lambda x: None, hardware=True)
