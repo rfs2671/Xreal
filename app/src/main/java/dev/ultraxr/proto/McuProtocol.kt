@@ -35,6 +35,21 @@ object McuProtocol {
         "DisplayPort bridge firmware" to 0x16, "DSP version" to 0x18, "DSP app firmware" to 0x21, "MCU app firmware" to 0x26, "activation time" to 0x29,
     )
 
+    /** Report size the Ultra's update path uses (PID 0x0426). Only used here for read-only version reads. */
+    const val WIDE_REPORT = 512
+    /** The ONLY commands the wide-frame transport test may send: read-only DP-bridge and SOC version reads. */
+    val WIDE_READ_ONLY: Set<Int> = setOf(0x16, 0x26)
+    /** Message ids that write or change firmware. Never sent by this app; asserted in tests. */
+    val UPDATE_IDS: Set<Int> = (62..68).toSet() + (110..113).toSet()
+
+    /** Same framing as [serialize] but in a 512-byte report. Refuses anything except [WIDE_READ_ONLY]. */
+    fun serializeWideReadOnly(cmdId: Int, requestId: Int = 0x1337): ByteArray {
+        require(cmdId !in UPDATE_IDS) { "firmware-update commands are never sent" }
+        require(cmdId in WIDE_READ_ONLY) { "only read-only version queries may use the wide test" }
+        val small = serialize(cmdId, ByteArray(0), requestId)
+        return small.copyOf(WIDE_REPORT)
+    }
+
     fun eventName(cmd: Int): String = when (cmd) {
         EVT_DISPLAY_TOGGLED -> "display toggled (first byte 0 = screen off, 1 = on)"
         EVT_BUTTON -> "button pressed"

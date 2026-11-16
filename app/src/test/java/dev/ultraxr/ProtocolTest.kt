@@ -15,6 +15,26 @@ import org.junit.Test
 import java.util.Random
 
 class ProtocolTest {
+    @Test fun wideReadOnlyFrameIs512BytesWithValidCrcAndMatchesShortFrame() {
+        for (cmd in McuProtocol.WIDE_READ_ONLY) {
+            val w = McuProtocol.serializeWideReadOnly(cmd)
+            val s = McuProtocol.serialize(cmd)
+            assertEquals(512, w.size)
+            assertArrayEquals(s, w.copyOf(64))
+            assertTrue(w.drop(64).all { it.toInt() == 0 })
+            val crc = java.util.zip.CRC32().apply { update(w, 5, 17) }.value.toInt()
+            assertEquals(crc, (0..3).fold(0) { a, i -> a or ((w[1 + i].toInt() and 0xFF) shl (8 * i)) })
+        }
+    }
+
+    @Test fun wideTestRefusesEveryUpdateAndWriteCommand() {
+        for (id in McuProtocol.UPDATE_IDS + setOf(McuProtocol.CMD_SET_DISPLAY_MODE, McuProtocol.CMD_SET_BRIGHTNESS, 0x01, 0x6C04)) {
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { McuProtocol.serializeWideReadOnly(id) }
+        }
+        assertTrue(McuProtocol.WIDE_READ_ONLY.none { it in McuProtocol.UPDATE_IDS })
+        assertTrue(McuProtocol.STATUS_QUERIES.none { it.second in McuProtocol.UPDATE_IDS })
+    }
+
     @Test fun imuStartCommandMatchesReferenceBytes() {
         // Literal from XR Gate; the builder must reproduce it, which pins the CRC and layout.
         assertArrayEquals(ImuCodec.START_COMMAND, ImuCodec.streamCommand(true))

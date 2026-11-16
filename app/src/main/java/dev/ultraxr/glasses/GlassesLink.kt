@@ -205,6 +205,16 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         }
     }
 
+    /** Read-only: version reads in 512-byte reports, result appended to the controller status. */
+    fun probeWideReports() {
+        handler.post {
+            val m = mcu ?: return@post
+            val out = m.probeWideReports()
+            stats.controllerStatus = stats.controllerStatus + "\n512-byte report test (read-only version reads):\n" + out
+            stats.note("512-byte report test done")
+        }
+    }
+
     /**
      * Writes the display mode the glasses already report once more. On the Air family a mode
      * write makes the glasses drop and re-raise hot-plug, so the phone restarts the video link.

@@ -285,3 +285,27 @@ your separate explicit approval.**
 
 **Still NO-GO for flashing.** The transport blocker is gone; the recovery blocker is not, and it
 is the one that matters. Zero-risk path unchanged: send XREAL the evidence for an official fix.
+
+---
+
+## Round 4 (partial)
+
+**Done: read-only 512-byte transport test.** *Check, Display test, "512-byte read test"* sends
+only the DP-bridge version read (0x16) and SOC version read (0x26) in 512-byte reports (the
+frame size the Ultra updater uses) and records the endpoint sizes, bytes written and the
+answers. It is a button, never automatic. `McuProtocol.serializeWideReadOnly` throws for
+anything outside those two ids and for every update id (62–68, 110–113); unit tests assert the
+frame is 512 bytes with a valid CRC, equals the existing 64-byte frame zero-padded, and that
+every update, mode and brightness id is refused. **Not yet run on hardware.**
+
+**Not done this round:**
+- Unpacking the Ultra SOC image to trace the DP7911 backup/recovery handlers (items 1–2) was
+  halted by a safety classifier on the session, so there is **no new evidence** about which
+  slots are written, whether a failed update restores the factory image, or whether the SOC
+  could overwrite a patched bridge image. Those remain **unverified**.
+- Preserving HDCP after startup (item 4) was not investigated.
+- Distinguishing patched from stock (item 5): of the message ids known so far, none reads the
+  bridge image back; only version strings are readable, and both images report `1140`. No
+  independent identity check is therefore known to exist. Treat as **unsolved**.
+
+**Verdict unchanged: NO-GO for any write-capable updater.**
