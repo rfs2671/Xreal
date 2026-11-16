@@ -125,3 +125,14 @@ reading its code; (4) you accept that interrupted-write recovery on an Ultra is 
 a failed write could leave the display path unusable until XREAL support intervenes. The remaining
 risk is real and cannot be reduced to zero by software evidence: only XREAL's confirmation of the
 Ultra's recovery behaviour (see `docs/XREAL_ESCALATION.md`) removes it.
+
+## Hardware result: Windows diagnostic (owner's glasses)
+Run on the owner's laptop, read-only. PID 0x0426 exposes HID interfaces 0, 1, 2 and 8;
+interface 0 answered at the **512-byte** report size on the first try. All seven queries
+returned status 0 with valid CRCs: DP bridge `1140`, SOC `12.1.00.502_20250408`, DSP
+`09.A.00.001_20230615`, display mode 1 (2D 60 Hz), brightness 6. Nothing was written.
+
+This moves "Ultra transport (512-byte frames on interface 0)" from *statically verified* to
+**hardware-verified for read-only queries on Windows**. It says nothing about the update
+messages (never sent), recovery, or whether the fix applies; Step 2 (laptop picture test) is
+still open.
