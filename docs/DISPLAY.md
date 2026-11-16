@@ -96,6 +96,18 @@ and the bridge showing the documented version and the documented behaviour (no p
 re-plug on a mode change), this is not something an Android app can fix. It needs a change in
 the glasses' bridge firmware or in the Pixel's DisplayPort start-up.
 
+## Firmware comparison done (2026-11-16)
+
+The Air 2 Ultra's official DisplayPort firmware was downloaded from XREAL's update service
+and compared with the Air 2 Pro image the public fix targets. Result: the Ultra runs the
+**same DP-bridge firmware** (the 8051 payload is byte-identical; only 5 container-header bytes
+differ), and the **same two defective routines** are present at the same addresses. The full
+analysis, hashes and feasibility are in [FIRMWARE.md](FIRMWARE.md). Summary: an Ultra-specific
+patched image is technically feasible, but the flashing protocol and recovery path for the
+Ultra are unverified, flashing needs a computer, and the fix removes HDCP on all hosts. This
+project will not build or flash it without verifying the protocol and getting separate
+explicit approval.
+
 ## The specific change that would be needed
 
 A bridge image for the Air 2 Ultra with the two documented corrections (clock seeding when the
