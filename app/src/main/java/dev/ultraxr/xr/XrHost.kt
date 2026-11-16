@@ -124,7 +124,7 @@ object XrHost : OpenXrGlassesLayer.Host {
             val sideBySide = m.physicalWidth >= m.physicalHeight * 3
             UltraXrFeed.configureDisplay(m.physicalWidth, m.physicalHeight, m.refreshRate, tanH, tanV)
             if (sideBySide) UltraXrFeed.configureEyes(s.ipdMm / 1000f, XrRenderer.VIRTUAL_SCREEN_M.toFloat()) else UltraXrFeed.configureEyes(0f, 0f)
-            lastEvent = "runtime configured for ${m.physicalWidth}x${m.physicalHeight}@%.0f".format(m.refreshRate) + if (sideBySide) "" else " (not side-by-side)"
+            lastEvent = "runtime configured for ${m.physicalWidth}x${m.physicalHeight}@" + dev.ultraxr.core.Fmt.f(m.refreshRate, 0) + if (sideBySide) "" else " (not side-by-side)"
         } else {
             // No glasses display: the application shows Monado's side-by-side picture on the phone.
             UltraXrFeed.configureDisplay(3840, 1080, 60f, tanH, tanV)

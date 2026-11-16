@@ -23,9 +23,12 @@ class SettingsActivity : Activity() {
         root.setPadding(Ui.dp(this, 20), Ui.dp(this, 56), Ui.dp(this, 20), Ui.dp(this, 28))
         root.add(Ui.text(this, "Settings", 30f, bold = true))
 
-        root.add(toggle("Smoother display (90 Hz)", "Uses more battery. Falls back to 60 Hz if the phone does not offer it.", s.refresh90) {
-            s.refresh90 = it; Tracking.link?.applyDisplayMode(if (it) McuProtocol.MODE_SBS_90 else McuProtocol.MODE_SBS_60)
+        root.add(toggle("3D display mode", "Switches the glasses to side-by-side 3D. Turn off if the glasses stay black: they then show the same picture to both eyes.", s.use3d) {
+            s.use3d = it; Tracking.link?.applyDisplayMode(Tracking.wantedMode())
         }, topDp = 22)
+        root.add(toggle("Smoother display (90 Hz)", "Uses more battery. Falls back to 60 Hz if the phone does not offer it.", s.refresh90) {
+            s.refresh90 = it; Tracking.link?.applyDisplayMode(Tracking.wantedMode())
+        }, topDp = 10)
         root.add(toggle("Hand tracking", "Turn off to save battery; games then use your gaze. Takes effect next time the app starts.", s.handTracking) { s.handTracking = it }, topDp = 10)
         root.add(toggle("Show my hands", "Draws a light outline over your tracked hands.", s.showHands) { s.showHands = it }, topDp = 10)
         root.add(toggle("Battery saver", "Tracks hands half as often.", s.batterySaver) { s.batterySaver = it }, topDp = 10)

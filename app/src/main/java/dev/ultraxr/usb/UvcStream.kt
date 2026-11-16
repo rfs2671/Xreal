@@ -59,7 +59,7 @@ class UvcStream(
         // 60 fps is the mode XR Gate uses; fall back to the fastest advertised one.
         val interval = frm.intervals100ns.firstOrNull { it == 166666 } ?: frm.intervals100ns.minOrNull() ?: 166666
         chosen = "format#${fmt.index} ${fmt.guid} frame#${frm.index} ${frm.width}x${frm.height} " +
-            "interval=${interval} (%.1f fps)".format(1e7 / interval)
+            "interval=${interval} (" + dev.ultraxr.core.Fmt.f(1e7 / interval, 1) + " fps)"
         log("camera: requesting $chosen")
 
         val sizes = when {
@@ -101,7 +101,7 @@ class UvcStream(
             val altIntf = alts.firstOrNull { it.alternateSetting == ep.altSetting }
                 ?: return "alt setting ${ep.altSetting} not exposed by Android"
             if (!conn.setInterface(altIntf)) return "SET_INTERFACE alt ${ep.altSetting} failed"
-            transport = "isochronous alt=${ep.altSetting} ep=0x%02x %d bytes/microframe".format(ep.address, ep.payloadPerInterval)
+            transport = "isochronous alt=${ep.altSetting} ep=0x" + dev.ultraxr.core.Fmt.hex(ep.address) + " ${ep.payloadPerInterval} bytes/microframe"
             log("camera: $transport")
             val pkts = 32
             val handle = IsoNative.start(conn.fileDescriptor, ep.address, ep.payloadPerInterval, pkts, 8)

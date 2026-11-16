@@ -126,7 +126,7 @@ class GameScene(val game: Game) : BaseScene() {
             d.text("${g.score}", p[0], p[1], p[2], 0.07, 1f, 1f, 1f, 0.9f)
             val t = inFront(head, 0.0, 0.135, 1.8)
             val secs = g.timeLeft.toInt()
-            d.text("%d:%02d%s".format(secs / 60, secs % 60, if (g.combo > 1) "   x${1 + (g.combo - 1).coerceAtMost(9) / 3}" else ""), t[0], t[1], t[2], 0.03, 0.6f, 0.85f, 1f, 0.85f)
+            d.text("${secs / 60}:${(secs % 60).toString().padStart(2, '0')}" + (if (g.combo > 1) "   x${1 + (g.combo - 1).coerceAtMost(9) / 3}" else ""), t[0], t[1], t[2], 0.03, 0.6f, 0.85f, 1f, 0.85f)
             if (g.hitFlash > 0) { val h = inFront(head, 0.0, 0.0, 1.2); d.text("HIT", h[0], h[1], h[2], 0.12, 1f, 0.2f, 0.15f, (g.hitFlash * 2).toFloat().coerceAtMost(1f)) }
         }
         drawStatus(d, head)

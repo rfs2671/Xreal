@@ -109,6 +109,59 @@ class SmokeTest {
         } finally { Tracking.release() }
     }
 
+    /** Regression: the report used to throw on a literal percent sign, which broke Share. */
+    @Test fun shareBuildsACompleteReportAndOpensTheShareSheet() {
+        val a = launch(CheckActivity::class.java) as CheckActivity
+        Thread.sleep(800)
+        val text = a.reportTextSafely()
+        assertTrue("report was generated, not an error text: ${text.take(300)}", text.startsWith("Ultra XR hardware check"))
+        for (section in listOf("== RESULTS ==", "== DISPLAY: GLASSES CONTROLLER ==", "== DISPLAY: ANDROID ==", "== DISPLAY: THIS APP'S OUTPUT ==", "== BATTERY ==", "== LOG ==")) assertTrue("has $section", text.contains(section))
+        assertTrue("no section failed:\n" + text.lines().filter { it.startsWith("!!") }.joinToString("\n"), !text.contains("!! this section failed"))
+        assertTrue("battery line present", Regex("level \\d+ percent -> \\d+ percent").containsMatchIn(text))
+        assertTrue("phone display described", text.contains("display 0 '"))
+        // The button's own code path: must not throw or finish the screen.
+        inst.runOnMainSync { a.share() }
+        Thread.sleep(1500)
+        assertTrue("check screen survived Share", !a.isFinishing && !a.isDestroyed)
+        assertTrue("no share failure logged", !Tracking.logText().contains("share failed"))
+        inst.uiAutomation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+        Thread.sleep(500)
+        a.finish()
+    }
+
+    /** Regression: Save used to produce a zip without report.txt. */
+    @Test fun saveWritesAZipWithTheReportToDownloads() {
+        val a = launch(CheckActivity::class.java) as CheckActivity
+        Thread.sleep(800)
+        // The archive as the button builds it.
+        val bytes = java.io.ByteArrayOutputStream().also { a.exportZip(it) }.toByteArray()
+        val names = ArrayList<String>()
+        var report = ""
+        java.util.zip.ZipInputStream(bytes.inputStream()).use { z -> while (true) { val e = z.nextEntry ?: break; names += e.name; if (e.name == "report.txt") report = String(z.readBytes()) } }
+        assertTrue("zip entries: $names", "report.txt" in names)
+        assertTrue(report.startsWith("Ultra XR hardware check"))
+        // And the full button path into the Downloads collection.
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var message = ""
+        inst.runOnMainSync { a.save { message = it; latch.countDown() } }
+        assertTrue("save finished", latch.await(30, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue("save message: $message", message.startsWith("Saved to Downloads as ultra-xr-") && message.contains("report.txt"))
+        val name = Regex("ultra-xr-[^ ]+\\.zip").find(message)!!.value
+        val uri = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        var found = false
+        ctx.contentResolver.query(uri, arrayOf(android.provider.MediaStore.Downloads._ID), android.provider.MediaStore.Downloads.DISPLAY_NAME + "=?", arrayOf(name), null)?.use { c ->
+            if (c.moveToFirst()) {
+                val item = android.content.ContentUris.withAppendedId(uri, c.getLong(0))
+                val saved = ArrayList<String>()
+                ctx.contentResolver.openInputStream(item)!!.use { i -> java.util.zip.ZipInputStream(i).use { z -> while (true) { val e = z.nextEntry ?: break; saved += e.name } } }
+                found = "report.txt" in saved
+                ctx.contentResolver.delete(item, null, null)
+            }
+        }
+        assertTrue("the saved zip in Downloads holds report.txt", found)
+        a.finish()
+    }
+
     @Test fun gameRendersInPhonePreview() {
         val a = launch(PlayActivity::class.java) as PlayActivity
         Thread.sleep(4000)

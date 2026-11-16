@@ -116,7 +116,7 @@ object Tracking : GlassesLink.Listener {
             handsThread = thread(name = "hands", isDaemon = true) { handsLoop() }
         }
         if (users > 1) return
-        link?.let { it.wantedDisplayMode = if (settings.refresh90) McuProtocol.MODE_SBS_90 else McuProtocol.MODE_SBS_60; it.start() }
+        link?.let { it.wantedDisplayMode = wantedMode(); it.sideBySideDisplayPresent = { dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(app) || dev.ultraxr.glasses.DisplayDiagnostics.sideBySideOffered(app) }; it.start() }
     }
 
     @Synchronized fun release() {
@@ -125,6 +125,18 @@ object Tracking : GlassesLink.Listener {
         if (users > 0) return
         link?.stop()
     }
+
+    /** The glasses display mode the settings ask for. */
+    fun wantedMode(): Int = when {
+        !settings.use3d -> McuProtocol.MODE_2D_60
+        settings.refresh90 -> McuProtocol.MODE_SBS_90
+        else -> McuProtocol.MODE_SBS_60
+    }
+
+    /** Graphics facts recorded by the renderers, for the hardware report. */
+    private val graphicsNotes = ArrayDeque<String>()
+    fun noteGraphics(msg: String) { synchronized(graphicsNotes) { graphicsNotes.addLast("%tT ".format(System.currentTimeMillis()) + msg); while (graphicsNotes.size > 40) graphicsNotes.removeFirst() }; log(msg) }
+    fun graphicsText(): String = synchronized(graphicsNotes) { if (graphicsNotes.isEmpty()) "no renderer has started" else graphicsNotes.joinToString("\n") }
 
     fun recenter() { head.recenter(); log("recenter") }
 
@@ -323,6 +335,8 @@ object Tracking : GlassesLink.Listener {
     /** Backs off optional work as the phone heats up. */
     private fun governor() {
         val ctx = appContext ?: return
+        // The phone never offered a side-by-side mode: remember it, so the glasses are not sent black on every connect.
+        if (link?.stats?.sbsFellBack == true && settings.use3d) { settings.use3d = false; log("3D display mode turned off in Settings: the phone offers no 3840x1080 mode") }
         val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
         val status = pm.currentThermalStatus
         thermalStatus = status

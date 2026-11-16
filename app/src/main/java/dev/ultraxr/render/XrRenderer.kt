@@ -31,6 +31,9 @@ class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean, privat
     @Volatile var periodNs = 16_666_667L
     @Volatile var avgCpuMs = 0.0; private set
     @Volatile var glError = ""; private set
+    @Volatile var glInfo = ""; private set
+    private var firstFrameNoted = false
+    private var lastGlErr = 0
 
     private val draw = Draw()
     private val proj = FloatArray(16); private val view = FloatArray(16); private val vp = FloatArray(16)
@@ -40,10 +43,15 @@ class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean, privat
     fun resetStats() { frames = 0; lateFrames = 0; maxIntervalNs = 0; firstFrameNs = 0 }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        try { draw.init() } catch (e: Throwable) { glError = e.toString(); Tracking.log("GL init failed: $e") }
+        try {
+            draw.init()
+            val err = GLES30.glGetError()
+            glInfo = "${GLES30.glGetString(GLES30.GL_RENDERER)} / ${GLES30.glGetString(GLES30.GL_VERSION)} / ${GLES30.glGetString(GLES30.GL_VENDOR)}"
+            Tracking.noteGraphics("GL context created (" + (if (preview) "phone preview" else if (stereo) "glasses, two eyes" else "glasses, one view") + "): $glInfo" + if (err != GLES30.GL_NO_ERROR) ", glGetError=0x" + Integer.toHexString(err) else "")
+        } catch (e: Throwable) { glError = e.toString(); Tracking.noteGraphics("GL init FAILED: " + dev.ultraxr.core.ReportExport.stackTrace(e).take(600)) }
     }
 
-    override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) { width = w; height = h }
+    override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) { width = w; height = h; Tracking.noteGraphics("GL surface is ${w}x$h") }
 
     override fun onDrawFrame(gl: GL10?) {
         val now = System.nanoTime()
@@ -93,6 +101,11 @@ class XrRenderer(@Volatile var scene: Scene, private val stereo: Boolean, privat
             frustum(th, tv)
             draw.eyeIndex = -1
             renderEye(sc, head, 0.0)
+        }
+        if (!firstFrameNoted) { firstFrameNoted = true; Tracking.noteGraphics("first frame drawn to a ${width}x$height surface") }
+        if (frames % 300 == 5L) {
+            val e = GLES30.glGetError()
+            if (e != GLES30.GL_NO_ERROR && e != lastGlErr) { lastGlErr = e; Tracking.noteGraphics("glGetError=0x" + Integer.toHexString(e) + " while drawing") }
         }
         avgCpuMs = avgCpuMs * 0.95 + (System.nanoTime() - now) / 1e6 * 0.05
     }

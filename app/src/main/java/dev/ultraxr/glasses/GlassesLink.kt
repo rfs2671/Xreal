@@ -47,6 +47,24 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         @Volatile var transport = ""
         @Volatile var cameraFormat = ""
         @Volatile var displayMode = -1
+        /** Mode the glasses reported when the connection opened, before this app changed anything. */
+        @Volatile var displayModeAtConnect = -1
+        /** True once this app gave up on 3D because the phone never offered a side-by-side mode. */
+        @Volatile var sbsFellBack = false
+        @Volatile var mcuWritePath = ""
+        private val history = ArrayDeque<String>()
+        private val events = LinkedHashMap<Int, String>()
+        private val t0 = System.nanoTime()
+        fun note(msg: String) = synchronized(history) { history.addLast("t+" + dev.ultraxr.core.Fmt.f((System.nanoTime() - t0) / 1e9, 1) + "s " + msg); while (history.size > 60) history.removeFirst() }
+        fun event(cmd: Int, payload: ByteArray) = synchronized(history) {
+            val n = (events[cmd]?.substringBefore(' ')?.toIntOrNull() ?: 0) + 1
+            events[cmd] = "$n times, last payload " + payload.take(12).joinToString("") { dev.ultraxr.core.Fmt.hex(it.toInt() and 0xFF) }
+            while (events.size > 24) events.remove(events.keys.first())
+        }
+        /** Every display-mode read and write on the glasses' controller, and unsolicited messages from it. */
+        fun displayHistory(): String = synchronized(history) {
+            history.joinToString("\n") + (if (events.isEmpty()) "" else "\nunsolicited controller messages:\n" + events.entries.joinToString("\n") { "  cmd 0x" + dev.ultraxr.core.Fmt.hex(it.key, 4) + ": " + it.value })
+        }
         @Volatile var mcuOk = false
         @Volatile var reconnects = 0
         @Volatile var serial = ""
@@ -87,6 +105,10 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
     private var permissionDenied = false
     private var healthySeconds = 0
     private var camerasDown = false
+    private var sbsWaitSeconds = 0
+    private var pollTick = 0
+    /** Supplied by the owner: is an external display currently in a side-by-side mode? */
+    @Volatile var sideBySideDisplayPresent: (() -> Boolean)? = null
     private var failures = 0
 
     private var watchImu = 0L
@@ -143,6 +165,8 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             val m = mcu ?: return@post
             val ok = m.setDisplayMode(mode)
             stats.displayMode = m.getDisplayMode() ?: -1
+            stats.note("set " + McuProtocol.modeName(mode) + ": " + (if (ok) "accepted" else "REJECTED or no answer") + "; glasses now report " + McuProtocol.modeName(stats.displayMode))
+            sbsWaitSeconds = 0
             listener.onLog("display mode ${McuProtocol.modeName(mode)}: " + if (ok) "accepted" else "rejected")
         }
     }
@@ -207,13 +231,22 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             if (link.claimed) {
                 mcuLink = link
                 val m = McuClient(link)
+                m.onOther = { cmd, payload -> stats.event(cmd, payload) }
                 mcu = m
                 val mode = m.getDisplayMode()
                 stats.mcuOk = mode != null
+                stats.mcuWritePath = m.lastWritePath
+                stats.displayModeAtConnect = mode ?: -1
+                stats.note("connect: glasses report " + (mode?.let { McuProtocol.modeName(it) } ?: "no answer") + ", wanted " + McuProtocol.modeName(wantedDisplayMode))
                 if (mode != null) {
                     m.command(McuProtocol.CMD_GET_SERIAL)?.let { s -> stats.serial = String(s, Charsets.ISO_8859_1).filter { ch -> ch.code in 0x21..0x7E } }
-                    if (mode != wantedDisplayMode) m.setDisplayMode(wantedDisplayMode)
+                    if (mode != wantedDisplayMode) {
+                        val ok = m.setDisplayMode(wantedDisplayMode)
+                        stats.note("set " + McuProtocol.modeName(wantedDisplayMode) + ": " + if (ok) "accepted" else "REJECTED or no answer")
+                    }
                     stats.displayMode = m.getDisplayMode() ?: mode
+                    stats.note("glasses now report " + McuProtocol.modeName(stats.displayMode))
+                    sbsWaitSeconds = 0
                 } else listener.onLog("display controller did not answer")
             }
         }
@@ -301,6 +334,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
     private val watchdog = object : Runnable {
         override fun run() {
             if (!started) return
+            if (state == State.STREAMING || state == State.CONNECTING) guardDisplayMode()
             if (state == State.STREAMING) {
                 val imuMoved = pipeline.imuSamples != watchImu
                 val camMoved = pipeline.pairs != watchPairs
@@ -335,6 +369,32 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             }
             handler.postDelayed(this, 1000)
         }
+    }
+
+    /**
+     * Polls the glasses' display mode and gives up on 3D when the phone does not follow.
+     * In a 3D mode the glasses expect a 3840x1080 picture. A phone that keeps sending 1920x1080
+     * leaves them black, so after [SBS_GRACE_SECONDS] without a side-by-side display the glasses
+     * are put back in 2D, where an ordinary 1920x1080 picture (and Android mirroring) works.
+     */
+    private fun guardDisplayMode() {
+        val m = mcu ?: return
+        if (++pollTick % 2 == 0) {
+            val now = m.getDisplayMode()
+            if (now != null && now != stats.displayMode) { stats.note("glasses changed mode by themselves: " + McuProtocol.modeName(stats.displayMode) + " -> " + McuProtocol.modeName(now)); stats.displayMode = now }
+        }
+        val mode = stats.displayMode
+        val threeD = mode == McuProtocol.MODE_SBS_60 || mode == McuProtocol.MODE_SBS_90 || mode == McuProtocol.MODE_HALF_SBS
+        val present = try { sideBySideDisplayPresent?.invoke() } catch (_: Throwable) { null } ?: return
+        if (!threeD || present) { sbsWaitSeconds = 0; return }
+        if (++sbsWaitSeconds < SBS_GRACE_SECONDS) return
+        sbsWaitSeconds = 0
+        val ok = m.setDisplayMode(McuProtocol.MODE_2D_60)
+        stats.displayMode = m.getDisplayMode() ?: mode
+        stats.sbsFellBack = true
+        wantedDisplayMode = McuProtocol.MODE_2D_60
+        stats.note("no side-by-side display from the phone after $SBS_GRACE_SECONDS s in 3D mode: back to 2D " + (if (ok) "accepted" else "REJECTED") + "; glasses now report " + McuProtocol.modeName(stats.displayMode))
+        listener.onLog("the phone did not switch to 3840x1080: glasses put back in 2D so they show a picture")
     }
 
     private fun teardown() {
@@ -383,6 +443,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         const val ACTION_PERMISSION = "dev.ultraxr.USB_PERMISSION"
         const val MAX_RETRIES = 4
         const val STALL_SECONDS = 3
+        const val SBS_GRACE_SECONDS = 8
         const val CAPTURE_FRAMES = 8
         const val CAPTURE_REPORTS = 4000
     }

@@ -17,7 +17,11 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import dev.ultraxr.core.Fmt
 import dev.ultraxr.core.HeadTracker
+import dev.ultraxr.core.ReportBuilder
+import dev.ultraxr.core.ReportExport
+import dev.ultraxr.glasses.DisplayDiagnostics
 import dev.ultraxr.glasses.GlassesLink
 import dev.ultraxr.proto.McuProtocol
 import dev.ultraxr.render.CheckScene
@@ -92,6 +96,14 @@ class CheckActivity : Activity() {
         shareRow.add(Ui.button(this, "Share report", primary = true) { share() }, 0, weight = 1f)
         shareRow.add(Ui.button(this, "Save to Downloads") { save() }, 0, weight = 1f, startDp = 10)
         root.add(shareRow, topDp = 18)
+        // Manual display-mode switches: each press is recorded in the report with what the glasses answered.
+        root.add(Ui.text(this, "Glasses black or picture wrong? Try a display mode, wait five seconds, then share the report.", 13f, Ui.MUTED).apply { setLineSpacing(0f, 1.2f) }, topDp = 18)
+        val modes = Ui.row(this)
+        modes.add(Ui.button(this, "2D") { tryMode(McuProtocol.MODE_2D_60) }, 0, weight = 1f)
+        modes.add(Ui.button(this, "3D 60 Hz") { tryMode(McuProtocol.MODE_SBS_60) }, 0, weight = 1f, startDp = 8)
+        modes.add(Ui.button(this, "3D 90 Hz") { tryMode(McuProtocol.MODE_SBS_90) }, 0, weight = 1f, startDp = 8)
+        root.add(modes, topDp = 8)
+        root.add(Ui.button(this, "Share report now") { share() }, topDp = 8)
         val list = Ui.column(this)
         for (it in items) {
             val row = Ui.row(this).apply { background = Ui.rounded(Ui.SURFACE, 18f, this@CheckActivity); val p = Ui.dp(this@CheckActivity, 14); setPadding(p, p, p, p) }
@@ -111,6 +123,14 @@ class CheckActivity : Activity() {
     override fun onResume() { super.onResume(); stage.start() }
     override fun onPause() { stage.stop(); ui.removeCallbacks(tick); if (running) { running = false; startButton.visibility = View.VISIBLE } ; super.onPause() }
     override fun onDestroy() { Tracking.release(); super.onDestroy() }
+
+    private fun tryMode(mode: Int) {
+        val link = Tracking.link
+        if (link == null || link.stats.mcuOk.not()) { instruction.text = "The glasses' display controller is not connected yet."; return }
+        Tracking.settings.use3d = mode != McuProtocol.MODE_2D_60
+        link.applyDisplayMode(mode)
+        instruction.text = "Asked the glasses for ${McuProtocol.modeName(mode)}. Wait five seconds, look in the glasses, then share the report."
+    }
 
     private fun set(k: String, v: V, detail: String = "") {
         val it = item(k)
@@ -190,7 +210,12 @@ class CheckActivity : Activity() {
                     "Seam score left %.2f, right %.2f (1 is ideal). Brightness %.0f / %.0f of 255.".format(pl.seamLeft, pl.seamRight, pl.brightLeft, pl.brightRight))
                 set("sync", if (pl.pairs > 30 && pl.pairsUnsynced < pl.pairs / 10) V.PASS else V.FAIL,
                     "Camera minus sensor clock %.1f ms, drift %.0f ppm, %d of %d pairs could not be timed".format(pl.camMinusImuMs, link.clock.driftPpm, pl.pairsUnsynced, pl.pairs + pl.pairsUnsynced))
-                set("display", if (stage.onGlasses && stage.isSideBySide) V.PASS else V.FAIL, if (stage.onGlasses) "Android drives the glasses at ${stage.displayInfo}" + (if (stage.isSideBySide) "" else ": not the 3840x1080 mode 3D needs") else "Android reports no external display")
+                val offered = DisplayDiagnostics.sideBySideOffered(this)
+                set("display", if (stage.onGlasses && stage.isSideBySide) V.PASS else V.FAIL,
+                    if (!stage.onGlasses) "Android reports no external display"
+                    else "Android drives the glasses at ${stage.displayInfo}; glasses report ${McuProtocol.modeName(st.displayMode)}" +
+                        (if (stage.isSideBySide) "" else if (offered) ". A 3840x1080 mode is offered but Android has not switched to it" else ". Android offers no 3840x1080 mode, so 3D is not possible on this phone as connected") +
+                        (if (st.sbsFellBack) ". The glasses were put back in 2D so they show a picture" else ""))
                 val late = r?.lateFrames ?: 0
                 set("render", if (stage.onGlasses && fps > 0.9e9 / (r?.periodNs ?: 16_666_667L)) V.PASS else V.FAIL, "%.0f frames a second, %d late, %.1f ms per frame on the CPU".format(fps, late, r?.avgCpuMs ?: 0.0))
                 set("openxr", if (XrRuntime.available) V.PASS else V.SKIP, XrRuntime.statusLine(this))
@@ -259,53 +284,109 @@ class CheckActivity : Activity() {
             bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW), (sticky?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0, pm.currentThermalStatus, headroom))
     }
 
+    /** Builds the report. Each section is independent: one that fails is noted and the rest still appear. */
     private fun report(): String {
-        val sb = StringBuilder()
         val st = Tracking.link?.stats
-        sb.append("Ultra XR hardware check\n")
-        sb.append("app ${packageManager.getPackageInfo(packageName, 0).versionName}; phone ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE}), Android ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}, build ${Build.DISPLAY}\n")
-        if (Build.VERSION.SDK_INT >= 31) sb.append("soc ${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}; page size ${android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE)}\n")
-        sb.append("\n== RESULTS ==\n")
-        for (it in items) sb.append("${it.v.name.padEnd(7)} ${it.key}: ${it.title}. ${it.detail}\n")
-        sb.append("\n== DETAILS ==\n")
-        sb.append("all three streams live together for $liveSeconds s\n")
-        sb.append("native: loaded=${Native.loaded} ${Native.loadError}; 6DoF error='${Tracking.vioError}'; hands error='${Tracking.handsError}'\n")
-        sb.append("calibration: ${Tracking.calibrationSource}; display FOV tan %.4f x %.4f (%s)\n".format(Tracking.displayTanH, Tracking.displayTanV, Tracking.displayFovSource))
-        sb.append("6DoF: states=${Tracking.vioStates} frames_in=${Tracking.vioFramesIn} dropped=${Tracking.vioDropped} restarts=${Tracking.supervisor.resets} last='${Tracking.supervisor.lastReason}'\n")
-        sb.append("thermal: status=${Tracking.thermalStatus} throttle=${Tracking.throttle}\n")
-        val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
-        sb.append("battery: $startPct% -> ${bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)}%, charge counter $startUah -> ${bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)} uAh over %.0f s\n".format((System.nanoTime() - t0) / 1e9))
-        if (st != null) {
-            sb.append("camera: ${st.cameraFormat}; ${st.transport}; noMeta=${Tracking.link?.pipeline?.noMeta} reconnects=${st.reconnects} lastError='${st.lastError}'\n")
-            sb.append("\n== DISPLAYS ==\n").append(stage.describeDisplays()).append('\n')
-            sb.append("\n== USB ==\n").append(st.descriptors)
-            sb.append("\n== FACTORY CONFIG (from the glasses) ==\n").append(st.configJson ?: "not read").append('\n')
+        val r = ReportBuilder()
+        r.line("Ultra XR hardware check")
+        r.section("DEVICE") { sb ->
+            sb.append("app ").append(packageManager.getPackageInfo(packageName, 0).versionName).append('\n')
+            sb.append("phone ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE}), Android ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}, build ${Build.DISPLAY}\n")
+            if (Build.VERSION.SDK_INT >= 31) sb.append("soc ${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}; page size ${android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE)}\n")
         }
-        sb.append("\n== OPENXR ==\n").append(XrRuntime.statusLine(this)).append('\n')
-        sb.append("\n== TIME SERIES (1 s) ==\n").append(series)
-        sb.append("\n== LOG ==\n").append(Tracking.logText()).append('\n')
-        return sb.toString()
+        r.section("RESULTS") { sb -> for (it in items) sb.append(it.v.name.padEnd(7)).append(' ').append(it.key).append(": ").append(it.title).append(". ").append(it.detail).append('\n') }
+        r.section("DISPLAY: GLASSES CONTROLLER") { sb ->
+            if (st == null) { sb.append("no USB link\n"); return@section }
+            sb.append("controller answered: ").append(st.mcuOk).append(" (write path ").append(st.mcuWritePath).append(")\n")
+            sb.append("mode when connected: ").append(McuProtocol.modeName(st.displayModeAtConnect)).append(" (raw ").append(st.displayModeAtConnect).append(")\n")
+            sb.append("mode now: ").append(McuProtocol.modeName(st.displayMode)).append(" (raw ").append(st.displayMode).append(")\n")
+            sb.append("mode this app asks for: ").append(McuProtocol.modeName(Tracking.link?.wantedDisplayMode ?: -1)).append("; 3D setting=").append(Tracking.settings.use3d).append(", 90 Hz setting=").append(Tracking.settings.refresh90).append('\n')
+            sb.append("fell back to 2D because the phone offered no side-by-side mode: ").append(st.sbsFellBack).append('\n')
+            sb.append("history:\n").append(st.displayHistory()).append('\n')
+        }
+        r.section("DISPLAY: ANDROID") { sb ->
+            sb.append(DisplayDiagnostics.describeAll(this))
+            sb.append("side-by-side mode current on an external display: ").append(DisplayDiagnostics.sideBySidePresent(this)).append("; offered: ").append(DisplayDiagnostics.sideBySideOffered(this)).append('\n')
+        }
+        r.section("DISPLAY: THIS APP'S OUTPUT") { sb ->
+            val rr = stage.renderer
+            sb.append("output: ").append(if (stage.onGlasses) "window on the glasses' display" else "no window on the glasses").append(", ").append(stage.displayInfo).append(", side-by-side=").append(stage.isSideBySide).append('\n')
+            if (rr != null) {
+                sb.append("renderer: surface ").append(rr.width).append('x').append(rr.height).append(", frames ").append(rr.frames).append(", late ").append(rr.lateFrames)
+                    .append(", last frame ").append(if (rr.lastFrameNs == 0L) "never" else Fmt.f((System.nanoTime() - rr.lastFrameNs) / 1e6, 0) + " ms ago").append('\n')
+                sb.append("GL: ").append(rr.glInfo.ifEmpty { "context not created" }).append("; error: ").append(rr.glError.ifEmpty { "none" }).append('\n')
+            } else sb.append("renderer: none\n")
+            sb.append("graphics log:\n").append(Tracking.graphicsText()).append('\n')
+        }
+        r.section("TRACKING") { sb ->
+            sb.append("all three streams live together for ").append(liveSeconds).append(" s\n")
+            sb.append("native: loaded=").append(Native.loaded).append(' ').append(Native.loadError).append("; 6DoF error='").append(Tracking.vioError).append("'; hands error='").append(Tracking.handsError).append("'\n")
+            sb.append("calibration: ").append(Tracking.calibrationSource).append("; display FOV tan ").append(Fmt.f(Tracking.displayTanH, 4)).append(" x ").append(Fmt.f(Tracking.displayTanV, 4)).append(" (").append(Tracking.displayFovSource).append(")\n")
+            sb.append("6DoF: states=${Tracking.vioStates} frames_in=${Tracking.vioFramesIn} dropped=${Tracking.vioDropped} restarts=${Tracking.supervisor.resets} last='${Tracking.supervisor.lastReason}'\n")
+            sb.append("thermal: status=${Tracking.thermalStatus} throttle=${Tracking.throttle}\n")
+            if (st != null) sb.append("camera: ${st.cameraFormat}; ${st.transport}; noMeta=${Tracking.link?.pipeline?.noMeta} reconnects=${st.reconnects} lastError='${st.lastError}'\n")
+        }
+        r.section("BATTERY") { sb ->
+            val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
+            sb.append("level ").append(startPct).append(" percent -> ").append(bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)).append(" percent; charge counter ")
+                .append(startUah).append(" -> ").append(bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)).append(" uAh over ").append(Fmt.f((System.nanoTime() - t0) / 1e9, 0)).append(" s\n")
+        }
+        r.section("USB") { sb -> sb.append(st?.descriptors ?: "no USB link\n") }
+        r.section("FACTORY CONFIG (from the glasses)") { sb -> sb.append(st?.configJson ?: "not read") }
+        r.section("OPENXR") { sb -> sb.append(XrRuntime.statusLine(this)) }
+        r.section("TIME SERIES (1 s)") { sb -> sb.append(series) }
+        r.section("LOG") { sb -> sb.append(Tracking.logText()) }
+        if (r.failedSections > 0) Tracking.log("hardware report: ${r.failedSections} section(s) failed, see the report")
+        return r.build()
     }
 
-    private fun writeReport() { try { File(runDir ?: return, "report.txt").writeText(report()) } catch (_: Exception) {} }
-
-    private fun share() {
-        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "Ultra XR hardware check").putExtra(Intent.EXTRA_TEXT, report()), "Share report"))
+    /** Report text that can always be shared: on failure, the reason instead. For Share and for tests. */
+    fun reportTextSafely(): String {
+        val (text, ok) = ReportExport.safeText { report() }
+        if (!ok) Tracking.log("hardware report failed: " + text.take(400))
+        return text
     }
 
-    private fun save() {
+    private fun writeReport() {
         val dir = runDir ?: return
-        writeReport()
+        try { File(dir, ReportExport.REPORT_NAME).writeText(reportTextSafely()) } catch (e: Exception) { Tracking.log("could not write the report file: $e") }
+    }
+
+    /** Same code the Share button runs. */
+    fun share() {
+        try {
+            // Intent extras travel through Binder, which fails above roughly 500 KB: keep the tail (the log) short.
+            var text = reportTextSafely()
+            if (text.length > 180_000) text = text.take(180_000) + "\n[truncated for sharing: use Save to Downloads for the full report]\n"
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "Ultra XR hardware check").putExtra(Intent.EXTRA_TEXT, text), "Share report"))
+        } catch (t: Throwable) {
+            Tracking.log("share failed: " + ReportExport.stackTrace(t).take(600))
+            instruction.text = "Could not open the share sheet ($t). Use Save to Downloads instead."
+        }
+    }
+
+    /** Writes the export archive: always holds report.txt, or report_error.txt saying why not. */
+    fun exportZip(out: java.io.OutputStream): List<String> {
+        val extras = runDir?.listFiles()?.toList().orEmpty()
+        return ReportExport.writeZip(out, { report() }, extras)
+    }
+
+    /** Same code the Save button runs; [onDone] gets the message shown to the user. */
+    fun save(onDone: ((String) -> Unit)? = null) {
         thread {
             val msg = try {
-                val name = "ultra-xr-${dir.name}.zip"
+                val stamp = runDir?.name ?: ("check-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()))
+                val name = "ultra-xr-$stamp.zip"
                 val values = ContentValues().apply { put(MediaStore.Downloads.DISPLAY_NAME, name); put(MediaStore.Downloads.MIME_TYPE, "application/zip") }
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("no Downloads access")
-                contentResolver.openOutputStream(uri)!!.use { os -> ZipOutputStream(os).use { zip -> for (f in dir.listFiles().orEmpty()) { zip.putNextEntry(ZipEntry(f.name)); f.inputStream().use { it.copyTo(zip) }; zip.closeEntry() } } }
-                "Saved to Downloads as $name (report plus raw sensor samples)."
-            } catch (e: Exception) { "Could not save: $e" }
-            ui.post { instruction.text = msg }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("no access to Downloads")
+                val names = contentResolver.openOutputStream(uri)!!.use { exportZip(it) }
+                if (ReportExport.REPORT_NAME in names) "Saved to Downloads as $name (${names.joinToString()})."
+                else "Saved to Downloads as $name, but the report itself could not be generated: the zip holds ${ReportExport.ERROR_NAME} with the reason."
+            } catch (t: Throwable) {
+                Tracking.log("save failed: " + ReportExport.stackTrace(t).take(600))
+                "Could not save: $t"
+            }
+            ui.post { instruction.text = msg; onDone?.invoke(msg) }
         }
     }
-
 }

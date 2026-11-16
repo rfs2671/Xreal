@@ -32,7 +32,7 @@ class GlassesStage(private val activity: Activity, private val previewHost: View
     var onOutputChanged: (() -> Unit)? = null
 
     val onGlasses get() = presentation != null
-    val displayInfo: String get() = presentation?.display?.let { d -> d.mode.let { "${it.physicalWidth}x${it.physicalHeight}@%.0f".format(it.refreshRate) } } ?: "phone preview"
+    val displayInfo: String get() = presentation?.display?.let { d -> d.mode.let { "${it.physicalWidth}x${it.physicalHeight}@" + dev.ultraxr.core.Fmt.f(it.refreshRate, 0) } } ?: "phone preview"
     val isSideBySide: Boolean get() = presentation?.display?.mode?.let { it.physicalWidth >= it.physicalHeight * 3 } ?: false
 
     private val listener = object : DisplayManager.DisplayListener {
@@ -61,10 +61,7 @@ class GlassesStage(private val activity: Activity, private val previewHost: View
         removePreview()
     }
 
-    fun describeDisplays(): String = displays.displays.joinToString("\n") { d ->
-        "display ${d.displayId} '${d.name}' flags=0x%x current=%dx%d@%.0f modes=[%s]".format(d.flags, d.mode.physicalWidth, d.mode.physicalHeight, d.mode.refreshRate,
-            d.supportedModes.joinToString { "${it.physicalWidth}x${it.physicalHeight}@%.0f".format(it.refreshRate) })
-    }
+    fun describeDisplays(): String = dev.ultraxr.glasses.DisplayDiagnostics.describeAll(activity)
 
     private fun external(): Display? = displays.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull()
         ?: displays.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY && it.isValid }
@@ -88,9 +85,9 @@ class GlassesStage(private val activity: Activity, private val previewHost: View
             val p = StagePresentation(activity, d, mode?.modeId ?: 0, mode?.refreshRate ?: 0f, r)
             p.show()
             presentation = p; renderer = r
-            Tracking.log("rendering on glasses display ${d.displayId}: $displayInfo" + if (mode == null) " (no 3840x1080 mode offered)" else "")
+            Tracking.noteGraphics("window shown on glasses display ${d.displayId}: $displayInfo, requested mode " + (mode?.let { dev.ultraxr.glasses.DisplayDiagnostics.mode(it) } ?: "none (no 3840x1080 mode offered)") + ", " + (if (wide) "two-eye" else "single-view") + " rendering, display state " + dev.ultraxr.glasses.DisplayDiagnostics.stateName(d.state))
         } catch (e: Exception) {
-            Tracking.log("could not open a window on the glasses: $e")
+            Tracking.noteGraphics("could not open a window on the glasses: $e")
             showPreview()
         }
         onOutputChanged?.invoke()

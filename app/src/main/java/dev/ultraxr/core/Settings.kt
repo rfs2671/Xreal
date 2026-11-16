@@ -7,6 +7,8 @@ import android.content.SharedPreferences
 class Settings(context: Context) {
     private val p: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
+    /** Ask the glasses for their side-by-side 3D mode. Off = leave them in 2D (same picture in both eyes). */
+    var use3d: Boolean get() = p.getBoolean("use3d", true); set(v) = p.edit().putBoolean("use3d", v).apply()
     var refresh90: Boolean get() = p.getBoolean("refresh90", false); set(v) = p.edit().putBoolean("refresh90", v).apply()
     var handTracking: Boolean get() = p.getBoolean("hands", true); set(v) = p.edit().putBoolean("hands", v).apply()
     var showHands: Boolean get() = p.getBoolean("showHands", true); set(v) = p.edit().putBoolean("showHands", v).apply()

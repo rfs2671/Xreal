@@ -5,6 +5,8 @@ import dev.ultraxr.proto.McuProtocol
 /** Request/response exchange with the glasses' MCU (HID interface 0 on the Air 2 Ultra). */
 class McuClient(private val link: HidLink) {
     var lastWritePath = ""; private set
+    /** Called for packets that are not the answer being waited for (button, brightness, wear events...). */
+    var onOther: ((Int, ByteArray) -> Unit)? = null
 
     /** Returns the response payload, or null on timeout / write failure. */
     @Synchronized
@@ -20,6 +22,7 @@ class McuClient(private val link: HidLink) {
             if (r <= 0) continue
             val pkt = McuProtocol.parse(buf, r) ?: continue
             if (pkt.cmdId == cmdId) return pkt.payload
+            onOther?.invoke(pkt.cmdId, pkt.payload)
         }
         return null
     }
