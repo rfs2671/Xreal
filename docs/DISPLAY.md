@@ -35,6 +35,17 @@ successful, EDID read, frames presented, USB working, panels black. Its findings
 - The app's window on the glasses presented over 5,000 frames at 60 per second with no
   graphics error while the panels were black.
 
+**1c. The 0.5.0 report (same phone and glasses).**
+
+- The owner tried every glasses mode offered on the Display test screen: no picture in any.
+- The glasses accepted switches between 2D and side-by-side, yet Android never reported the
+  display being removed and added again, and went on offering only 1920x1080@60, even when
+  the glasses had been left in side-by-side mode before the app connected. On a working host
+  a mode switch re-plugs the link and presents a new EDID. So the missing 3840x1080 mode is
+  not Android hiding it: the bridge never re-presents itself.
+- Android's display flags showed the link as protected (HDCP up) in one run and not in the
+  other. The panels were black in both.
+
 Taken together: the phone sends video, the glasses do not light the panels, and the bridge
 image carries the version for which exactly this behaviour is documented. That is strong
 circumstantial evidence for the same bridge fault. It is not proof: an equal version string
@@ -78,12 +89,22 @@ is that they could help (none has a documented success):
 
 After each, wait five seconds and answer "Yes, I see it" or "Still black".
 
+## Conclusion for this phone and these glasses
+
+With the app's output verified, the phone side verified, every app-reachable control tried,
+and the bridge showing the documented version and the documented behaviour (no panel-on, no
+re-plug on a mode change), this is not something an Android app can fix. It needs a change in
+the glasses' bridge firmware or in the Pixel's DisplayPort start-up.
+
 ## The specific change that would be needed
 
 A bridge image for the Air 2 Ultra with the two documented corrections (clock seeding when the
 measurement is zero; no HDCP advertisement, or a tolerance for HDCP starting early). To know
 whether the published Air 2 Pro patch even applies, the Ultra's official DisplayPort firmware
-file would have to be compared byte for byte with the `1140` image that patch targets. Until
+file would have to be compared byte for byte with the `1140` image that patch targets
+(the patch repository pins it by SHA-256: `350BACE369A83823D8EF867AE04AD07CF64D724C10EC7CEECFB83861AC9672F3`).
+The published patch was hardware-tested only on an Air 2 Pro with a community firmware base,
+is flashed from a computer, and removes HDCP (no protected video on any device afterwards). Until
 someone has done that and tested it on an Ultra, flashing it is a gamble with the glasses'
 only video path, and this project does not do it.
 

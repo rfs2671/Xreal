@@ -58,9 +58,10 @@ OpenXR games would draw on the phone instead of the glasses.
 | Hand tracker (Mercury) through this app's API | **Host-tested**: no false detections on empty images; detects a photographed hand at 16-20 cm | host test |
 | OpenXR runtime driver (head, controllers, hand joints, recentre) | **Host-tested** through Monado's own tracker code | 30 checks |
 | Pixel 10 Pro XL opens the glasses over USB; cameras (bulk UVC) and IMU deliver data; the display controller accepts mode commands | **Hardware-verified** by the owner's 0.3.1 report | Pixel 10 Pro XL |
-| Picture on the glasses from the Pixel | **Fails on hardware**: detected at 1920x1080@60, panels black; 3840x1080 never offered. See docs/DISPLAY.md | Pixel 10 Pro XL |
+| Picture on the glasses from the Pixel | **Fails on hardware in every mode**: detected at 1920x1080@60, frames presented, panels black. Not fixable by an app; see docs/DISPLAY.md | Pixel 10 Pro XL |
 | Stereo pairs reaching the tracker, timed on the shared clock | **Hardware-verified** in 0.4.0: 2,636 pairs at 30 per second, none rejected, no reconnects | Pixel 10 Pro XL |
-| 6DoF estimator on the phone | **Runs on hardware but diverged** in 0.4.0 (16 ms per frame, 108 features, but 43 m of false motion). Cause found: the calibration came from another unit and is 8 to 10 pixels off for these glasses. 0.5.0 uses the glasses' own factory calibration; not yet re-run on hardware | Pixel 10 Pro XL |
+| 6DoF position tracking on the phone | **Hardware-verified to track** with the glasses' own factory calibration (0.5.0: 18 s tracked, 0.15 m of movement measured, 16 ms per frame, 114 features, no divergence). Accuracy and drift not yet measured | Pixel 10 Pro XL |
+| Hand tracking on the phone | **Runs on hardware, detects nothing yet** (18 ms per frame; camera images were dim). 0.5.1 shows and exports what the tracker sees | Pixel 10 Pro XL |
 | 6DoF accuracy, drift, latency on the phone | **Unverified** | needs your hardware |
 | Hand tracking range and accuracy with the real cameras | **Unverified** | needs your hardware |
 | An OpenXR game presenting on the glasses through the runtime | **Unverified** | needs your hardware |

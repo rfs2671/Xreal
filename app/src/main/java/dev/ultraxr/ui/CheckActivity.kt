@@ -64,6 +64,36 @@ class CheckActivity : Activity() {
     private fun item(k: String) = items.first { it.key == k }
 
     private var running = false
+    private lateinit var eyeViews: Array<android.widget.ImageView>
+    private val eyeBytes = arrayOf(ByteArray(480 * 640), ByteArray(480 * 640))
+    private val eyeBitmaps = arrayOfNulls<android.graphics.Bitmap>(2)
+    private val eyePixels = IntArray(480 * 640)
+    private var eyeStamp = 0L
+
+    /** Refreshes the two camera previews; returns false when no image has arrived yet. */
+    private fun updatePreviews(): Boolean {
+        val t = try { Tracking.copyTrackerImages(eyeBytes[0], eyeBytes[1]) } catch (_: Throwable) { 0L }
+        if (t == 0L) return false
+        if (t == eyeStamp) return true
+        eyeStamp = t
+        for (e in 0..1) {
+            val bmp = eyeBitmaps[e] ?: android.graphics.Bitmap.createBitmap(480, 640, android.graphics.Bitmap.Config.ARGB_8888).also { eyeBitmaps[e] = it }
+            val src = eyeBytes[e]
+            for (i in eyePixels.indices) { val v = src[i].toInt() and 0xFF; eyePixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v }
+            bmp.setPixels(eyePixels, 0, 480, 0, 0, 480, 640)
+            eyeViews[e].setImageBitmap(bmp); eyeViews[e].invalidate()
+        }
+        return true
+    }
+
+    private val previewTick = object : Runnable { override fun run() { updatePreviews(); ui.postDelayed(this, 500) } }
+
+    /** Saves the current previews into the run folder so the exported zip shows what the trackers saw. */
+    private fun savePreviews() {
+        val dir = runDir ?: return
+        if (!updatePreviews()) return
+        for (e in 0..1) try { java.io.FileOutputStream(File(dir, if (e == 0) "tracker_left.png" else "tracker_right.png")).use { eyeBitmaps[e]?.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } catch (_: Exception) {}
+    }
     private var t0 = 0L
     private var phaseStart = 0L
     private var phase = 0
@@ -105,6 +135,12 @@ class CheckActivity : Activity() {
         root.add(modes, topDp = 8)
         root.add(Ui.button(this, "Display test (pattern in the glasses)") { startActivity(Intent(this, DisplayTestActivity::class.java)) }, topDp = 8)
         root.add(Ui.button(this, "Share report now") { share() }, topDp = 8)
+        // What the trackers see: the two camera images exactly as they are fed to hand tracking.
+        root.add(Ui.text(this, "Tracking cameras as the trackers see them (left, right). They should be upright, and your hand should be clearly visible when you hold it up.", 13f, Ui.MUTED).apply { setLineSpacing(0f, 1.2f) }, topDp = 18)
+        val eyes = Ui.row(this)
+        eyeViews = arrayOf(android.widget.ImageView(this).apply { adjustViewBounds = true }, android.widget.ImageView(this).apply { adjustViewBounds = true })
+        eyes.add(eyeViews[0], 0, weight = 1f); eyes.add(eyeViews[1], 0, weight = 1f, startDp = 6)
+        root.add(eyes, topDp = 8)
         val list = Ui.column(this)
         for (it in items) {
             val row = Ui.row(this).apply { background = Ui.rounded(Ui.SURFACE, 18f, this@CheckActivity); val p = Ui.dp(this@CheckActivity, 14); setPadding(p, p, p, p) }
@@ -121,8 +157,8 @@ class CheckActivity : Activity() {
         stage = GlassesStage(this, null, scene)
     }
 
-    override fun onResume() { super.onResume(); stage.start() }
-    override fun onPause() { stage.stop(); ui.removeCallbacks(tick); if (running) { running = false; startButton.visibility = View.VISIBLE } ; super.onPause() }
+    override fun onResume() { super.onResume(); stage.start(); ui.post(previewTick) }
+    override fun onPause() { stage.stop(); ui.removeCallbacks(tick); ui.removeCallbacks(previewTick); if (running) { running = false; startButton.visibility = View.VISIBLE } ; super.onPause() }
     override fun onDestroy() { Tracking.release(); super.onDestroy() }
 
     private fun tryMode(mode: Int) {
@@ -243,6 +279,7 @@ class CheckActivity : Activity() {
                 else if (handSeconds >= 3) { set("hands", V.PASS, "Hand seen for $handSeconds s. $detail"); next(3) }
                 else if (inPhase > 20) { set("hands", V.FAIL, "No hand was detected. $detail"); next(3) }
                 if (phase == 3) {
+                    savePreviews()
                     set("stereo", V.RUNNING)
                     say(if (stage.isSideBySide) "Last one. In the glasses: close one eye, then the other. Does one eye see the word LEFT and the other RIGHT, and do the three balls look near, middle and far?" else "Last one. Do you see anything at all in the glasses (a grid, three balls, the words LEFT and RIGHT)? Answer No if they are black.", "")
                     yesNo.visibility = View.VISIBLE
@@ -272,6 +309,7 @@ class CheckActivity : Activity() {
         Tracking.settings.firstRunDone = Tracking.settings.firstRunDone || (complete && item("imu").v == V.PASS && item("camera").v == V.PASS)
         Tracking.settings.lastCheckSummary = items.joinToString("; ") { "${it.key}=${it.v}" }
         startButton.text = "Run again"; startButton.visibility = View.VISIBLE; shareRow.visibility = View.VISIBLE
+        savePreviews()
         writeReport()
     }
 
@@ -323,6 +361,9 @@ class CheckActivity : Activity() {
         }
         r.section("TRACKING") { sb ->
             sb.append("all three streams live together for ").append(liveSeconds).append(" s\n")
+            val (bl, br) = Tracking.link?.pipeline?.let { it.brightLeft to it.brightRight } ?: (Double.NaN to Double.NaN)
+            sb.append("hand tracking: frames ").append(Tracking.handsFrames).append(", ").append(Fmt.f(Tracking.handsProcessMs, 0)).append(" ms per frame, hands visible now ").append(Tracking.snapshot().handsVisible)
+                .append(", image brightness ").append(Fmt.f(bl, 0)).append(" / ").append(Fmt.f(br, 0)).append(" of 255 (below about 50 is dim for hand detection)\n")
             sb.append("native: loaded=").append(Native.loaded).append(' ').append(Native.loadError).append("; 6DoF error='").append(Tracking.vioError).append("'; hands error='").append(Tracking.handsError).append("'\n")
             sb.append("calibration: ").append(Tracking.calibrationSource).append("; display FOV tan ").append(Fmt.f(Tracking.displayTanH, 4)).append(" x ").append(Fmt.f(Tracking.displayTanV, 4)).append(" (").append(Tracking.displayFovSource).append(")\n")
             sb.append("6DoF: states=${Tracking.vioStates} frames_in=${Tracking.vioFramesIn} dropped=${Tracking.vioDropped} restarts=${Tracking.supervisor.resets} last='${Tracking.supervisor.lastReason}'\n")

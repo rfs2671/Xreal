@@ -148,6 +148,11 @@ object Tracking : GlassesLink.Listener {
     fun noteGraphics(msg: String) { synchronized(graphicsNotes) { graphicsNotes.addLast("%tT ".format(System.currentTimeMillis()) + msg); while (graphicsNotes.size > 150) graphicsNotes.removeFirst() }; log(msg) }
     fun graphicsText(): String = synchronized(graphicsNotes) { if (graphicsNotes.isEmpty()) "no renderer has started" else graphicsNotes.joinToString("\n") }
 
+    /** Copies the newest upright 480x640 images handed to the hand tracker. Returns their timestamp, 0 if none yet. */
+    fun copyTrackerImages(left: ByteArray, right: ByteArray): Long = synchronized(handLock) {
+        System.arraycopy(handLeft, 0, left, 0, handLeft.size); System.arraycopy(handRight, 0, right, 0, handRight.size); handT
+    }
+
     fun recenter() { head.recenter(); log("recenter") }
 
     private val trackerLock = Object()
