@@ -171,6 +171,25 @@ class SmokeTest {
         a.finish()
     }
 
+    /** The calibration generated from a real unit's factory data must be accepted by both native trackers. */
+    @Test fun trackersAcceptACalibrationBuiltFromFactoryData() {
+        assertTrue(Native.loaded)
+        val factory = """{"SLAM_camera":{"device_1":{"camera_model":"fisheye624","cc":[232.02590342647227,324.5942928446298],"fc":[240.86077123058172,240.92024063661967],"imu_p_cam":[-0.04967959960321735,0.00433374155753588,0.011311651098580188],"imu_q_cam":[0.06285692797149893,0.04924957365816318,0.001175119260441107,0.9968059516250889],"kc":[0.001347044168864677,0.09292397210330587,-0.12608944688553617,0.0757612423218236,-0.023502690616296274,0.002989744184794442,-0.0019208937268457163,0.0017076183796845344,0.005894207643521132,0.0004602924841651806,-0.003783511580892559,-0.0003513204828333599],"resolution":[480,640],"rolling_shutter_time":0},"device_2":{"camera_model":"fisheye624","cc":[233.92784790800658,316.4366062235467],"fc":[240.28730376723564,240.24853943907846],"imu_p_cam":[0.08760451646709011,0.004303619448099218,0.0118758365375769],"imu_q_cam":[0.06146633533269075,-0.03541011556855502,0.0029204333288411336,0.9974765583237347],"kc":[0.005502320066261727,0.0897843944656842,-0.12937333860709999,0.08215155564733244,-0.027032739862332553,0.00365380668616319,-0.0024892367183085877,-0.0016342062321606054,0.004216314726284504,0.00018120033256338274,0.005170384286702674,0.00011869369843011571],"resolution":[480,640],"rolling_shutter_time":0},"num_of_cameras":2}}"""
+        val reference = ctx.assets.open("calibration/basalt_calib.json").bufferedReader().readText()
+        val built = dev.ultraxr.core.FactoryCalibration.build(factory, reference)
+        assertTrue(built.summary, built.basaltJson != null)
+        val config = ctx.assets.open("calibration/basalt_vio_config.json").bufferedReader().readText()
+        val v = Native.vioCreate(built.basaltJson!!, config)
+        assertTrue("vioCreate with factory calibration: ${Native.lastError()}", v != 0L)
+        Native.vioDestroy(v)
+        val dir = File(ctx.filesDir, "hand-models-factory").apply { mkdirs() }
+        for (name in ctx.assets.list("hand-models").orEmpty()) ctx.assets.open("hand-models/$name").use { i -> File(dir, name).outputStream().use { o -> i.copyTo(o) } }
+        val calib = File(dir, "mercury_calib.json").apply { writeText(built.basaltJson) }
+        val h = Native.handsCreate(calib.absolutePath, dir.absolutePath, 2)
+        assertTrue("handsCreate with factory calibration: ${Native.lastError()}", h != 0L)
+        Native.handsDestroy(h)
+    }
+
     @Test fun gameRendersInPhonePreview() {
         val a = launch(PlayActivity::class.java) as PlayActivity
         Thread.sleep(4000)

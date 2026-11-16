@@ -56,10 +56,10 @@ class CheckActivity : Activity() {
     private lateinit var yesNo: LinearLayout
     private lateinit var shareRow: LinearLayout
     private val items = listOf(
-        Item("usb", "Glasses found over USB"), Item("mcu", "Display switched to 3D mode"), Item("imu", "Motion sensor"),
+        Item("usb", "Glasses found over USB"), Item("mcu", "Glasses display controller"), Item("imu", "Motion sensor"),
         Item("camera", "Tracking cameras"), Item("decode", "Camera images"), Item("sync", "Camera and motion sensor in sync"),
-        Item("display", "Glasses display in side-by-side 3D"), Item("render", "Smooth rendering"), Item("sixdof", "Position tracking (6DoF)"),
-        Item("hands", "Hand tracking"), Item("stereo", "3D seen by you"), Item("openxr", "OpenXR runtime"),
+        Item("display", "Phone drives the glasses' display"), Item("render", "Smooth rendering"), Item("sixdof", "Position tracking (6DoF)"),
+        Item("hands", "Hand tracking"), Item("stereo", "Picture seen by you"), Item("openxr", "OpenXR runtime"),
     )
     private fun item(k: String) = items.first { it.key == k }
 
@@ -202,7 +202,7 @@ class CheckActivity : Activity() {
                 if (link?.state != GlassesLink.State.STREAMING || st == null || pl == null) { if (inPhase > 25) { set("usb", V.FAIL, "Timed out: ${link?.stateDetail} ${st?.lastError}"); finish(false) }; return }
                 say("Reading the sensors. Look around the room.", "Look around the room")
                 if (inPhase < 6) return
-                if (st.mcuOk) set("mcu", if (st.displayMode == McuProtocol.MODE_SBS_60 || st.displayMode == McuProtocol.MODE_SBS_90) V.PASS else V.FAIL, "Glasses report: ${McuProtocol.modeName(st.displayMode)}")
+                if (st.mcuOk) set("mcu", if (st.displayMode == link.wantedDisplayMode) V.PASS else V.FAIL, "Glasses report ${McuProtocol.modeName(st.displayMode)}; asked for ${McuProtocol.modeName(link.wantedDisplayMode)}")
                 else set("mcu", V.FAIL, "The display controller did not answer")
                 set("imu", if (imuHz > 100) V.PASS else V.FAIL, "%.0f samples a second (report size %d, via %s)".format(imuHz, pl.imuReportSize, st.imuWritePath))
                 set("camera", if (pairHz > 10) V.PASS else V.FAIL, "%.1f stereo pairs a second, left %d / right %d frames, %s".format(pairHz, pl.camLeft, pl.camRight, st.transport))
@@ -212,11 +212,11 @@ class CheckActivity : Activity() {
                 set("sync", if (pl.pairs > 30 && pl.pairsOnCameraClock < pl.pairs / 10) V.PASS else V.FAIL,
                     "${pl.pairs} pairs timed, ${pl.pairsOnCameraClock} of them without the shared clock. Camera minus sensor clock " + Fmt.f(link.clock.lastCamMinusImuMs, 1) + " ms, drift " + Fmt.f(link.clock.driftPpm, 0) + " ppm, IMU out of order ${link.clock.imuOutOfOrder}, clock restarts ${link.clock.clockRollbacks}")
                 val offered = DisplayDiagnostics.sideBySideOffered(this)
-                set("display", if (stage.onGlasses && stage.isSideBySide) V.PASS else V.FAIL,
+                set("display", if (stage.onGlasses) V.PASS else V.FAIL,
                     if (!stage.onGlasses) "Android reports no external display"
-                    else "Android drives the glasses at ${stage.displayInfo}; glasses report ${McuProtocol.modeName(st.displayMode)}" +
-                        (if (stage.isSideBySide) "" else if (offered) ". A 3840x1080 mode is offered but Android has not switched to it" else ". Android offers no 3840x1080 mode, so 3D is not possible on this phone as connected") +
-                        (if (st.sbsFellBack) ". The glasses were put back in 2D so they show a picture" else ""))
+                    else "Android drives the glasses at ${stage.displayInfo}; glasses report ${McuProtocol.modeName(st.displayMode)}. " +
+                        (if (stage.isSideBySide) "Side-by-side 3D is active" else if (offered) "A 3840x1080 mode is offered but not active" else "No 3840x1080 mode is offered, so output is 2D") +
+                        ". Whether the panels actually light up is the last question of this check")
                 val late = r?.lateFrames ?: 0
                 set("render", if (stage.onGlasses && fps > 0.9e9 / (r?.periodNs ?: 16_666_667L)) V.PASS else V.FAIL, "%.0f frames a second, %d late, %.1f ms per frame on the CPU".format(fps, late, r?.avgCpuMs ?: 0.0))
                 set("openxr", if (XrRuntime.available) V.PASS else V.SKIP, XrRuntime.statusLine(this))
@@ -244,7 +244,7 @@ class CheckActivity : Activity() {
                 else if (inPhase > 20) { set("hands", V.FAIL, "No hand was detected. $detail"); next(3) }
                 if (phase == 3) {
                     set("stereo", V.RUNNING)
-                    say("Last one. In the glasses: close one eye, then the other. Does one eye see the word LEFT and the other RIGHT, and do the three balls look near, middle and far?", "")
+                    say(if (stage.isSideBySide) "Last one. In the glasses: close one eye, then the other. Does one eye see the word LEFT and the other RIGHT, and do the three balls look near, middle and far?" else "Last one. Do you see anything at all in the glasses (a grid, three balls, the words LEFT and RIGHT)? Answer No if they are black.", "")
                     yesNo.visibility = View.VISIBLE
                 }
             }
@@ -257,7 +257,7 @@ class CheckActivity : Activity() {
     private fun answerStereo(yes: Boolean?) {
         if (!running) return
         yesNo.visibility = View.GONE
-        set("stereo", when (yes) { true -> V.PASS; false -> V.FAIL; null -> V.SKIP }, when (yes) { true -> "Confirmed by you"; false -> "You reported that 3D did not look right"; null -> "Not answered" })
+        set("stereo", when (yes) { true -> V.PASS; false -> V.FAIL; null -> V.SKIP }, when (yes) { true -> "Confirmed by you"; false -> "You reported no correct picture in the glasses"; null -> "Not answered" })
         finish(true)
     }
 

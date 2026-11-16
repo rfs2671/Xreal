@@ -22,6 +22,24 @@ successful, EDID read, frames presented, USB working, panels black. Its findings
   (seed the PLL from the link's own clock values; stop advertising HDCP). The author lists
   no phone-side or app-side workaround, and tested 1080p60 only.
 
+**1b. What the owner's own report adds (Ultra XR 0.4.0, Pixel 10 Pro XL, build CP3A.261005.005).**
+
+- The Ultra's DisplayPort bridge reports firmware **`1140`**: the same bridge image version as
+  the Air 2 Pro in the analysis above. Its controller firmware is different
+  (`12.1.00.502_20250408`), as expected for another model.
+- Android has the external display enabled and mirroring (Settings screenshots), state ON,
+  one mode offered: 1920x1080@60. So the documented phone-side cause, a dismissed
+  "use this display" prompt, does not apply.
+- The glasses' own log shows "Before change display mode,close oled" when the mode was
+  written, and no screen-on or panel-on message was received afterwards.
+- The app's window on the glasses presented over 5,000 frames at 60 per second with no
+  graphics error while the panels were black.
+
+Taken together: the phone sends video, the glasses do not light the panels, and the bridge
+image carries the version for which exactly this behaviour is documented. That is strong
+circumstantial evidence for the same bridge fault. It is not proof: an equal version string
+does not show the Ultra's bridge image is byte-identical to the Air 2 Pro's.
+
 **2. This has not been shown for the Air 2 Ultra.** The Ultra has a different USB layout
 (controller on interface 0, IMU on interface 2), its own firmware set ("SOC" and "DP"
 firmware), and no public analysis of its bridge. The Air 2 Pro patch must not be applied to
@@ -59,6 +77,15 @@ is that they could help (none has a documented success):
 6. **Next Android mode** and **Protected on/off**: phone-side variations.
 
 After each, wait five seconds and answer "Yes, I see it" or "Still black".
+
+## The specific change that would be needed
+
+A bridge image for the Air 2 Ultra with the two documented corrections (clock seeding when the
+measurement is zero; no HDCP advertisement, or a tolerance for HDCP starting early). To know
+whether the published Air 2 Pro patch even applies, the Ultra's official DisplayPort firmware
+file would have to be compared byte for byte with the `1140` image that patch targets. Until
+someone has done that and tested it on an Ultra, flashing it is a gamble with the glasses'
+only video path, and this project does not do it.
 
 ## What would actually fix it, if the Ultra has the Air 2 Pro's fault
 

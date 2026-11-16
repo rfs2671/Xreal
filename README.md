@@ -59,7 +59,8 @@ OpenXR games would draw on the phone instead of the glasses.
 | OpenXR runtime driver (head, controllers, hand joints, recentre) | **Host-tested** through Monado's own tracker code | 30 checks |
 | Pixel 10 Pro XL opens the glasses over USB; cameras (bulk UVC) and IMU deliver data; the display controller accepts mode commands | **Hardware-verified** by the owner's 0.3.1 report | Pixel 10 Pro XL |
 | Picture on the glasses from the Pixel | **Fails on hardware**: detected at 1920x1080@60, panels black; 3840x1080 never offered. See docs/DISPLAY.md | Pixel 10 Pro XL |
-| Stereo pairs reaching the tracker | **Failed on hardware in 0.3.1** (about 520 frames per eye, one pair). Pairing and timing reworked in 0.4.0 and simulation-tested; not yet re-run on hardware | Pixel 10 Pro XL |
+| Stereo pairs reaching the tracker, timed on the shared clock | **Hardware-verified** in 0.4.0: 2,636 pairs at 30 per second, none rejected, no reconnects | Pixel 10 Pro XL |
+| 6DoF estimator on the phone | **Runs on hardware but diverged** in 0.4.0 (16 ms per frame, 108 features, but 43 m of false motion). Cause found: the calibration came from another unit and is 8 to 10 pixels off for these glasses. 0.5.0 uses the glasses' own factory calibration; not yet re-run on hardware | Pixel 10 Pro XL |
 | 6DoF accuracy, drift, latency on the phone | **Unverified** | needs your hardware |
 | Hand tracking range and accuracy with the real cameras | **Unverified** | needs your hardware |
 | An OpenXR game presenting on the glasses through the runtime | **Unverified** | needs your hardware |
@@ -80,12 +81,11 @@ glasses in plain 2D by default and never switches modes on its own.
 
 ## Known limits you should expect
 
-1. **Calibration is from another unit.** Camera and IMU calibration come from XR Gate's
-   measurements of one specific pair of Air 2 Ultra glasses. Lenses vary between units, so
-   position tracking and hand positions may be less accurate on yours until a per-unit
-   calibration exists. The app reads your glasses' factory configuration and includes it in
-   the check report, which is what is needed to add this.
-2. **Field of view is a best estimate** (about 43 x 25 degrees per eye). If virtual objects
+1. **Calibration comes from your glasses' factory data** (from 0.5.0), converted to the camera
+   model the tracker uses with about 0.7 px average error. The camera-to-IMU timing offset
+   still comes from another unit. Until the app has read your glasses once, it uses a
+   reference unit's calibration.
+2. **Field of view comes from the glasses' factory data** when available (about 42 x 25 degrees per eye on the owner's unit). If virtual objects
    swim against the room when you turn your head, adjust **World scale** in Settings.
 3. **The phone screen stays on (dimmed) while an OpenXR game runs.** Android stops the game
    and the glasses' display if the phone locks.

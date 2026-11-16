@@ -74,7 +74,8 @@ object Tracking : GlassesLink.Listener {
     @Volatile var throttle = 0; private set
     @Volatile var thermalStatus = 0; private set
 
-    val calibrationSource = "reference unit (XR Gate ZBBM5DZFMP)"
+    @Volatile var calibrationSource = "not loaded yet"; private set
+    @Volatile var calibrationIsFactory = false; private set
     /** Half-FOV tangents of one eye's display, before the user's scale. */
     @Volatile var displayTanH = 0.3976; private set
     @Volatile var displayTanV = 0.2238; private set
@@ -149,11 +150,36 @@ object Tracking : GlassesLink.Listener {
 
     fun recenter() { head.recenter(); log("recenter") }
 
+    private val trackerLock = Object()
+    private var activeFactoryJson: String? = null
+
     private fun initNative(app: Context) {
         if (!Native.loaded) { vioError = "native library failed to load: ${Native.loadError}"; handsError = vioError; log(vioError); return }
+        // The glasses' factory calibration from an earlier connection, if there was one.
+        val cached = try { File(app.filesDir, "factory_config.json").takeIf { it.isFile }?.readText() } catch (_: Exception) { null }
+        startTrackers(app, cached)
+    }
+
+    /**
+     * Creates (or re-creates) both trackers with the best calibration available: this unit's
+     * factory calibration when [factoryJson] is usable, otherwise the reference unit's.
+     */
+    private fun startTrackers(app: Context, factoryJson: String?) = synchronized(trackerLock) {
+        val oldVio = vio; val oldHands = handsHandle
+        var calib = ""
         try {
-            val calib = app.assets.open("calibration/basalt_calib.json").bufferedReader().readText()
+            val reference = app.assets.open("calibration/basalt_calib.json").bufferedReader().readText()
             val config = app.assets.open("calibration/basalt_vio_config.json").bufferedReader().readText()
+            calib = reference
+            calibrationSource = "reference unit (XR Gate ZBBM5DZFMP): the glasses' own calibration has not been read yet"
+            calibrationIsFactory = false
+            if (factoryJson != null) {
+                val r = dev.ultraxr.core.FactoryCalibration.build(factoryJson, reference)
+                if (r.basaltJson != null) { calib = r.basaltJson; calibrationSource = r.summary; calibrationIsFactory = true }
+                else calibrationSource = "reference unit (XR Gate ZBBM5DZFMP), because: " + r.summary
+            }
+            activeFactoryJson = factoryJson
+            log("calibration: $calibrationSource")
             parseRig(calib)
             val h = Native.vioCreate(calib, config)
             if (h == 0L) { vioError = Native.lastError(); log("6DoF init failed: $vioError") }
@@ -165,7 +191,9 @@ object Tracking : GlassesLink.Listener {
                 // A phone's USB stack can hold IMU reports back for longer than a PC's: do not restart
                 // the estimator for gaps it can integrate across.
                 Native.vioSetOption(h, "max_imu_gap_s", 0.2)
+                vioError = ""
                 vio = h; log("6DoF ready: ${Native.vioVersion()}")
+                if (oldVio != 0L) head.onVioEpochReset()
             }
         } catch (e: Throwable) { vioError = e.toString(); log("6DoF init failed: $e") }
         if (settings.handTracking) try {
@@ -176,14 +204,28 @@ object Tracking : GlassesLink.Listener {
                 val len = try { app.assets.openFd("hand-models/$name").use { it.length } } catch (_: Exception) { -1L }
                 if (!out.exists() || len < 0 || out.length() != len) app.assets.open("hand-models/$name").use { i -> out.outputStream().use { o -> i.copyTo(o) } }
             }
-            // Mercury reads its calibration from a file path, not from text.
+            // Mercury reads its calibration from a file path, not from text; same layout as Basalt's.
             val calibFile = File(dir, "mercury_calib.json")
-            app.assets.open("calibration/mercury_calib.json").use { i -> calibFile.outputStream().use { o -> i.copyTo(o) } }
+            if (calib.isNotEmpty()) calibFile.writeText(calib) else app.assets.open("calibration/mercury_calib.json").use { i -> calibFile.outputStream().use { o -> i.copyTo(o) } }
             val h = Native.handsCreate(calibFile.absolutePath, dir.absolutePath, 2)
             if (h == 0L) { handsError = Native.lastError(); log("hand tracking init failed: $handsError") }
-            else { handsHandle = h; log("hand tracking ready: ${Native.handsVersion()}") }
+            else { handsError = ""; handsHandle = h; log("hand tracking ready: ${Native.handsVersion()}") }
         } catch (e: Throwable) { handsError = e.toString(); log("hand tracking init failed: $e") }
+        // Trackers that were replaced: worker threads may still be inside a call, so free them later.
+        if ((oldVio != 0L && oldVio != vio) || (oldHands != 0L && oldHands != handsHandle)) thread(name = "tracker-retire", isDaemon = true) {
+            try { Thread.sleep(3000) } catch (_: InterruptedException) {}
+            if (oldVio != 0L && oldVio != vio) Native.vioDestroy(oldVio)
+            if (oldHands != 0L && oldHands != handsHandle) Native.handsDestroy(oldHands)
+        }
         notifyObservers()
+    }
+
+    /** The glasses' factory configuration arrived: switch to this unit's calibration if not already on it. */
+    private fun onFactoryConfig(app: Context, json: String) {
+        if (json == activeFactoryJson && calibrationIsFactory) return
+        if (json == activeFactoryJson) return // already tried this exact data and it was not usable
+        try { File(app.filesDir, "factory_config.json").writeText(json) } catch (_: Exception) {}
+        thread(name = "tracking-recalibrate") { startTrackers(app, json) }
     }
 
     /** Camera and head geometry from the Basalt calibration (T_imu_cam). */
@@ -220,7 +262,7 @@ object Tracking : GlassesLink.Listener {
 
     override fun onState(state: GlassesLink.State, detail: String) {
         log("glasses: $state $detail")
-        if (state == GlassesLink.State.STREAMING) link?.stats?.configJson?.let { applyFactoryConfig(it) }
+        if (state == GlassesLink.State.STREAMING) link?.stats?.configJson?.let { json -> applyFactoryConfig(json); appContext?.let { if (Native.loaded) onFactoryConfig(it, json) } }
         notifyObservers()
     }
 
