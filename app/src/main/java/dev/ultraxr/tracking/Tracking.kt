@@ -111,6 +111,15 @@ object Tracking : GlassesLink.Listener {
             settings = Settings(app)
             running = true
             link = GlassesLink(app, this)
+            // Every hot-plug and mode change of an external display, whichever screen is open.
+            try {
+                val dm = app.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+                dm.registerDisplayListener(object : android.hardware.display.DisplayManager.DisplayListener {
+                    override fun onDisplayAdded(id: Int) { dm.getDisplay(id)?.let { noteGraphics("display $id ADDED: " + dev.ultraxr.glasses.DisplayDiagnostics.mode(it.mode) + ", " + it.supportedModes.size + " modes, state " + dev.ultraxr.glasses.DisplayDiagnostics.stateName(it.state)) } }
+                    override fun onDisplayRemoved(id: Int) { noteGraphics("display $id REMOVED") }
+                    override fun onDisplayChanged(id: Int) { if (id != android.view.Display.DEFAULT_DISPLAY) dm.getDisplay(id)?.let { noteGraphics("display $id changed: " + dev.ultraxr.glasses.DisplayDiagnostics.mode(it.mode) + ", state " + dev.ultraxr.glasses.DisplayDiagnostics.stateName(it.state)) } }
+                }, android.os.Handler(android.os.Looper.getMainLooper()))
+            } catch (t: Throwable) { log("display listener: $t") }
             thread(name = "tracking-init") { initNative(app) }
             vioThread = thread(name = "vio-poll", isDaemon = true) { vioLoop() }
             handsThread = thread(name = "hands", isDaemon = true) { handsLoop() }
@@ -135,7 +144,7 @@ object Tracking : GlassesLink.Listener {
 
     /** Graphics facts recorded by the renderers, for the hardware report. */
     private val graphicsNotes = ArrayDeque<String>()
-    fun noteGraphics(msg: String) { synchronized(graphicsNotes) { graphicsNotes.addLast("%tT ".format(System.currentTimeMillis()) + msg); while (graphicsNotes.size > 40) graphicsNotes.removeFirst() }; log(msg) }
+    fun noteGraphics(msg: String) { synchronized(graphicsNotes) { graphicsNotes.addLast("%tT ".format(System.currentTimeMillis()) + msg); while (graphicsNotes.size > 150) graphicsNotes.removeFirst() }; log(msg) }
     fun graphicsText(): String = synchronized(graphicsNotes) { if (graphicsNotes.isEmpty()) "no renderer has started" else graphicsNotes.joinToString("\n") }
 
     fun recenter() { head.recenter(); log("recenter") }

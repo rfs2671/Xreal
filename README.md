@@ -57,8 +57,9 @@ OpenXR games would draw on the phone instead of the glasses.
 | 6DoF estimator (Basalt) through this app's API | **Simulation-tested** on a rendered 31 s stereo + IMU sequence: 1.9 mm position error and 0.12 degrees over a 10.4 m path; recovers from image gaps and a clock jump. Starting while the head moves diverged in simulation, so the app waits for a still moment. See `native/vio/NOTES.md` | host test, 57 checks |
 | Hand tracker (Mercury) through this app's API | **Host-tested**: no false detections on empty images; detects a photographed hand at 16-20 cm | host test |
 | OpenXR runtime driver (head, controllers, hand joints, recentre) | **Host-tested** through Monado's own tracker code | 30 checks |
-| Pixel 10 Pro XL opens the glasses over USB; tracking cameras and IMU deliver data | **Reported working by the owner** on a Pixel 10 Pro XL (no saved report yet: export was broken before 0.3.1) | first hardware run |
-| Pixel outputs 3840x1080 to the glasses | **Not working on first hardware run**: Android reported the glasses at 1920x1080 and they stayed black. Under investigation; 0.3.1 falls back to 2D and records the display state | first hardware run |
+| Pixel 10 Pro XL opens the glasses over USB; cameras (bulk UVC) and IMU deliver data; the display controller accepts mode commands | **Hardware-verified** by the owner's 0.3.1 report | Pixel 10 Pro XL |
+| Picture on the glasses from the Pixel | **Fails on hardware**: detected at 1920x1080@60, panels black; 3840x1080 never offered. See docs/DISPLAY.md | Pixel 10 Pro XL |
+| Stereo pairs reaching the tracker | **Failed on hardware in 0.3.1** (about 520 frames per eye, one pair). Pairing and timing reworked in 0.4.0 and simulation-tested; not yet re-run on hardware | Pixel 10 Pro XL |
 | 6DoF accuracy, drift, latency on the phone | **Unverified** | needs your hardware |
 | Hand tracking range and accuracy with the real cameras | **Unverified** | needs your hardware |
 | An OpenXR game presenting on the glasses through the runtime | **Unverified** | needs your hardware |
@@ -70,14 +71,12 @@ device or is reported as failing by the hardware check.
 
 ## If the glasses stay black
 
-In their 3D mode the glasses expect a 3840x1080 picture. If the phone keeps sending 1920x1080
-they can stay black, including for ordinary Android mirroring, until they are back in 2D.
-From 0.3.1 the app switches them back to 2D by itself after eight seconds without a
-side-by-side display, and turns the **3D display mode** setting off so it does not repeat.
-You can also do it by hand: **Check**, then **2D**. Unplugging the glasses resets them too.
-Whether this is the whole cause on the Pixel 10 Pro XL is not yet known: please share the
-check report, which now records the glasses' mode history, every Android display mode, and
-the graphics start-up log.
+On the owner's Pixel 10 Pro XL the glasses are detected and driven at 1920x1080@60 but stay
+black, including for Android mirroring. The closest documented cause is a fault in the
+glasses' DisplayPort bridge firmware, shown for the Air 2 Pro only; an app cannot fix that.
+[docs/DISPLAY.md](docs/DISPLAY.md) has the evidence, what would fix it, and the safe
+experiments the app offers under **Check, Display test**. From 0.4.0 the app leaves the
+glasses in plain 2D by default and never switches modes on its own.
 
 ## Known limits you should expect
 

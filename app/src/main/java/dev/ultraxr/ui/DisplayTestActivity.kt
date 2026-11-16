@@ -64,6 +64,7 @@ class DisplayTestActivity : Activity() {
         root.add(Ui.text(this, "Glasses mode (one command each)", 15f, bold = true), topDp = 22)
         val g1 = Ui.row(this)
         g1.add(Ui.button(this, "2D 60 Hz") { glasses(McuProtocol.MODE_2D_60) }, 0, weight = 1f)
+        g1.add(Ui.button(this, "2D 72 Hz") { glasses(McuProtocol.MODE_2D_72) }, 0, weight = 1f, startDp = 8)
         g1.add(Ui.button(this, "2D 90 Hz") { glasses(McuProtocol.MODE_2D_90) }, 0, weight = 1f, startDp = 8)
         g1.add(Ui.button(this, "2D 120 Hz") { glasses(McuProtocol.MODE_2D_120) }, 0, weight = 1f, startDp = 8)
         root.add(g1, topDp = 8)
@@ -72,6 +73,10 @@ class DisplayTestActivity : Activity() {
         g2.add(Ui.button(this, "Brightness max") { brightness() }, 0, weight = 1f, startDp = 8)
         g2.add(Ui.button(this, "Read status") { readStatus() }, 0, weight = 1f, startDp = 8)
         root.add(g2, topDp = 8)
+        val g3 = Ui.row(this)
+        g3.add(Ui.button(this, "Half-SBS 60 Hz") { glasses(McuProtocol.MODE_HALF_SBS) }, 0, weight = 1f)
+        g3.add(Ui.button(this, "Restart video link") { val l = Tracking.link; if (l != null) { note("asking the glasses to restart the video link (same mode written again)"); l.rewriteCurrentMode() } }, 0, weight = 1f, startDp = 8)
+        root.add(g3, topDp = 8)
 
         root.add(Ui.text(this, "Phone output (one change each)", 15f, bold = true), topDp = 22)
         val p1 = Ui.row(this)

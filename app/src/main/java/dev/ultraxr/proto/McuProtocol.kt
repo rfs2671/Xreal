@@ -16,15 +16,38 @@ object McuProtocol {
     const val CMD_GET_DISPLAY_MODE = 0x07
     const val CMD_SET_DISPLAY_MODE = 0x08
     const val CMD_GET_SERIAL = 0x15
-    /** Brightness commands; negative until confirmed for the Air 2 Ultra, in which case nothing is sent. */
-    const val CMD_GET_BRIGHTNESS = -1
-    const val CMD_SET_BRIGHTNESS = -1
+    // Message ids from nrealAirLinuxDriver's device_mcu.h (MIT). They are documented for the Air
+    // family; open drivers treat the Air 2 Ultra as using the same protocol, which is unverified.
+    const val CMD_GET_BRIGHTNESS = 0x03
+    const val CMD_SET_BRIGHTNESS = 0x04
     const val BRIGHTNESS_MAX = 7
-    /** Read-only queries used for the diagnostic status dump. */
-    val STATUS_QUERIES: List<Pair<String, Int>> = listOf("display mode" to CMD_GET_DISPLAY_MODE, "serial" to CMD_GET_SERIAL)
+    const val EVT_DISPLAY_TOGGLED = 0x6C04
+    const val EVT_BUTTON = 0x6C05
+    const val EVT_TEXT_LOG = 0x6C09
+    const val EVT_PANEL_POWER = 0x6C18
+
+    /**
+     * Read-only queries for the diagnostic fingerprint. Deliberately excludes every write and
+     * every firmware-update, bootloader, activation and sleep command.
+     */
+    val STATUS_QUERIES: List<Pair<String, Int>> = listOf(
+        "display mode" to CMD_GET_DISPLAY_MODE, "brightness" to CMD_GET_BRIGHTNESS, "glasses id" to CMD_GET_SERIAL,
+        "DisplayPort bridge firmware" to 0x16, "DSP version" to 0x18, "DSP app firmware" to 0x21, "MCU app firmware" to 0x26, "activation time" to 0x29,
+    )
+
+    fun eventName(cmd: Int): String = when (cmd) {
+        EVT_DISPLAY_TOGGLED -> "display toggled (first byte 0 = screen off, 1 = on)"
+        EVT_BUTTON -> "button pressed"
+        EVT_TEXT_LOG -> "firmware text log"
+        EVT_PANEL_POWER -> "panel power (0 = off, 1 = on)"
+        0x6C02 -> "heartbeat start"; 0x6C12 -> "heartbeat end"; 0x1A -> "heartbeat"
+        else -> "unnamed"
+    }
 
     const val MODE_2D_60 = 1
     const val MODE_SBS_60 = 3
+    const val MODE_SBS_72 = 4
+    const val MODE_2D_72 = 5
     const val MODE_HALF_SBS = 8
     const val MODE_SBS_90 = 9
     const val MODE_2D_90 = 10
@@ -35,10 +58,12 @@ object McuProtocol {
     fun modeName(mode: Int): String = when (mode) {
         MODE_2D_60 -> "2D 1920x1080@60"
         MODE_SBS_60 -> "SBS 3840x1080@60"
-        MODE_HALF_SBS -> "half-SBS"
+        MODE_SBS_72 -> "SBS 3840x1080@72"
+        MODE_2D_72 -> "2D 1920x1080@72"
+        MODE_HALF_SBS -> "half-SBS 1920x1080@60"
         MODE_SBS_90 -> "SBS 3840x1080@90"
-        MODE_2D_90 -> "2D@90"
-        MODE_2D_120 -> "2D@120"
+        MODE_2D_90 -> "2D 1920x1080@90"
+        MODE_2D_120 -> "2D 1920x1080@120"
         else -> "unknown($mode)"
     }
 

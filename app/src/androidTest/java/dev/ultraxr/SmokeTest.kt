@@ -115,7 +115,7 @@ class SmokeTest {
         Thread.sleep(800)
         val text = a.reportTextSafely()
         assertTrue("report was generated, not an error text: ${text.take(300)}", text.startsWith("Ultra XR hardware check"))
-        for (section in listOf("== RESULTS ==", "== DISPLAY: GLASSES CONTROLLER ==", "== DISPLAY: ANDROID ==", "== DISPLAY: THIS APP'S OUTPUT ==", "== BATTERY ==", "== LOG ==")) assertTrue("has $section", text.contains(section))
+        for (section in listOf("== RESULTS ==", "== DISPLAY: GLASSES CONTROLLER ==", "== DISPLAY: ANDROID ==", "== DISPLAY: THIS APP'S OUTPUT ==", "== CAMERA AND IMU STREAM ==", "== BATTERY ==", "== LOG ==")) assertTrue("has $section", text.contains(section))
         assertTrue("no section failed:\n" + text.lines().filter { it.startsWith("!!") }.joinToString("\n"), !text.contains("!! this section failed"))
         assertTrue("battery line present", Regex("level \\d+ percent -> \\d+ percent").containsMatchIn(text))
         assertTrue("phone display described", text.contains("display 0 '"))
@@ -159,6 +159,15 @@ class SmokeTest {
             }
         }
         assertTrue("the saved zip in Downloads holds report.txt", found)
+        a.finish()
+    }
+
+    @Test fun displayTestScreenOpensWithoutGlasses() {
+        val a = launch(dev.ultraxr.ui.DisplayTestActivity::class.java)
+        Thread.sleep(1500)
+        shot("display_test")
+        assertTrue(!a.isFinishing && !a.isDestroyed)
+        assertTrue("its start is recorded for the report", Tracking.graphicsText().contains("display test: opened"))
         a.finish()
     }
 

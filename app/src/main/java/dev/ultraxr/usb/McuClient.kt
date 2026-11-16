@@ -27,6 +27,18 @@ class McuClient(private val link: HidLink) {
         return null
     }
 
+    /** Listens for unsolicited messages for up to [timeoutMs] without sending anything. */
+    @Synchronized
+    fun drain(timeoutMs: Int) {
+        val buf = ByteArray(1024)
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            val r = link.read(buf, 40)
+            if (r <= 0) continue
+            McuProtocol.parse(buf, r)?.let { onOther?.invoke(it.cmdId, it.payload) }
+        }
+    }
+
     fun getDisplayMode(): Int? = command(McuProtocol.CMD_GET_DISPLAY_MODE)?.takeIf { it.size >= 2 }?.get(1)?.toInt()?.and(0xFF)
 
     fun setDisplayMode(mode: Int): Boolean {

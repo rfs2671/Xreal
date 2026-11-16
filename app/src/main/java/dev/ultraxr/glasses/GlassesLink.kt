@@ -60,7 +60,15 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         fun note(msg: String) = synchronized(history) { history.addLast("t+" + dev.ultraxr.core.Fmt.f((System.nanoTime() - t0) / 1e9, 1) + "s " + msg); while (history.size > 60) history.removeFirst() }
         fun event(cmd: Int, payload: ByteArray) = synchronized(history) {
             val n = (events[cmd]?.substringBefore(' ')?.toIntOrNull() ?: 0) + 1
-            events[cmd] = "$n times, last payload " + payload.take(12).joinToString("") { dev.ultraxr.core.Fmt.hex(it.toInt() and 0xFF) }
+            events[cmd] = "$n times (" + McuProtocol.eventName(cmd) + "), last payload " + payload.take(12).joinToString("") { dev.ultraxr.core.Fmt.hex(it.toInt() and 0xFF) }
+            // Screen/panel power changes and the firmware's own log lines are kept in order of arrival.
+            if (cmd == McuProtocol.EVT_DISPLAY_TOGGLED || cmd == McuProtocol.EVT_PANEL_POWER)
+                history.addLast("t+" + dev.ultraxr.core.Fmt.f((System.nanoTime() - t0) / 1e9, 1) + "s glasses say: " + McuProtocol.eventName(cmd) + " = " + (payload.firstOrNull()?.toInt() ?: -1))
+            if (cmd == McuProtocol.EVT_TEXT_LOG) {
+                val text = String(payload, Charsets.ISO_8859_1).filter { it.code in 0x20..0x7E }
+                if (text.isNotBlank()) history.addLast("t+" + dev.ultraxr.core.Fmt.f((System.nanoTime() - t0) / 1e9, 1) + "s glasses log: " + text)
+            }
+            while (history.size > 120) history.removeFirst()
             while (events.size > 24) events.remove(events.keys.first())
         }
         private val reconnectReasons = ArrayDeque<String>()
@@ -180,11 +188,12 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
     fun readControllerStatus() {
         handler.post {
             val m = mcu ?: return@post
+            var unanswered = 0
             val sb = StringBuilder()
             for ((name, cmd) in McuProtocol.STATUS_QUERIES) {
                 val r = m.command(cmd)
                 sb.append(name).append(" (0x").append(dev.ultraxr.core.Fmt.hex(cmd)).append("): ")
-                if (r == null) sb.append("no answer") else {
+                if (r == null) { sb.append("no answer"); if (++unanswered >= 3) { sb.append("\n(stopped: the controller is not answering)\n"); break } } else {
                     sb.append(r.joinToString("") { dev.ultraxr.core.Fmt.hex(it.toInt() and 0xFF) })
                     val text = String(r, Charsets.ISO_8859_1).filter { it.code in 0x20..0x7E }
                     if (text.length >= 3) sb.append(" \"").append(text).append('"')
@@ -193,6 +202,19 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             }
             stats.controllerStatus = sb.toString()
             stats.note("controller status read")
+        }
+    }
+
+    /**
+     * Writes the display mode the glasses already report once more. On the Air family a mode
+     * write makes the glasses drop and re-raise hot-plug, so the phone restarts the video link.
+     */
+    fun rewriteCurrentMode() {
+        handler.post {
+            val m = mcu ?: return@post
+            val cur = m.getDisplayMode() ?: run { stats.note("re-run link start: the controller did not answer"); return@post }
+            val ok = m.setDisplayMode(cur)
+            stats.note("re-run link start: wrote " + McuProtocol.modeName(cur) + " again: " + if (ok) "accepted" else "REJECTED")
         }
     }
 
@@ -286,6 +308,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
                     stats.displayMode = m.getDisplayMode() ?: mode
                     stats.note("glasses now report " + McuProtocol.modeName(stats.displayMode))
                     sbsWaitSeconds = 0
+                    readControllerStatus() // read-only fingerprint for the report, after the connection is up
                 } else listener.onLog("display controller did not answer")
             }
         }
@@ -433,6 +456,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
      */
     private fun guardDisplayMode() {
         val m = mcu ?: return
+        m.drain(120) // unsolicited messages: screen on/off, panel power, firmware log lines
         if (++pollTick % 2 == 0) {
             val now = m.getDisplayMode()
             if (now != null && now != stats.displayMode) { stats.note("glasses changed mode by themselves: " + McuProtocol.modeName(stats.displayMode) + " -> " + McuProtocol.modeName(now)); stats.displayMode = now }
