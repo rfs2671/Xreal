@@ -104,3 +104,122 @@ This evidence (identical bridge code, identical defect, identical fix logic) is 
 material to give XREAL in a request for an official Ultra DP firmware that tolerates a zero
 pixel‑clock measurement and an early HDCP start, and to give Google about the Pixel 10
 DisplayPort stream start. That route changes nothing on the glasses and carries no risk.
+
+---
+
+# Flashing and recovery protocol for the Air 2 Ultra (read-only investigation)
+
+Done at the owner's request, strictly read-only: no write command was sent, nothing was
+flashed, and the glasses' MCU firmware is untouched. Sources: XREAL's own web updater
+(`ota.xreal.com` bundles) and the nyan-real-firmware-kit (`8796n/nyan-real-firmware-kit`,
+the flasher the public patch wraps). Both were read, not run against hardware.
+
+## 1. The DP update protocol, and where the Ultra differs
+
+- The glasses' control interface uses one 64-byte HID report format (report 0, `0xFD`,
+  CRC-32, length, msgid, payload). The DP firmware write is four message ids:
+  **PREPARE=110, START=111, TRANSMIT=112, FINISH=113**, ported from XREAL's own WebHID
+  updater (`xreal-protocol.js` / `dp_tool.html`). The MCU verifies the container CRC at
+  FINISH and returns 5 on a mismatch.
+- The nyan kit opens the **Air 2 control interface MI_04 (interface 4)**. The **Air 2 Ultra's
+  control interface is 0** (its USB layout differs: controller on interface 0, IMU on 2). The
+  kit has no Ultra entry and its `PID_TO_PROJECT` explicitly marks Ultra PID `0x0426` → project
+  `0x1200` as **"unsupported project 0x1200"**. This matches the container header exactly: the
+  Ultra's project code at offset 0x08 is `0x1200` (Air 2 is `0x0900`).
+- **The Ultra uses a different update SDK.** XREAL's Air 2 web page drives `air2SDK.upgradeInDp`
+  + `air2SDK.upgradeInMcu`; the Ultra page drives `ultraSDK.upgradeInDp` + `ultraSDK.upgradeInSOC`
+  (the Ultra reports itself as "Flora" and carries a 29 MB **SOC** image, not a small MCU image).
+  So the Ultra has an official DP-firmware update path, but it is a **distinct code path** from
+  the one proven on the Air/Air 2, and whether `ultraSDK.upgradeInDp` uses the same 110–113
+  frames on interface 0, or routes the DP update through the Ultra's SOC, was **not** determined
+  (it would require reverse-engineering the minified Ultra SDK or capturing the Ultra's own
+  update traffic — neither is read-only-on-the-phone, and neither was done).
+- **What is confirmed compatible:** the app already reads the DP bridge version with msgid
+  `22` (`0x16`) on interface 0, and the glasses answer in exactly this frame format (the Check
+  report shows `DisplayPort bridge firmware (0x16): … "1140"`). So the Ultra's MCU speaks the
+  same control framing; only the write path (110–113) is unverified for it.
+
+## 2. Packaging a patched image with the Ultra's header
+
+The container machinery is model-generic: the header carries the project code (0x08) and a
+length, the 4-byte CRC-32 (poly `0xF4ACFB13`) covers `d[8 : 8+length]`, and byte 0x38 is a
+bank0 CRC-8 commit tag. Building a correct Ultra image is therefore mechanical — start from the
+Ultra's official `1140`, apply the three verified payload edits, recompute the CRC and bank0
+tag, keep project `0x1200`. The published builder will not do it (it hard-rejects any input
+whose SHA-256 is not the Air 2 file, and pins the Air 2 output SHA), but the adaptation is
+small and the guard bytes already match. This step is feasible; it is not the risk.
+
+## 3. A Pixel-only updater
+
+- XREAL's web updater needs **WebHID**, which **Android Chrome does not support** (it is
+  desktop-only). So the vendor's own tool cannot run on the Pixel.
+- A **native Android USB-host app** could in principle drive interface 0 with these HID frames
+  without root (the app already does read-only control I/O on interface 0). So a Pixel-only DP
+  updater is architecturally possible — **but it would be a write-capable firmware flasher**,
+  which is exactly what is gated behind the owner's explicit approval and this assessment, and
+  it would be writing against the **unverified** Ultra DP-update path (section 1). Building it
+  now would mean flashing firmware over a protocol not confirmed for this model.
+
+## 4. Recovery if a write fails (the decisive question)
+
+What the kit documents, **for the Air/Air 2 bridge only**:
+
+- **Corrupt or wrong-tag image:** the DP7911 bridge boot checks the bank0 commit tag; if it is
+  wrong it **rejects bank0 and boots an internal fallback image** (version reads `1109`, name
+  "nreal air", stuck at 60 Hz, no mode switching). **Recoverable** by writing a good image again.
+- **The MCU also verifies the container CRC at FINISH** and refuses a mismatched image, so a
+  bad image is caught before it is committed.
+- **Interrupted transfer** (timeout, non-ack FINISH, cable pulled mid-write): PREPARE does not
+  reset the header count / SPI offset, so retrying in the same power session is unsafe — the
+  fix is **unplug and replug to reset the MCU, then re-flash**. That part is Pixel-only doable.
+
+Why this is **not** a green light for the Ultra:
+
+- All of the above is **verified on Air/Air 2 hardware, never on an Ultra.** The bank0 fallback
+  lives in the DP7911 boot ROM (same bridge silicon, so likely the same), but "likely" is not
+  "verified", and XREAL's `dp_tool.html` for the Ultra drives a **different SDK** that may not
+  take the same path.
+- The Ultra's DP update may pass through its **SOC** (`upgradeInSOC` exists; the DP and SOC are
+  updated by the same `ultraSDK`). A failure that leaves the SOC side inconsistent is a
+  different, unquantified recovery problem — not the simple bridge-ROM fallback. There is no
+  public evidence either way.
+- An MCU bootloader exists (Ultra BOOT PID `0x0425` alongside APP `0x0426`), but DP recovery
+  does not use it, and nothing here tested it.
+
+## 5. Read-only confirmation of the defect on *these* glasses
+
+**Not possible without modifying the MCU.** Stock firmware exposes no message id to read an
+arbitrary bridge register; the register-peek tool (`dpreg.py`) works only against a **custom
+MCU build** that adds a generic peek on msgid `0x29`. Against stock firmware the reads time
+out. So the bridge's link state, the video-OK flag and the pixel-clock measurement cannot be
+read on the owner's glasses while preserving the stock MCU (which the owner requires). The
+failure on these specific glasses is established by matching symptoms + byte-identical bridge
+firmware, **not** by a direct register read.
+
+## GO / NO-GO: Pixel-only permanent repair
+
+**NO-GO at this time.** Not because the fix is wrong — the defect is confirmed and the patched
+image is feasible — but because the two things that make flashing *safe* are unverified for the
+Air 2 Ultra, and cannot be verified read-only or Pixel-only:
+
+| Factor | Status |
+|---|---|
+| Defect present in the Ultra's bridge firmware | **GREEN** — byte-identical to the Air 2 Pro |
+| Patched Ultra image can be built (header/CRC/project) | **GREEN** — mechanical, guards match |
+| Ultra DP-update transport = the proven 110–113 path | **RED** — Ultra uses a separate `ultraSDK`; unconfirmed |
+| Pixel-only write path exists today | **RED** — no WebHID on Android; needs a native write-capable updater, not built |
+| Recovery from a failed write, verified on Ultra | **RED** — fallback documented for Air/Air 2 only; Ultra DP may involve the SOC |
+| Confirm the defect on these glasses, read-only | **RED** — needs a modified MCU; excluded by "preserve MCU" |
+
+**What a GO would require, and why none is Pixel-only or risk-free:** confirm the Ultra's own
+`upgradeInDp` transport and its recovery behaviour (by capturing XREAL's official updater
+talking to an Ultra, which needs a desktop with WebHID — not the phone), or obtain an
+Ultra-tested recovery result from someone who has one. Until a failed Ultra DP write is shown
+to recover, flashing risks a bridge state with no demonstrated way back.
+
+**Zero-risk path, recommended:** the evidence here (identical bridge code, identical defect,
+identical fix logic, the Ultra's own official DP-update capability) is a strong, specific
+request to XREAL for an official Ultra DP firmware that tolerates a zero pixel-clock
+measurement and an early HDCP start — the same two fixes, which XREAL can build, sign, ship and
+flash through its own updater with a verified recovery path. That changes nothing on the
+glasses and carries no risk. `DISPLAY.md` and this file are written to attach to that report.

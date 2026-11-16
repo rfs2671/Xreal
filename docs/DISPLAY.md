@@ -106,7 +106,9 @@ analysis, hashes and feasibility are in [FIRMWARE.md](FIRMWARE.md). Summary: an 
 patched image is technically feasible, but the flashing protocol and recovery path for the
 Ultra are unverified, flashing needs a computer, and the fix removes HDCP on all hosts. This
 project will not build or flash it without verifying the protocol and getting separate
-explicit approval.
+explicit approval. The read-only flashing-protocol investigation is in FIRMWARE.md; its
+conclusion is **NO-GO for a Pixel-only repair at this time** (the Ultra's own DP-update
+transport and its recovery path are unverified and cannot be verified read-only or Pixel-only).
 
 ## The specific change that would be needed
 
