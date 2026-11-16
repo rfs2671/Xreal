@@ -220,3 +220,59 @@ Optional but the only thing that removes risk 5a/5b: XREAL's answer to `docs/XRE
 ## Current verdict
 **NO-GO for flashing today; conditional GO to *build and offline-test* the staged writer if you
 approve that step.** Flashing itself needs a second, separate approval after items 1–4.
+
+## Staged writer: built and offline-tested (NOT run on hardware, writes disabled)
+`tools/ultra-dp/ultra_dp_writer.py` and `tools/ultra-dp/test_writer_sim.py`. Built with the
+owner's approval for offline work only. **`HARDWARE_WRITES_ENABLED = False`**: in this build
+Stage 1, Stage 2 and restore refuse to send anything to real glasses; only Stage 0 (read-only)
+works on hardware. Enabling writes is a separate release after a separate approval.
+
+### What it enforces
+- Opens only PID 0x0426 interface 0, exactly one device; refuses bootloader PID 0x0425 and any other XREAL model.
+- Can build only version reads (0x15, 0x16, 0x26) and DP messages 110–113. SOC/MCU/DSP update ids, boot jumps and mode writes raise an error; there is one hardware write call site.
+- Images: exact SHA-256 allowlist (official `E88B8E64…`, corrected `644CD71F…`), size, project 0x1200, type, name, container CRC-32, bank-0 tag, **and** the generated packet stream must hash to XREAL's reference stream.
+- Before writing: glasses id, DP and SOC versions are each read twice and must agree; SOC must be a `12.` version; DP must read `1140` (restore also accepts `1109`).
+- After writing: waits for the glasses, then requires the same glasses id, **identical SOC version**, DP `1140`; otherwise it reports an aborted write.
+- Stage 1 and Stage 2 are separate commands, each with its own typed confirmation containing the glasses' id. Stage 1 ends by stating Stage 2 was not started. Stage 2 additionally needs the official file present, a Stage 1 receipt for the same glasses and SOC version less than 24 h old (single use), and a typed YES that the laptop picture works after Stage 1.
+- No retries. Any error stops immediately, writes a lock file and prints the recovery steps; while locked, only restore is accepted. A restore invalidates the Stage 1 receipt.
+
+### Offline test results (20 tests, all pass)
+| Area | Result |
+|---|---|
+| Packets vs XREAL's updater | Byte-identical, both images: 107 frames of 512 bytes (PREPARE, START with 64 bytes, 104 TRANSMIT of 490/98 bytes, FINISH), compared directly against streams captured from XREAL's own SDK in simulation and pinned by hash |
+| Wrong firmware | Refused, nothing sent: flipped bit, Air 2 project code, truncated, empty, files swapped between stages, unknown hash |
+| Successful Stage 1, Stage 2, rollback | Correct image arrives in the simulated glasses; Stage 1 never continues into Stage 2 |
+| Stage 2 gating | Refused without receipt, with wrong/missing confirmations, for other glasses, other SOC version, old receipt, or reused receipt |
+| Invalid acknowledgement at PREPARE, START, first/middle/last TRANSMIT, FINISH; status 250; corrupt reply | Stops at that packet, zero packets afterwards, lock set |
+| Timeout mid-transfer; USB disconnect mid-transfer | Same |
+| After FINISH: glasses gone, SOC version changed, DP `1109`, different glasses | Reported as aborted, lock set, no receipt |
+| After an abort | Stage 1/2 refused; no automatic retry; restore without replug is rejected by the simulated glasses and the tool stops again; restore after a replug succeeds *on the simulated glasses* |
+| Glasses never return | Tool reports it cannot reach them; sends nothing |
+| This build on "real hardware" path | Stage 1 and restore refused, zero bytes sent; Stage 0 sends only reads |
+
+**Limit of these tests:** the simulated glasses follow behaviour documented for the Air family.
+The tests prove what the *writer* does. They prove nothing about what a real Ultra does after an
+interrupted write. **A successful Stage 1 would show a complete write works; it would not show
+that an interrupted write is recoverable.**
+
+### Remaining risks (unchanged by this work)
+1. Interrupted write on an Ultra: outcome and recoverability unknown.
+2. What the Ultra checks at FINISH, and whether it accepts the official image rewritten onto itself: unknown until Stage 1.
+3. The SOC may hold a backup and revert the corrected image (harmless, fix would not stick) — undecoded.
+4. The correction is proven on an Air 2 Pro, likely but unproven on the Ultra.
+5. HDCP is off while the corrected image is installed; no way to tell images apart by version.
+6. Windows HID behaviour for 110–113 is untested (only reads have run on hardware).
+7. Worst case: display path unusable until XREAL services the glasses; warranty may be affected.
+
+### Exact Windows procedure (for when, and only if, you approve flashing)
+Preparation (no writes; you can do these now):
+1. Folder with: this repository; the official Ultra DP file; the corrected file built by `build_ultra_dp.py`.
+2. `python tools\ultra-dp\test_writer_sim.py` with `ULTRA_STOCK` and `ULTRA_PATCHED` set to the two files: all tests must pass.
+3. Laptop on mains power; Settings > Power: sleep "Never"; close Nebula and any browser tab on xreal.com; glasses on their own cable in the port that showed a picture; nothing else on USB-C.
+4. `python tools\ultra-dp\ultra_dp_writer.py --stage0 --stock <official> --patched <corrected>` — must print both files verified, glasses `G428X00969`, DP `1140`, SOC `12.1.00.502_20250408`.
+
+Writes (need a build with writes enabled, issued only after your approval):
+5. **Stage 1:** `--stage1 --stock <official>`; type `STAGE1 G428X00969`. Do not touch anything for ~1 minute. Then check the laptop picture. Stop here and report.
+6. **Stage 2 (separate decision):** `--stage2 --stock <official> --patched <corrected>`; type `YES`, then `STAGE2 G428X00969`. Check the laptop picture, then the Pixel.
+7. **Rollback at any time:** `--restore --stock <official>`; type `RESTORE G428X00969`.
+8. **If anything says WRITE ABORTED:** do nothing else; unplug, wait 10 s, replug; run `--stage0`; send me the output before any restore attempt.
