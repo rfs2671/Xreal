@@ -54,6 +54,8 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|smallestScreenSize" />
         <activity android:name=".ui.CheckActivity" android:exported="false" android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|smallestScreenSize" />
+        <activity android:name=".ui.DisplayTestActivity" android:exported="false" android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|smallestScreenSize" />
         <activity android:name=".ui.SettingsActivity" android:exported="false" android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|smallestScreenSize" />
 

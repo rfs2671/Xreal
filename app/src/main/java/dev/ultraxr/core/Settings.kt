@@ -7,8 +7,13 @@ import android.content.SharedPreferences
 class Settings(context: Context) {
     private val p: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    /** Ask the glasses for their side-by-side 3D mode. Off = leave them in 2D (same picture in both eyes). */
-    var use3d: Boolean get() = p.getBoolean("use3d", true); set(v) = p.edit().putBoolean("use3d", v).apply()
+    /**
+     * Ask the glasses for their side-by-side 3D mode. Off (the default) leaves them in plain 2D
+     * 1920x1080@60, the one mode every phone that drives them at all can show.
+     */
+    var use3d: Boolean get() = p.getBoolean("use3d_v2", false); set(v) = p.edit().putBoolean("use3d_v2", v).apply()
+    /** The user's last answer on the display test screen: "seen", "black" or "". */
+    var lastDisplayAnswer: String get() = p.getString("displayAnswer", "") ?: ""; set(v) = p.edit().putString("displayAnswer", v).apply()
     var refresh90: Boolean get() = p.getBoolean("refresh90", false); set(v) = p.edit().putBoolean("refresh90", v).apply()
     var handTracking: Boolean get() = p.getBoolean("hands", true); set(v) = p.edit().putBoolean("hands", v).apply()
     var showHands: Boolean get() = p.getBoolean("showHands", true); set(v) = p.edit().putBoolean("showHands", v).apply()

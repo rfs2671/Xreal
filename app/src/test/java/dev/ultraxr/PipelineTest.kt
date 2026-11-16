@@ -81,6 +81,8 @@ class PipelineTest {
         assertEquals(seconds * 1000L, p.imuSamples)
         assertTrue("pairs ${pairs.size} of $expectedPairs", pairs.size >= expectedPairs - 2)
         assertEquals(0L, p.pairsUnsynced); assertEquals(0L, p.noMeta); assertEquals(0, restarts)
+        assertEquals("every pair timed on the shared clock", 0L, p.pairsOnCameraClock)
+        assertTrue(p.describe().contains("pairing: complete"))
         assertTrue(p.seamLeft.isFinite() && p.seamRight.isFinite())
 
         // Images: unshuffled and turned upright exactly as the calibration expects.
@@ -103,6 +105,11 @@ class PipelineTest {
         val yaw = Math.toDegrees(Q.yawY(head.predict(imuT.last()).pose.q))
         val turned = ((yaw % 360) + 360) % 360
         assertEquals(225.0, turned, 3.0)
+
+        // Jittered IMU timestamps (a report 2 ms in the past) must not reset anything.
+        val late = imuReport(devStart + (seconds * 1000 - 3) * 1_000_000L, doubleArrayOf(0.0, 0.0, 0.0), doubleArrayOf(0.0, 0.0, 9.80665))
+        p.onImuReport(late, 64, events.last().first + 1_000_000L)
+        assertEquals(0, restarts); assertEquals(1L, p.clock.imuOutOfOrder)
 
         // The glasses' clock restarting (re-plug, firmware reset) is reported, not silently mixed in.
         val rep = imuReport(1_000_000L, doubleArrayOf(0.0, 0.0, 0.0), doubleArrayOf(0.0, 0.0, 9.80665))

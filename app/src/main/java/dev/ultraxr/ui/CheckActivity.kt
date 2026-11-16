@@ -103,6 +103,7 @@ class CheckActivity : Activity() {
         modes.add(Ui.button(this, "3D 60 Hz") { tryMode(McuProtocol.MODE_SBS_60) }, 0, weight = 1f, startDp = 8)
         modes.add(Ui.button(this, "3D 90 Hz") { tryMode(McuProtocol.MODE_SBS_90) }, 0, weight = 1f, startDp = 8)
         root.add(modes, topDp = 8)
+        root.add(Ui.button(this, "Display test (pattern in the glasses)") { startActivity(Intent(this, DisplayTestActivity::class.java)) }, topDp = 8)
         root.add(Ui.button(this, "Share report now") { share() }, topDp = 8)
         val list = Ui.column(this)
         for (it in items) {
@@ -208,8 +209,8 @@ class CheckActivity : Activity() {
                 val seamOk = pl.seamLeft < 1.6 && pl.seamRight < 1.6
                 set("decode", if (pl.seamLeft.isNaN() || pl.seamRight.isNaN()) V.FAIL else if (seamOk) V.PASS else V.FAIL,
                     "Seam score left %.2f, right %.2f (1 is ideal). Brightness %.0f / %.0f of 255.".format(pl.seamLeft, pl.seamRight, pl.brightLeft, pl.brightRight))
-                set("sync", if (pl.pairs > 30 && pl.pairsUnsynced < pl.pairs / 10) V.PASS else V.FAIL,
-                    "Camera minus sensor clock %.1f ms, drift %.0f ppm, %d of %d pairs could not be timed".format(pl.camMinusImuMs, link.clock.driftPpm, pl.pairsUnsynced, pl.pairs + pl.pairsUnsynced))
+                set("sync", if (pl.pairs > 30 && pl.pairsOnCameraClock < pl.pairs / 10) V.PASS else V.FAIL,
+                    "${pl.pairs} pairs timed, ${pl.pairsOnCameraClock} of them without the shared clock. Camera minus sensor clock " + Fmt.f(link.clock.lastCamMinusImuMs, 1) + " ms, drift " + Fmt.f(link.clock.driftPpm, 0) + " ppm, IMU out of order ${link.clock.imuOutOfOrder}, clock restarts ${link.clock.clockRollbacks}")
                 val offered = DisplayDiagnostics.sideBySideOffered(this)
                 set("display", if (stage.onGlasses && stage.isSideBySide) V.PASS else V.FAIL,
                     if (!stage.onGlasses) "Android reports no external display"
@@ -302,6 +303,8 @@ class CheckActivity : Activity() {
             sb.append("mode now: ").append(McuProtocol.modeName(st.displayMode)).append(" (raw ").append(st.displayMode).append(")\n")
             sb.append("mode this app asks for: ").append(McuProtocol.modeName(Tracking.link?.wantedDisplayMode ?: -1)).append("; 3D setting=").append(Tracking.settings.use3d).append(", 90 Hz setting=").append(Tracking.settings.refresh90).append('\n')
             sb.append("fell back to 2D because the phone offered no side-by-side mode: ").append(st.sbsFellBack).append('\n')
+            sb.append("display test, last answer from the user: ").append(Tracking.settings.lastDisplayAnswer.ifEmpty { "none" }).append('\n')
+            sb.append("controller status:\n").append(st.controllerStatus.ifEmpty { "not read" }).append('\n')
             sb.append("history:\n").append(st.displayHistory()).append('\n')
         }
         r.section("DISPLAY: ANDROID") { sb ->
@@ -325,6 +328,15 @@ class CheckActivity : Activity() {
             sb.append("6DoF: states=${Tracking.vioStates} frames_in=${Tracking.vioFramesIn} dropped=${Tracking.vioDropped} restarts=${Tracking.supervisor.resets} last='${Tracking.supervisor.lastReason}'\n")
             sb.append("thermal: status=${Tracking.thermalStatus} throttle=${Tracking.throttle}\n")
             if (st != null) sb.append("camera: ${st.cameraFormat}; ${st.transport}; noMeta=${Tracking.link?.pipeline?.noMeta} reconnects=${st.reconnects} lastError='${st.lastError}'\n")
+        }
+        r.section("CAMERA AND IMU STREAM") { sb ->
+            val link = Tracking.link
+            if (link == null) { sb.append("no USB link\n"); return@section }
+            sb.append(link.describeCameraUsb())
+            sb.append(link.pipeline.describe())
+            sb.append("reconnects: ").append(link.stats.reconnects).append("; reasons:\n").append(link.stats.reconnectHistory()).append('\n')
+            sb.append("estimator: frames in ").append(Tracking.vioFramesIn).append(", dropped before processing ").append(Tracking.vioDropped).append(", states out ").append(Tracking.vioStates)
+                .append(", self-restarts ").append(Tracking.vioAutoResets).append(", app-requested restarts ").append(Tracking.supervisor.resets).append(" (last: ").append(Tracking.supervisor.lastReason.ifEmpty { "none" }).append(")\n")
         }
         r.section("BATTERY") { sb ->
             val bm = getSystemService(BATTERY_SERVICE) as BatteryManager

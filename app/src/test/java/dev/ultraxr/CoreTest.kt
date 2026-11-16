@@ -61,13 +61,44 @@ class CoreTest {
 
     @Test fun deviceClockProjectsCameraThroughImuModel() {
         val c = DeviceClock()
-        assertNull(c.mapCamera(1000, 1000))
+        // Before any IMU sample the camera is still timed, by its own stream, and counted.
+        val early = c.mapCamera(1000, 5000)!!
+        assertEquals(DeviceClock.CameraPath.CAMERA_CLOCK, early.path); assertEquals(1L, c.camNoImuYet)
+        c.reset()
         for (i in 0 until 3000) c.mapImu(10_000_000_000L + i * 1_000_000L, 70_000_000_000L + i * 1_000_000L + 200_000)
         assertNull("duplicate imu timestamp", c.mapImu(10_000_000_000L + 2999 * 1_000_000L, 0))
-        val cam = c.mapCamera(10_000_000_000L + 2990 * 1_000_000L, 70_000_000_000L + 3010 * 1_000_000L)
-        assertNotNull(cam)
-        assertEquals((70_000_000_000L + 2990 * 1_000_000L).toDouble(), cam!!.toDouble(), 400_000.0)
-        assertNull("camera timestamp from another epoch", c.mapCamera(500, 70_003_000_000L))
+        assertEquals(1L, c.imuDuplicates)
+        val cam = c.mapCamera(10_000_000_000L + 2990 * 1_000_000L, 70_000_000_000L + 3010 * 1_000_000L)!!
+        assertEquals(DeviceClock.CameraPath.IMU_CLOCK, cam.path)
+        assertEquals((70_000_000_000L + 2990 * 1_000_000L).toDouble(), cam.hostNs.toDouble(), 400_000.0)
+    }
+
+    @Test fun smallBackwardImuStepIsJitterNotARestart() {
+        val c = DeviceClock()
+        var t = 10_000_000_000L; var host = 70_000_000_000L
+        repeat(500) { c.mapImu(t, host); t += 1_000_000L; host += 1_000_000L }
+        // An out-of-order report 3 ms in the past: dropped, clock model kept.
+        assertNull(c.mapImu(t - 3_000_000L, host))
+        assertEquals(1L, c.imuOutOfOrder); assertEquals(0L, c.clockRollbacks)
+        assertEquals(DeviceClock.CameraPath.IMU_CLOCK, c.mapCamera(t - 5_000_000L, host + 15_000_000L)!!.path)
+        // The glasses restarting (clock back near zero) is a restart.
+        assertNotNull(c.mapImu(5_000_000L, host + 1_000_000L))
+        assertEquals(1L, c.clockRollbacks)
+    }
+
+    @Test fun cameraOnAnotherClockIsStillTimedAndCounted() {
+        val c = DeviceClock()
+        for (i in 0 until 2000) c.mapImu(10_000_000_000L + i * 1_000_000L, 70_000_000_000L + i * 1_000_000L)
+        // Camera timestamps from a different epoch (an hour away), arriving every 33 ms.
+        var last = 0L
+        for (k in 0 until 60) {
+            val arrive = 70_000_000_000L + (2000 + k * 33) * 1_000_000L
+            val r = c.mapCamera(3_600_000_000_000L + k * 33_000_000L, arrive)!!
+            assertEquals(DeviceClock.CameraPath.CAMERA_CLOCK, r.path)
+            assertTrue("mapped time near arrival", abs(r.hostNs - arrive) < 1_000_000L)
+            assertTrue(r.hostNs > last); last = r.hostNs
+        }
+        assertEquals(60L, c.camEpochMismatch); assertEquals(60L, c.camOnOwnClock); assertEquals(0L, c.camOnImuClock)
     }
 
     @Test fun eyeRotationsMatchOpenCvDefinitions() {
@@ -84,13 +115,55 @@ class CoreTest {
 
     @Test fun stereoPairerPairsAlternatingEyes() {
         val p = StereoPairer()
-        assertEquals(StereoPairer.Result.PENDING, p.push(100, 1, false))
-        assertEquals(StereoPairer.Result.COMPLETE, p.push(100, 1, true))
-        assertEquals(StereoPairer.Result.DISCARD, p.push(100, 1, true))      // already published
-        assertEquals(StereoPairer.Result.PENDING, p.push(200, 2, true))
-        assertEquals(StereoPairer.Result.PENDING, p.push(300, 3, false))     // left of 200 was lost
-        assertEquals(StereoPairer.Result.COMPLETE, p.push(300, 3, true))
-        assertEquals(2L, p.dropped)
+        val ms = 1_000_000L
+        assertEquals(StereoPairer.Result.PENDING, p.push(100 * ms, 1, false))
+        assertEquals(StereoPairer.Result.COMPLETE, p.push(100 * ms, 1, true))
+        assertEquals(100 * ms, p.pairTimeNs)
+        assertEquals(StereoPairer.Result.PENDING, p.push(133 * ms, 2, true))
+        assertEquals(StereoPairer.Result.PENDING, p.push(166 * ms, 3, false))     // left of pair 2 was lost
+        assertEquals(StereoPairer.Result.COMPLETE, p.push(166 * ms, 3, true))
+        assertEquals(2L, p.complete); assertEquals(1L, p.missingPartner)
+        assertEquals(StereoPairer.Result.DISCARD, p.push(50 * ms, 0, false))       // older than what was published
+        assertEquals(1L, p.stale)
+        assertEquals(1L, p.counterGapsLeft)                                        // left jumped 1 -> 3
+    }
+
+    @Test fun stereoPairerToleratesInexactTimestampsAndCounters() {
+        val ms = 1_000_000L
+        // Eyes stamped 0.7 ms apart with equal counters, either eye first.
+        val a = StereoPairer()
+        var done = 0
+        for (k in 0 until 100) {
+            val t = (1000 + k * 33) * ms
+            val first = if (k % 2 == 0) a.push(t, k, false) else a.push(t + 700_000, k, true)
+            val second = if (k % 2 == 0) a.push(t + 700_000, k, true) else a.push(t, k, false)
+            assertEquals(StereoPairer.Result.PENDING, first); if (second == StereoPairer.Result.COMPLETE) done++
+        }
+        assertEquals(100, done); assertEquals(0L, a.missingPartner); assertEquals(700_000L, a.maxPairDeltaNs)
+        // Counters that differ between the eyes (right runs one ahead), identical times.
+        val b = StereoPairer()
+        done = 0
+        for (k in 0 until 100) { val t = (1000 + k * 33) * ms; b.push(t, k, false); if (b.push(t, k + 1, true) == StereoPairer.Result.COMPLETE) done++ }
+        assertEquals(100, done); assertEquals(100L, b.counterMismatchAccepted)
+        // Neighbouring exposures are never joined: left of frame k with right of frame k+1.
+        val c = StereoPairer()
+        done = 0
+        for (k in 0 until 50) { val t = (1000 + k * 33) * ms; c.push(t, 2 * k, false); if (c.push(t + 33 * ms, 2 * k + 1, true) == StereoPairer.Result.COMPLETE) done++ }
+        assertEquals(0, done)
+        // Random loss of 20 percent of frames still pairs every exposure that has both eyes.
+        val d = StereoPairer(); val rnd = Random(5)
+        var both = 0; done = 0
+        for (k in 0 until 1000) {
+            val t = (1000 + k * 33) * ms
+            val l = rnd.nextInt(5) != 0; val r = rnd.nextInt(5) != 0
+            if (l && r) both++
+            var res = StereoPairer.Result.PENDING
+            if (l) res = d.push(t, k, false)
+            if (r) res = d.push(t, k, true)
+            if (l && r && res == StereoPairer.Result.COMPLETE) done++
+        }
+        assertEquals(both, done)
+        assertTrue(d.counterGapsLeft > 100 && d.counterGapsRight > 100)
     }
 
     private val up = floatArrayOf(0f, 0f, 9.80665f)

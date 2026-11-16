@@ -27,6 +27,9 @@ class UvcStream(
     @Volatile var transport = "none"; private set
     @Volatile var badIsoPackets = 0L; private set
     @Volatile var transferErrors = 0L; private set
+    /** Reads that returned nothing within the timeout: the camera sent no data (a stall). */
+    @Volatile var timeouts = 0L; private set
+    @Volatile var longestGapNs = 0L; private set
     @Volatile var bytes = 0L; private set
     @Volatile var fatal: String? = null; private set
     var assembler: UvcFrameAssembler? = null; private set
@@ -119,8 +122,12 @@ class UvcStream(
             worker = thread(name = "uvc-bulk") {
                 val buf = ByteArray(size)
                 while (running) {
+                    val t0 = System.nanoTime()
                     val n = conn.bulkTransfer(ep, buf, buf.size, 500)
-                    if (n < 0) { transferErrors++; continue }
+                    val took = System.nanoTime() - t0
+                    if (took > longestGapNs && bytes > 0) longestGapNs = took
+                    // Android reports a timeout and a real error the same way; tell them apart by duration.
+                    if (n < 0) { if (took >= 450_000_000L) timeouts++ else { transferErrors++; if (took < 2_000_000L) try { Thread.sleep(2) } catch (_: InterruptedException) {} }; continue }
                     bytes += n
                     asm.push(buf, 0, n)
                 }

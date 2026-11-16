@@ -16,6 +16,12 @@ object McuProtocol {
     const val CMD_GET_DISPLAY_MODE = 0x07
     const val CMD_SET_DISPLAY_MODE = 0x08
     const val CMD_GET_SERIAL = 0x15
+    /** Brightness commands; negative until confirmed for the Air 2 Ultra, in which case nothing is sent. */
+    const val CMD_GET_BRIGHTNESS = -1
+    const val CMD_SET_BRIGHTNESS = -1
+    const val BRIGHTNESS_MAX = 7
+    /** Read-only queries used for the diagnostic status dump. */
+    val STATUS_QUERIES: List<Pair<String, Int>> = listOf("display mode" to CMD_GET_DISPLAY_MODE, "serial" to CMD_GET_SERIAL)
 
     const val MODE_2D_60 = 1
     const val MODE_SBS_60 = 3

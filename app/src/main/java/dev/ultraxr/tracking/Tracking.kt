@@ -153,6 +153,9 @@ object Tracking : GlassesLink.Listener {
                 // head moves can diverge (seen in simulation). Start only when the IMU says "still".
                 Native.vioSetOption(h, "startup_imu_gate", 1.0)
                 Native.vioSetOption(h, "num_threads", 2.0)
+                // A phone's USB stack can hold IMU reports back for longer than a PC's: do not restart
+                // the estimator for gaps it can integrate across.
+                Native.vioSetOption(h, "max_imu_gap_s", 0.2)
                 vio = h; log("6DoF ready: ${Native.vioVersion()}")
             }
         } catch (e: Throwable) { vioError = e.toString(); log("6DoF init failed: $e") }

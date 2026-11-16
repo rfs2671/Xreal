@@ -52,6 +52,8 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         /** True once this app gave up on 3D because the phone never offered a side-by-side mode. */
         @Volatile var sbsFellBack = false
         @Volatile var mcuWritePath = ""
+        /** Answers to the read-only status queries, one per line. */
+        @Volatile var controllerStatus = ""
         private val history = ArrayDeque<String>()
         private val events = LinkedHashMap<Int, String>()
         private val t0 = System.nanoTime()
@@ -61,6 +63,9 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             events[cmd] = "$n times, last payload " + payload.take(12).joinToString("") { dev.ultraxr.core.Fmt.hex(it.toInt() and 0xFF) }
             while (events.size > 24) events.remove(events.keys.first())
         }
+        private val reconnectReasons = ArrayDeque<String>()
+        fun noteReconnect(why: String) = synchronized(reconnectReasons) { reconnectReasons.addLast("t+" + dev.ultraxr.core.Fmt.f((System.nanoTime() - t0) / 1e9, 1) + "s " + why); while (reconnectReasons.size > 20) reconnectReasons.removeFirst() }
+        fun reconnectHistory(): String = synchronized(reconnectReasons) { if (reconnectReasons.isEmpty()) "none" else reconnectReasons.joinToString("\n") }
         /** Every display-mode read and write on the glasses' controller, and unsolicited messages from it. */
         fun displayHistory(): String = synchronized(history) {
             history.joinToString("\n") + (if (events.isEmpty()) "" else "\nunsolicited controller messages:\n" + events.entries.joinToString("\n") { "  cmd 0x" + dev.ultraxr.core.Fmt.hex(it.key, 4) + ": " + it.value })
@@ -171,6 +176,40 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         }
     }
 
+    /** Reads what the controller will tell about itself. Read-only commands; results go to the report. */
+    fun readControllerStatus() {
+        handler.post {
+            val m = mcu ?: return@post
+            val sb = StringBuilder()
+            for ((name, cmd) in McuProtocol.STATUS_QUERIES) {
+                val r = m.command(cmd)
+                sb.append(name).append(" (0x").append(dev.ultraxr.core.Fmt.hex(cmd)).append("): ")
+                if (r == null) sb.append("no answer") else {
+                    sb.append(r.joinToString("") { dev.ultraxr.core.Fmt.hex(it.toInt() and 0xFF) })
+                    val text = String(r, Charsets.ISO_8859_1).filter { it.code in 0x20..0x7E }
+                    if (text.length >= 3) sb.append(" \"").append(text).append('"')
+                }
+                sb.append('\n')
+            }
+            stats.controllerStatus = sb.toString()
+            stats.note("controller status read")
+        }
+    }
+
+    /** Sets the panels to their brightest level, if the brightness command is known for this model. */
+    fun setBrightnessMax() {
+        handler.post {
+            val m = mcu ?: return@post
+            val cmd = McuProtocol.CMD_SET_BRIGHTNESS
+            if (cmd < 0) { stats.note("brightness: no known command for this model, nothing sent"); return@post }
+            val before = m.command(McuProtocol.CMD_GET_BRIGHTNESS)
+            val r = m.command(cmd, byteArrayOf(McuProtocol.BRIGHTNESS_MAX.toByte()))
+            val after = m.command(McuProtocol.CMD_GET_BRIGHTNESS)
+            fun hx(b: ByteArray?) = b?.joinToString("") { dev.ultraxr.core.Fmt.hex(it.toInt() and 0xFF) } ?: "no answer"
+            stats.note("brightness: before " + hx(before) + ", set max answered " + hx(r) + ", after " + hx(after))
+        }
+    }
+
     private fun findDevice(): UsbDevice? = usb.deviceList.values.firstOrNull { it.vendorId == VID && it.productId == PID_ULTRA }
 
     private fun setState(s: State, detail: String) {
@@ -203,7 +242,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         val err = try { connect(d) } catch (e: Throwable) { "unexpected: $e" }
         if (err == null) {
             watchStallSeconds = 0; healthySeconds = 0; camerasDown = false
-            watchImu = pipeline.imuSamples; watchPairs = pipeline.pairs
+            watchImu = pipeline.imuSamples; watchPairs = pipeline.cameraFrames
             setState(State.STREAMING, "")
         } else {
             stats.lastError = err
@@ -328,6 +367,18 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         pipeline.onCameraFrame(frame, now)
     }
 
+    /** USB-level camera stream counters of the current connection, for the hardware report. */
+    fun describeCameraUsb(): String {
+        val u = uvc ?: return "camera stream not open\n"
+        val a = u.assembler
+        return "transport " + u.transport + "; format " + u.chosen + "\n" +
+            "negotiated frame size " + u.negotiatedFrameBytes + " bytes (expected " + CameraDecoder.FRAME_BYTES + "), payload size " + u.negotiatedPayloadSize + "\n" +
+            "bytes " + u.bytes + ", payloads " + a?.payloads + ", complete frames " + a?.goodFrames + ", short frames " + a?.shortFrames + ", long frames " + a?.longFrames +
+            ", payloads flagged as errors by the camera " + a?.errorPayloads + ", bad headers " + a?.badHeaders + ", sizes of last rejected frames " + a?.rejectedSizes + "\n" +
+            "USB: transfer timeouts " + u.timeouts + ", transfer errors " + u.transferErrors + ", bad isochronous packets " + u.badIsoPackets +
+            ", longest gap between transfers " + dev.ultraxr.core.Fmt.f(u.longestGapNs / 1e6, 0) + " ms, fatal: " + (u.fatal ?: "none") + "\n"
+    }
+
     /** Latest decoded raw eye image (640x480 grey), for previews. */
     fun copyRawEye(right: Boolean, into: ByteArray) { System.arraycopy(pipeline.rawEye[if (right) 1 else 0], 0, into, 0, CameraDecoder.IMAGE_BYTES) }
 
@@ -337,8 +388,8 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             if (state == State.STREAMING || state == State.CONNECTING) guardDisplayMode()
             if (state == State.STREAMING) {
                 val imuMoved = pipeline.imuSamples != watchImu
-                val camMoved = pipeline.pairs != watchPairs
-                watchImu = pipeline.imuSamples; watchPairs = pipeline.pairs
+                val camMoved = pipeline.cameraFrames != watchPairs
+                watchImu = pipeline.imuSamples; watchPairs = pipeline.cameraFrames
                 val fatal = uvc?.fatal
                 // With the cameras down for good but the IMU alive, stay connected: rotation-only
                 // tracking is better than nothing.
@@ -349,7 +400,9 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
                     if (camMoved && camerasDown) { camerasDown = false; setState(State.STREAMING, "") }
                 } else watchStallSeconds++
                 if (watchStallSeconds >= STALL_SECONDS || (fatal != null && !camerasDown)) {
-                    val why = fatal ?: if (!imuMoved) "the motion sensor stopped sending" else "the cameras stopped sending"
+                    val u = uvc
+                    val why = fatal ?: if (!imuMoved) "the motion sensor stopped sending" else "no complete camera frame for $STALL_SECONDS s (" +
+                        "transfer timeouts ${u?.timeouts}, transfer errors ${u?.transferErrors}, short frames ${u?.assembler?.shortFrames}, long frames ${u?.assembler?.longFrames}, payloads ${u?.assembler?.payloads})"
                     stats.lastError = why
                     if (imuMoved && failures >= MAX_RETRIES) {
                         listener.onLog("cameras unavailable after $failures attempts ($why): continuing with rotation only")
@@ -358,6 +411,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
                     } else {
                         listener.onLog("stream stalled ($why): reconnecting")
                         stats.reconnects++
+                        stats.noteReconnect(why)
                         teardown()
                         failures++
                         if (failures <= MAX_RETRIES) { setState(State.CONNECTING, "Reconnecting"); handler.postDelayed({ connectIfPossible() }, 600) }

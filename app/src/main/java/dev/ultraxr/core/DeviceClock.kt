@@ -97,41 +97,82 @@ class AffineClockMapper {
 }
 
 /**
- * One clock model per pair of glasses. Only IMU reports train it (they are frequent and
+ * One clock model per pair of glasses. IMU reports train it (they are frequent and
  * low-latency); camera timestamps are projected through the same model so the relative
  * timing between images and IMU samples survives the different USB delays.
- * Port of XR Gate's XrealDeviceClock.
+ * Based on XR Gate's XrealDeviceClock, with two differences learnt on a real phone:
+ *  - a slightly out-of-order IMU timestamp is dropped instead of being treated as a device
+ *    restart (a restart resets pairing and the estimator, so false ones are fatal);
+ *  - a camera timestamp that cannot be placed on the IMU clock is not discarded: it is mapped
+ *    with a second model trained on the camera stream itself, and counted, so tracking
+ *    still gets images (with looser camera-to-IMU timing) and the report says why.
  */
 class DeviceClock {
+    enum class CameraPath { IMU_CLOCK, CAMERA_CLOCK }
+    class CameraTime(val hostNs: Long, val path: CameraPath)
+
     private val mapper = AffineClockMapper()
+    private val cameraMapper = AffineClockMapper()
     private var lastImuDevice = 0L
+    /** Large backward jumps of the IMU clock: the glasses restarted. */
     var clockRollbacks = 0L; private set
+    /** IMU samples dropped for a small backward step (reordering or jitter). */
+    @Volatile var imuOutOfOrder = 0L; private set
+    @Volatile var imuDuplicates = 0L; private set
+    // Why camera frames could not use the IMU clock.
+    @Volatile var camNoImuYet = 0L; private set
+    @Volatile var camEpochMismatch = 0L; private set
+    @Volatile var camHostMismatch = 0L; private set
+    @Volatile var camOnImuClock = 0L; private set
+    @Volatile var camOnOwnClock = 0L; private set
+    /** Last camera device time minus last IMU device time, ms: shows whether they share a clock. */
+    @Volatile var lastCamMinusImuMs = Double.NaN; private set
+    /** Last (IMU-clock projection minus arrival time) of a camera frame, ms: the transport delay, negative. */
+    @Volatile var lastCamProjectionMinusArrivalMs = Double.NaN; private set
 
     val driftPpm get() = synchronized(this) { mapper.driftPpm }
     val anchors get() = synchronized(this) { mapper.anchorCount }
 
-    /** Returns the host-clock time of an IMU sample, or null for a duplicate/invalid timestamp. */
+    /** Returns the host-clock time of an IMU sample, or null for a duplicate/out-of-order timestamp. */
     @Synchronized fun mapImu(deviceNs: Long, hostReceiveNs: Long): Long? {
         if (deviceNs <= 0) return null
         if (lastImuDevice != 0L && deviceNs < lastImuDevice) {
-            // The glasses' clock restarted: the caller must restart tracking on the new epoch.
-            clockRollbacks++; mapper.reset(); lastImuDevice = 0
+            if (lastImuDevice - deviceNs < RESTART_JUMP_NS) { imuOutOfOrder++; return null }
+            // The glasses' clock really restarted: the caller must restart tracking on the new epoch.
+            clockRollbacks++; mapper.reset(); cameraMapper.reset(); lastImuDevice = 0
         }
-        if (deviceNs == lastImuDevice) return null
+        if (deviceNs == lastImuDevice) { imuDuplicates++; return null }
         lastImuDevice = deviceNs
         return mapper.map(deviceNs, hostReceiveNs)
     }
 
-    /** Returns the host-clock time of a camera frame, or null if it cannot be trusted. */
-    @Synchronized fun mapCamera(deviceNs: Long, hostReceiveNs: Long): Long? {
-        if (lastImuDevice == 0L || deviceNs <= 0) return null
-        if (Math.abs(deviceNs - lastImuDevice) > MAX_DELTA_NS) return null // different epoch or units
-        val mapped = mapper.project(deviceNs) ?: return null
-        if (Math.abs(mapped - hostReceiveNs) > MAX_DELTA_NS) return null
-        return mapped
+    /** Host-clock time of a camera frame. Never null for a positive timestamp. */
+    @Synchronized fun mapCamera(deviceNs: Long, hostReceiveNs: Long): CameraTime? {
+        if (deviceNs <= 0) return null
+        var reason = 0
+        if (lastImuDevice == 0L) reason = 1
+        else {
+            lastCamMinusImuMs = (deviceNs - lastImuDevice) / 1e6
+            if (Math.abs(deviceNs - lastImuDevice) > MAX_DELTA_NS) reason = 2 // different epoch or units
+            else {
+                val mapped = mapper.project(deviceNs)
+                if (mapped != null) lastCamProjectionMinusArrivalMs = (mapped - hostReceiveNs) / 1e6
+                if (mapped == null || Math.abs(mapped - hostReceiveNs) > MAX_DELTA_NS) reason = 3
+                else { camOnImuClock++; cameraMapper.map(deviceNs, hostReceiveNs); return CameraTime(mapped, CameraPath.IMU_CLOCK) }
+            }
+        }
+        when (reason) { 1 -> camNoImuYet++; 2 -> camEpochMismatch++; else -> camHostMismatch++ }
+        camOnOwnClock++
+        // The camera stream's own lowest-delay mapping. It carries the frame's USB transfer time as
+        // a bias (the image is stamped late by roughly that much relative to the IMU).
+        return CameraTime(cameraMapper.map(deviceNs, hostReceiveNs), CameraPath.CAMERA_CLOCK)
     }
 
-    @Synchronized fun reset() { mapper.reset(); lastImuDevice = 0 }
+    @Synchronized fun reset() { mapper.reset(); cameraMapper.reset(); lastImuDevice = 0 }
 
-    companion object { const val MAX_DELTA_NS = 2_000_000_000L }
+    companion object {
+        const val MAX_DELTA_NS = 2_000_000_000L
+        /** A backward step smaller than this is jitter, not a restart. */
+        const val RESTART_JUMP_NS = 1_000_000_000L
+    }
 }
