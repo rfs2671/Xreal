@@ -309,3 +309,37 @@ every update, mode and brightness id is refused. **Not yet run on hardware.**
   independent identity check is therefore known to exist. Treat as **unsolved**.
 
 **Verdict unchanged: NO-GO for any write-capable updater.**
+
+
+---
+
+## Round 5: HDCP, recovery sources, identifying patched firmware
+
+**HDCP (item 1).** The public analysis (`xreal-pixel-patches/docs/root-cause.md`) shows HDCP is
+needed to be *out of the way during bring-up*, not absent: enabling HDCP on a running picture
+works; requesting it within about 4 s of video start keeps the panels dark, even if switched
+off again. The shipped fix (`nohdcp`) is one byte forcing the existing "HDCP invalid" branch,
+so Bcaps reads 00 for the whole session. A fix that keeps HDCP would have to advertise it
+only after the clock is locked and then make the source re-read Bcaps (an HPD/CP_IRQ-style
+event). **No such patch exists, none has been designed against the Ultra's code, and it can
+only be tested on hardware.** It stays an *XREAL request*, not something we can safely build.
+The app now logs Android's DRM HDCP level (connected/max, system-wide) in the display
+section: an app-visible hint of whether the glasses advertise HDCP, not proof.
+
+**Recovery sources (item 2).** XREAL publishes no recovery procedure for the Ultra that I
+could find. Only community posts exist (Air 2 / Air 2 Pro update failures, XREAL staff
+suggesting an older firmware page, one report of a failed update auto-repairing). The XREAL
+community forum could not be fetched from this session (host not allowed), so those threads
+are **unread**. Recovery on the Ultra remains **unverified**.
+
+**Identifying patched firmware (item 3).** Known facts: both report `1140`; the public tools
+identify images only by SHA-256 *before* flashing; the only post-flash check described is the
+version read (`1109` means the fallback image). No readback message is known. Candidate
+indicators, none verified: (a) behaviour (panels light up), (b) Android's DRM HDCP level
+dropping to NONE with a patched image, (c) a custom version string, which would need a
+different build and is a firmware change. Conclusion: **there is no reliable independent
+check today**; an official build with a distinct version, or a checksum message from XREAL,
+would be the proper answer (requested in `docs/XREAL_ESCALATION.md`).
+
+**Test APK (item 4).** The 512-byte read test ships in the CI build for this commit. Its result
+on the owner's Pixel is **not yet known**.

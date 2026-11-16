@@ -58,12 +58,31 @@ object DisplayDiagnostics {
         return sb.toString()
     }
 
+    /**
+     * Read-only HDCP view from Android's DRM service: the level the connected displays negotiated and the
+     * maximum supported. This is the closest app-visible hint of whether the glasses advertise HDCP; it is
+     * system-wide, not per display, and not proof of what the bridge firmware does.
+     */
+    fun hdcpLevels(): String {
+        val widevine = java.util.UUID(-0x121074568629b532L, -0x5c37d8232ae2de13L)
+        return try {
+            val drm = android.media.MediaDrm(widevine)
+            try {
+                val connected = if (Build.VERSION.SDK_INT >= 28) drm.connectedHdcpLevel else -1
+                val max = if (Build.VERSION.SDK_INT >= 28) drm.maxHdcpLevel else -1
+                fun nm(v: Int) = when (v) { 1 -> "HDCP_NONE"; 2 -> "HDCP_V1"; 3 -> "HDCP_V2"; 4 -> "HDCP_V2_1"; 5 -> "HDCP_V2_2"; 6 -> "HDCP_V2_3"; 0x7FFFFFFF -> "HDCP_NO_DIGITAL_OUTPUT"; 0 -> "UNKNOWN"; else -> "level $v" }
+                "DRM HDCP: connected=" + nm(connected) + ", max=" + nm(max) + " (system-wide)\n"
+            } finally { if (Build.VERSION.SDK_INT >= 28) drm.close() else @Suppress("DEPRECATION") drm.release() }
+        } catch (t: Throwable) { "DRM HDCP: unavailable ($t)\n" }
+    }
+
     fun describeAll(c: Context): String {
         val dm = manager(c)
         val sb = StringBuilder()
         val pres = dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).map { it.displayId }.toSet()
         val all = dm.displays
         sb.append(all.size).append(" display(s); external present: ").append(all.any { it.displayId != Display.DEFAULT_DISPLAY }).append('\n')
+        sb.append(hdcpLevels())
         for (d in all) try { sb.append(describe(d, pres)) } catch (t: Throwable) { sb.append("display ").append(d.displayId).append(": could not be described: ").append(t).append('\n') }
         // Whether the phone extends or mirrors is not public API; these developer settings are the nearest readable hints.
         for (key in listOf("force_desktop_mode_on_external_displays", "enable_freeform_support", "force_resizable_activities")) {
