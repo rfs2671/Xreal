@@ -119,6 +119,31 @@ Two things this taught about real use:
 It is a simulated hand: this shows the path from joints to a grabbed object works, not how well a
 real tracked hand aims.
 
+## On the actual Pixel (no glasses attached)
+
+Done over wireless adb on the Pixel 10 Pro XL, 17 November 2026:
+
+- `tools/pixel/pixel_check.py install`: 8 of 8. Ultra XR and the Ultra XR copy of Wolvic on the
+  phone are byte-for-byte the built files, the phone's OpenXR broker hands out Ultra XR's
+  runtime, screen timeout 30 s and stay-awake off are unchanged.
+- The Khronos `hello_xr` sample (Vulkan) was started against the runtime with the simulated
+  wearer. The runtime loaded on the phone's GPU (Vulkan 1.4), the sample connected, got a
+  2688x1512 swapchain and reached `XR_SESSION_STATE_FOCUSED`. Nine seconds later an incoming
+  phone call took the screen and the session dropped to `VISIBLE`; it was stopped after 42 s.
+  The compositor logged 59 late frames, 2.5 ms late on average, part of that during the call.
+  The picture itself was not captured (the screenshot shows the call), so this proves the
+  runtime starts and serves an application on the phone, not what it draws.
+- Not done on the phone: the browser has not been opened. Its first screen is its terms of
+  service, which the owner has to accept. No WebXR session, no stereo, no real tracking and no
+  hands have been exercised on the phone or the glasses.
+
+## Timing on the emulator
+
+From `webxr_pages.py` (x86-64 emulator, software-translated arm64 pages, simulated tracking):
+frame interval about 20 ms on average, 8 to 9 % of frames longer than 25 ms; the browser uses
+138 to 143 MB, Ultra XR 56 to 59 MB. These say the path has no gross stall. They are not
+predictions for the Pixel, which has to be measured with the glasses on.
+
 ## Not working
 
 - **Pages that require hand tracking** (rather than ask for it) are refused. Cause, from the
