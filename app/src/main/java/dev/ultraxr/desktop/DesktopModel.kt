@@ -205,7 +205,7 @@ class Desktop {
         val vis = windows.filter { !it.minimized && !it.follow }
         if (vis.isNotEmpty()) {
             val mean = atan2(vis.sumOf { sin(it.yaw) }, vis.sumOf { cos(it.yaw) })
-            for (w in vis) w.yaw = Geometry.wrap(w.yaw - mean + headYaw)
+            for (w in vis) { w.yaw = Geometry.wrap(w.yaw - mean + headYaw); w.pitch = 0.0 }
         }
         followAnchor.yaw = headYaw; touch()
     }

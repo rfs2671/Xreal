@@ -250,3 +250,35 @@ Checked: 16 KB LOAD alignment, same NEEDED list and the same eight exported symb
   without a valid result: the phone's foreground app was not Ultra XR during those runs, and
   with Ultra XR in the background the tracker drops most frames and the tracking mode flaps
   (also seen with the committed library). Tests must run with Ultra XR in the foreground.
+
+## Offline stereo validation (2026-11-17, recorded captures only)
+
+Data: 11 stereo pairs from four hardware-check captures (three indoor scenes), decoded and
+oriented as the app does; reference matches are SIFT + RANSAC on each pair, independent of the
+calibration's extrinsics. Tools: `tools/ultra-diag/stereo_capture_analysis.py`,
+`stereo_threshold_validation.py`. There is no long camera + IMU recording, so nothing here
+measures pose accuracy.
+
+* The calibrated search starts within 8 px of the true right-image position for 86 to 100% of
+  reference matches (median about 3 px); the same-pixel start is 51 to 70 px off.
+* Reference matches have a median epipolar error of 0.0048 against the calibration; 53% are
+  inside Basalt's 0.005. A constant rotation of 0.40 degrees (x -0.30, y 0.24, z 0.11) applied
+  to the camera-to-camera rotation brings the median to 0.0016 and 88% inside 0.005. So the
+  factory-derived extrinsics are off by a small constant rotation. The y component moves points
+  along the epipolar lines and is poorly determined by this fit.
+* Candidates produced the estimator's way (grid FAST corners, Lucas-Kanade from the depth
+  starts, forward-backward check): 147. Accepted at 0.005: 74, with 45 correct ones rejected;
+  at 0.01: 126, 7 rejected; at 0.02: 129, 4 rejected. The share of accepted candidates that the
+  pair's own fundamental matrix calls wrong stays at 22 to 24% at every threshold. That share is
+  an upper bound: a single fundamental matrix does not model these fisheye images well.
+* The scene on which the tracker ran away had a mean image brightness of 26/255; the one where
+  it held had 54.
+
+What this supports: 0.01 instead of 0.005 recovers nearly all correct matches without a
+measured rise in wrong ones, and correcting the extrinsic rotation would be the cleaner fix.
+What it does not show: that either makes the pose more accurate. Both are kept off the main
+branch (`experimental/stereo-epipolar`) until measured on the glasses.
+
+Also on 2026-11-17: the app now gates position on stereo evidence (`PositionConfidence`):
+with too few landmarks or stereo matches it stays rotation-only. Unit-tested against the counts
+logged on 2026-11-16; not yet run on the glasses.
