@@ -73,15 +73,9 @@ class LauncherActivity : Activity(), Tracking.Observer {
             // "--es replay NAME [--es replay_tag TAG]": feed files/recordings/NAME through the trackers (glasses unplugged)
             // and write what they report to files/replay/. For measuring tracking changes on recorded real motion.
             i?.getStringExtra("replay")?.let { name ->
-                val tag = i.getStringExtra("replay_tag") ?: "run"
-                setShowWhenLocked(true); setTurnScreenOn(true); window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                Thread {
-                    Thread.sleep(4000)       // the trackers are created on a worker thread when the app starts
-                    Tracking.replay(java.io.File(getExternalFilesDir("recordings"), name), getExternalFilesDir("replay")!!, tag) { note ->
-                        Tracking.log("replay finished: $note")
-                        runOnUiThread { window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
-                    }
-                }.start()
+                // In a foreground service, so it runs with the screen off and the phone locked.
+                val svc = Intent(this, dev.ultraxr.tracking.ReplayService::class.java).putExtra("replay", name).putExtra("replay_tag", i.getStringExtra("replay_tag") ?: "run")
+                try { startForegroundService(svc) } catch (e: Exception) { Tracking.log("replay finished: could not start: $e") }
             }
             // "--ei record_seconds N": record raw tracking data for N seconds as soon as the glasses stream (one live test, no button).
             val recSeconds = i?.getIntExtra("record_seconds", 0) ?: 0

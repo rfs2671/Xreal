@@ -94,5 +94,40 @@ live data, at the recorded speed, and writes every position state and every hand
 `files/replay/TAG-vio.csv` and `TAG-hands.csv`. With `vio_options.txt` and `hand_options.txt`
 this compares settings on identical real motion.
 
-Not yet run: the phone was not reachable over Wi-Fi while this was written. Until it has been,
-nothing in this document is a measured improvement; it is a measured diagnosis.
+## Replay results on the Pixel (17 November 2026)
+
+`tools/pixel/lab.py replay` ran the recording through the trackers on the phone four times, with
+the screen off (a foreground service; the first attempt, from an activity, was frozen by Android
+after 30 s on the locked phone). Every run consumed all 14,363 frames and 234,506 motion reports.
+`tools/tracking/replay_report.py` splits each run into the part on the head (0 to 97 s) and the
+part where the glasses lay on a table (126 to 240 s), where the true position does not change.
+
+| Setting | On the head: points seen by both cameras (median) | On the head: position trusted | On the table: position trusted | On the table: furthest the reported position strayed |
+|---|---|---|---|---|
+| as shipped (epipolar limit 0.005) | 20 | 99 % | 58 % | 0.08 m |
+| limit 0.01 | 36 | 99 % | 100 % | 0.38 m |
+| limit 0.02 | 40 | 99 % | 98 % | 0.86 m |
+| limit 0.01, 4 pyramid levels | 22 | 99 % | 90 % | 5.18 m |
+
+What this says:
+
+- The prediction held: a limit of 0.01 gives 80 % more points seen by both cameras while worn.
+- It bought nothing that can be measured on the head in this recording: trusted time, path
+  length (5.3 to 5.5 m) and distance from the start (0.36 to 0.41 m) are the same in all four
+  runs. There is no ground truth for the worn part, so "the same" is all that can be said.
+- It cost something where the truth is known. With the glasses on a table and a poor view, the
+  shipped limit leaves so few points that position is (rightly) not trusted and is held; the
+  looser limits let enough weak matches through to be trusted, and the position then walks off
+  by 0.4 to 0.9 m in two minutes. A fourth pyramid level is worse still.
+
+Decision: the shipped limit stays. Loosening it is not an improvement on the evidence there is;
+it would need the "is position trustworthy" rule tightened at the same time, and a recording
+with a known path (walk out, come back to the same spot) to show a benefit. No such recording
+exists yet. Nothing about 6DoF was changed in this build.
+
+Hands in the replays: none found in any of the four runs (28,465 hand results), with or
+without the picture brightening and with the quality filter off. As noted above, this
+recording has no hand held up to be tracked, so it cannot say anything about pinches.
+
+Estimator time per frame, median, on the phone during replay: 36 to 40 ms for position, 25 to
+26 ms for hands.

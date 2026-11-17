@@ -5,8 +5,9 @@
   python lab.py pacing  OUT_DIR                                             compositor frame pacing, both modes
   python lab.py restore                                                     remove the test settings, go Home
 
-Needs the phone on Wi-Fi with wireless debugging, awake or asleep (the replay screen shows over the lock screen),
-and the glasses unplugged. Nothing is installed here; use pixel_check.py install first.
+Needs the phone on Wi-Fi with wireless debugging and the glasses unplugged. A replay runs with the screen off and
+the phone locked (a foreground service); the pacing measurement needs the phone unlocked, because the browser
+does not show over the lock screen. Nothing is installed here; use pixel_check.py install first.
 
 replay: for each named run it writes the run's settings to files/vio_options.txt and files/hand_options.txt in the
 app's folder, restarts the app, replays files/recordings/RECORDING_NAME through the trackers at recorded speed

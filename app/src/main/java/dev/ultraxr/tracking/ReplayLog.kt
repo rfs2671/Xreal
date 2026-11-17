@@ -47,6 +47,7 @@ class ReplayLog(dir: File, tag: String) {
             sb.append(String.format(Locale.US, ",%.4f,%.3f,%.3f,%.3f", sqrt(dx * dx + dy * dy + dz * dz), sqrt(wx * wx + wy * wy + wz * wz), wx, wy))
         }
         hands.println(sb)
+        if (handResults % 60 == 0) { hands.flush(); vio.flush() }
     }
 
     @Synchronized fun note(t: Double, text: String) { notes.println(String.format(Locale.US, "%.3f %s", t, text)); notes.flush() }
