@@ -3,8 +3,9 @@
 
 STATUS: FULL STAGED BUILD. On real glasses this file can perform Stage 1, Stage 2 and restore,
 each as its own command with its own typed confirmation, and only on the one pair of glasses
-pinned below. The write code has been tested offline only (simulator); no write has been executed
-on an Air 2 Ultra by its author. Every write is the owner's own decision at the keyboard.
+pinned below. Stage 1 and Stage 2 were each run once on the pinned unit on 2026-11-16 and
+completed (see docs/PIXEL_RESULTS.md); restore has never been run on hardware. Every write is the
+owner's own decision.
 Recovery after a failed or interrupted write is NOT guaranteed and has never been verified on an Ultra.
 
 Stages (each is its own invocation; none starts the next):
@@ -329,10 +330,13 @@ class Session:
         if patched: load_image(patched, PATCHED_SHA, "corrected image"); self.log("  corrected image file: verified " + PATCHED_SHA)
         link = self._open()
         try:
-            info = identify(link)
+            info = identify(link, dp_optional=True)      # read-only: still report id/SOC when the bridge is silent
         finally:
             link.close()
         self.log("  glasses %(glasses_id)s  DP %(dp)r  SOC %(soc)r" % info)
+        if info["dp"] == DP_UNREADABLE:
+            self.log("  WARNING: the DP bridge did not report a version. Stage 1 and Stage 2 will be refused;"
+                     " only --restore accepts this state.")
         self.log("  safety lock: " + ("SET - an earlier write was aborted (%s)" % self.lock.read_text().strip() if self.lock.exists() else "not set"))
         self.log("  hardware writes in this build: " + (", ".join(sorted(HARDWARE_WRITE_STAGES)) + " only" if HARDWARE_WRITE_STAGES else "DISABLED"))
         self.log("  pinned unit: %s / SOC %s -> %s" % (PINNED_GLASSES_ID, PINNED_SOC, "MATCH" if (info["glasses_id"], info["soc"]) == (PINNED_GLASSES_ID, PINNED_SOC) else "NO MATCH (writes will be refused)"))

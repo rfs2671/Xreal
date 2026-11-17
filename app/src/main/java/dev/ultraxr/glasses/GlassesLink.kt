@@ -309,14 +309,17 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
                 stats.mcuWritePath = m.lastWritePath
                 stats.displayModeAtConnect = mode ?: -1
                 stats.note("connect: glasses report " + (mode?.let { McuProtocol.modeName(it) } ?: "no answer") + ", wanted " + McuProtocol.modeName(wantedDisplayMode))
+                listener.onLog("connect: glasses report mode " + (mode?.let { "$it (" + McuProtocol.modeName(it) + ")" } ?: "no answer") + ", wanted $wantedDisplayMode (" + McuProtocol.modeName(wantedDisplayMode) + ")")
                 if (mode != null) {
                     m.command(McuProtocol.CMD_GET_SERIAL)?.let { s -> stats.serial = String(s, Charsets.ISO_8859_1).filter { ch -> ch.code in 0x21..0x7E } }
                     if (mode != wantedDisplayMode) {
                         val ok = m.setDisplayMode(wantedDisplayMode)
                         stats.note("set " + McuProtocol.modeName(wantedDisplayMode) + ": " + if (ok) "accepted" else "REJECTED or no answer")
+                        listener.onLog("connect: mode differs, wrote $wantedDisplayMode: " + if (ok) "accepted" else "rejected or no answer")
                     }
                     stats.displayMode = m.getDisplayMode() ?: mode
                     stats.note("glasses now report " + McuProtocol.modeName(stats.displayMode))
+                    listener.onLog("connect: glasses now report mode ${stats.displayMode}")
                     sbsWaitSeconds = 0
                     readControllerStatus() // read-only fingerprint for the report, after the connection is up
                 } else listener.onLog("display controller did not answer")

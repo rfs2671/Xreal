@@ -290,6 +290,13 @@ class WithImages(unittest.TestCase):
             self.assertEqual(write_frames(dev), [])
             s, _ = self._hw(dev, ["RESTORE G428X00969"]); s.restore(STOCK)
             self.assertEqual(dev.installed, self.stock)
+    def test_stage0_reports_id_and_soc_when_bridge_version_is_unreadable(self):
+        dev = FakeUltra(self.patched); dev.dp = ""; s, log = session(dev, [], self.tmp)
+        info = s.stage0(STOCK, PATCHED)
+        self.assertEqual((info["glasses_id"], info["soc"], info["dp"]), ("G428X00969", "12.1.00.502_20250408", W.DP_UNREADABLE))
+        self.assertTrue(any("WARNING" in line for line in log)); self.assertEqual(write_frames(dev), [])
+        dev.soc = ""                                                                     # id/SOC stay mandatory
+        with self.assertRaises(W.Refused): s.stage0()
     def test_restore_that_does_not_bring_1140_back_stays_locked(self):
         dev = FakeUltra(self.patched); dev.dp = ""; s, _ = self._hw(dev, ["RESTORE G428X00969"])
         with self.assertRaises(W.WriteAborted): s.restore(STOCK)
