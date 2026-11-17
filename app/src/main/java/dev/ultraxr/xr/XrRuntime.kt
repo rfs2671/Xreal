@@ -24,6 +24,7 @@ object XrRuntime {
 
     /** Starts an OpenXR app with tracking kept alive behind it. */
     fun launch(c: Context, info: ResolveInfo) {
+        Tracking.stereoWant("game", true)   // kept until the application leaves (XrHost) or the launcher takes over again
         TrackingService.start(c)
         XrHost.openShell()
         val i = Intent(Intent.ACTION_MAIN).addCategory(CATEGORY_IMMERSIVE).setClassName(info.activityInfo.packageName, info.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

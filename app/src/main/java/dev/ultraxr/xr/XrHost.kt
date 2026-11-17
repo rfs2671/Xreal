@@ -35,6 +35,8 @@ object XrHost : OpenXrGlassesLayer.Host {
     @Volatile private var feeding = false
     private var holdsTracking = false
     @Volatile var applicationConnected = false; private set
+    /** Whether the glasses were in a 3D mode when the runtime was configured for the running application. */
+    @Volatile var stereoAtStart = false; private set
     @Volatile var lastEvent = "no OpenXR application has connected yet"; private set
 
     fun init(context: Context) {
@@ -122,9 +124,15 @@ object XrHost : OpenXrGlassesLayer.Host {
         if (d != null) {
             val m = d.mode
             val sideBySide = m.physicalWidth >= m.physicalHeight * 3
+            // Half-width 3D: the picture is 1920x1080 and the glasses stretch each half over one eye.
+            // The runtime draws the left eye into the left half either way, so each eye's view is
+            // 960x1080 with that eye's whole field of view.
+            val half = !sideBySide && Tracking.halfStereoActive
+            stereoAtStart = sideBySide || half
             UltraXrFeed.configureDisplay(m.physicalWidth, m.physicalHeight, m.refreshRate, tanH, tanV)
-            if (sideBySide) UltraXrFeed.configureEyes(s.ipdMm / 1000f, XrRenderer.VIRTUAL_SCREEN_M.toFloat()) else UltraXrFeed.configureEyes(0f, 0f)
-            lastEvent = "runtime configured for ${m.physicalWidth}x${m.physicalHeight}@" + dev.ultraxr.core.Fmt.f(m.refreshRate, 0) + if (sideBySide) "" else " (not side-by-side)"
+            if (stereoAtStart) UltraXrFeed.configureEyes(s.ipdMm / 1000f, XrRenderer.VIRTUAL_SCREEN_M.toFloat()) else UltraXrFeed.configureEyes(0f, 0f)
+            lastEvent = "runtime configured for ${m.physicalWidth}x${m.physicalHeight}@" + dev.ultraxr.core.Fmt.f(m.refreshRate, 0) +
+                (if (sideBySide) ", side-by-side 3D" else if (half) ", half-width 3D, eyes " + s.ipdMm.toInt() + " mm apart" else ", glasses in 2D: both eyes see both halves (not playable)")
         } else {
             // No glasses display: the application shows Monado's side-by-side picture on the phone.
             UltraXrFeed.configureDisplay(3840, 1080, 60f, tanH, tanV)
@@ -157,6 +165,7 @@ object XrHost : OpenXrGlassesLayer.Host {
         Tracking.log("OpenXR: $lastEvent")
         try { wake?.release() } catch (_: Throwable) {}
         wake = null
+        Tracking.stereoWant("game", false)
         closeShell()
         if (holdsTracking) { Tracking.release(); holdsTracking = false }
     }

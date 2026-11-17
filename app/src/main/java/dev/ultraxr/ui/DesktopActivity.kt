@@ -100,8 +100,8 @@ class DesktopActivity : Activity() {
 
     // 3D is only asked for while the desktop is on screen: anything else Android shows on the
     // glasses (its own mirror of the phone) is a flat picture and needs them in 2D.
-    override fun onStart() { super.onStart(); Tracking.link?.stereo?.want(session.depth3d) }
-    override fun onStop() { Tracking.link?.stereo?.want(false); super.onStop() }
+    override fun onStart() { super.onStart(); Tracking.stereoWant("desktop", session.depth3d) }
+    override fun onStop() { Tracking.stereoWant("desktop", false); super.onStop() }
 
     override fun onResume() {
         super.onResume()
@@ -282,7 +282,7 @@ class DesktopActivity : Activity() {
         box("Dark pages (easier on see-through glasses; applies to new windows)", session.darkPages) { session.darkPages = it }
         box("Use position tracking (experimental; off = rotation only)", session.usePosition) { session.usePosition = it }
         box("3D depth (each eye gets half the sharpness across; returns to 2D by itself if the link fails)", session.depth3d) {
-            session.depth3d = it; Tracking.link?.stereo?.let { s -> s.reset(); s.want(it) }
+            session.depth3d = it; Tracking.link?.stereo?.reset(); Tracking.stereoWant("desktop", it)
         }
         box("Swap left and right eye (if depth looks inside out)", session.swapEyes) { session.swapEyes = it }
         col.add(small("Recenter view") { session.recenter() }, topDp = 12)

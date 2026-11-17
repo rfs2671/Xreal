@@ -170,6 +170,20 @@ object Tracking : GlassesLink.Listener {
 
     fun recenter() { head.recenter(); log("recenter") }
 
+    /**
+     * Who wants the glasses in half-width 3D right now ("desktop", "game"). 3D is asked for while
+     * anyone does and the glasses go back to 2D when nobody does; the attempts and the fallback are
+     * the stereo switch's (GlassesLink.stereo).
+     */
+    private val stereoWanters = HashSet<String>()
+    @Synchronized fun stereoWant(who: String, on: Boolean) {
+        if (on) stereoWanters.add(who) else stereoWanters.remove(who)
+        link?.stereo?.want(stereoWanters.isNotEmpty())
+    }
+    /** True while the glasses are showing half-width 3D (or a test build pretends they are). */
+    @Volatile var forceHalfStereo = false
+    val halfStereoActive: Boolean get() = forceHalfStereo || link?.stereo?.state == dev.ultraxr.glasses.StereoSwitch.State.ACTIVE
+
     private val trackerLock = Object()
     private var activeFactoryJson: String? = null
 

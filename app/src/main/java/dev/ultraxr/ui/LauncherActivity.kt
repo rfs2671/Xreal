@@ -55,6 +55,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
 
     /** "am start ... --ez desktop true [--ez automation true]" opens the desktop directly (used by UI automation). */
     private fun openDesktopIfAsked(i: Intent?) {
+        // Test builds: treat the attached display as glasses in half-width 3D (used on an emulator).
+        if (i?.hasExtra("force_half_stereo") == true && applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) Tracking.forceHalfStereo = i.getBooleanExtra("force_half_stereo", false)
         if (i?.getBooleanExtra("desktop", false) != true) return
         startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_AUTOMATION, i.getBooleanExtra(DesktopActivity.EXTRA_AUTOMATION, false))
             .putExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, i.getBooleanExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, false)))
@@ -64,7 +66,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         super.onResume()
         // Coming back from a game: the launcher owns tracking again.
         if (TrackingService.running) TrackingService.stop(this)
-        if (!dev.ultraxr.xr.XrHost.applicationConnected) dev.ultraxr.xr.XrHost.closeShell()
+        if (!dev.ultraxr.xr.XrHost.applicationConnected) { dev.ultraxr.xr.XrHost.closeShell(); if (!startingGame) Tracking.stereoWant("game", false) }
         Tracking.addObserver(this)
         stage?.start()
         home.reanchor()
@@ -150,6 +152,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         // One banner at a time, most blocking first.
         val cameraDenied = checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
         when {
+            startingGame || gameNote -> {}   // the game banner stays until it is answered
             cameraDenied -> showBanner("Ultra XR needs the camera permission. Android requires it before an app may use the glasses' tracking cameras.", "Allow") { requestPermissions(arrayOf(Manifest.permission.CAMERA), 1) }
             s.link == GlassesLink.State.NEED_PERMISSION && s.linkDetail.startsWith("USB") -> showBanner("Ultra XR needs USB access to the glasses to read their cameras and motion sensor.", "Allow") { Tracking.link?.retry() }
             s.link == GlassesLink.State.STREAMING && s.linkDetail.isNotEmpty() -> showBanner("${s.linkDetail}. Games still work, without position tracking or hands. Run the check for details.", "Run check") { startActivity(Intent(this, CheckActivity::class.java)) }
@@ -177,6 +180,42 @@ class LauncherActivity : Activity(), Tracking.Observer {
         for (app in apps) appsList.add(appCard(app), topDp = 8)
     }
 
+    private var startingGame = false
+    private var gameNote = false
+
+    /**
+     * Starts a game. A game draws one picture per eye, so with glasses attached they must be in 3D
+     * before it starts (switching afterwards would take the game's picture away): ask for 3D, wait
+     * for it to hold, then launch. If 3D cannot be had, say so instead of showing a doubled picture.
+     */
+    private fun play(info: ResolveInfo) {
+        if (startingGame) return
+        gameNote = false
+        val link = Tracking.link
+        val glasses = link?.state == GlassesLink.State.STREAMING
+        if (!glasses || Tracking.halfStereoActive || dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(this)) { stage?.stop(); XrRuntime.launch(this, info); return }
+        startingGame = true
+        link!!.stereo.reset()
+        Tracking.stereoWant("game", true)
+        val label = info.loadLabel(packageManager)
+        val started = android.os.SystemClock.uptimeMillis()
+        val wait = object : Runnable {
+            override fun run() {
+                val sw = link.stereo
+                when {
+                    isFinishing || isDestroyed -> { startingGame = false; Tracking.stereoWant("game", false) }
+                    Tracking.halfStereoActive -> { startingGame = false; banner.visibility = View.GONE; stage?.stop(); XrRuntime.launch(this@LauncherActivity, info) }
+                    sw.state == dev.ultraxr.glasses.StereoSwitch.State.GAVE_UP || android.os.SystemClock.uptimeMillis() - started > 90_000 -> {
+                        startingGame = false; gameNote = true; Tracking.stereoWant("game", false)
+                        showBanner("3D could not be started (" + sw.lastReason.ifEmpty { "no answer from the glasses" } + "). $label needs it: in 2D both eyes would see both halves of its picture.", "Try again") { play(info) }
+                    }
+                    else -> { showBanner("Starting 3D for $label (try ${sw.attempts.coerceAtLeast(1)} of 3). The picture blanks for a few seconds.", "Cancel") { startingGame = false; Tracking.stereoWant("game", false); banner.visibility = View.GONE; ui.removeCallbacks(this) }; ui.postDelayed(this, 500) }
+                }
+            }
+        }
+        ui.post(wait)
+    }
+
     private fun appCard(info: ResolveInfo): View {
         val row = Ui.row(this)
         row.background = Ui.pressable(this, Ui.rounded(Ui.SURFACE, 20f, this))
@@ -188,7 +227,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         row.add(col, 0, weight = 1f, startDp = 14)
         row.add(Ui.text(this, "Play", 14f, Ui.ACCENT, bold = true).apply { gravity = Gravity.END }, ViewGroup.LayoutParams.WRAP_CONTENT)
         row.isClickable = true
-        row.setOnClickListener { stage?.stop(); XrRuntime.launch(this, info) }
+        row.setOnClickListener { play(info) }
         return row
     }
 }
