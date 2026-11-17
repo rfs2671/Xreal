@@ -18,6 +18,18 @@
     "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses."
   },
   {
+    "name": "Hand tracking showcase (A-Frame)",
+    "url": "https://aframe.io/aframe/examples/showcase/hand-tracking/",
+    "needs": "Hands with finger joints: touch and pinch things",
+    "status": "Emulator: VR session, both eyes, head motion, both hands with joints and pinches reached the page. Its bright background will hide the room. Not tried on the glasses."
+  },
+  {
+    "name": "Moon Rider (rhythm game)",
+    "url": "https://moonrider.xyz/",
+    "needs": "Made for two hand controllers; hands arrive as pointers with pinch",
+    "status": "Emulator: session starts with both eyes, head motion and both hands. Whether it can be played with hands instead of controllers is unknown."
+  },
+  {
     "name": "Hand cubes (three.js)",
     "url": "https://threejs.org/examples/webxr_vr_handinput_cubes.html",
     "needs": "Hands with finger joints, as a required feature",

@@ -88,7 +88,14 @@ then reads what the page's session was given.
 | three.js XR dragging (pick shapes up with a ray) | `immersive-ar`, additive, 1764 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 12 selects |
 | three.js XR ball shooter (physics) | `immersive-ar`, additive, 1626 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 11 selects |
 | three.js AR cones (place objects) | `immersive-ar`, additive, 1812 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 12 selects |
+| A-Frame hand tracking showcase | `immersive-vr` (hand tracking asked for as optional), 1739 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 12 selects |
+| Moon Rider (a rhythm game, moonrider.xyz) | `immersive-ar`, additive, 1754 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 12 selects. The game is made for two controllers; not played |
+| A-Frame Anime UI | `immersive-vr`, 1639 frames, two views, head yaw 0.5 rad, two hands, 12 selects |
 | three.js hand input cubes | Refused: the page *requires* `hand-tracking`, and this engine does not grant that feature (it still delivers joints to pages that ask for it as optional) |
+
+VR pages report the blend mode `additive` too, which is right for see-through glasses: a VR scene is
+drawn as light over the room, black stays transparent, and a scene with a bright sky hides the room
+and will be glaring.
 
 "Ran" here means the session, the two eye views, the moving head pose, the hands and the pinches all
 reached the page. Nobody played these, and the simulated hands do not aim at anything, so whether
