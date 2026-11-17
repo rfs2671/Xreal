@@ -45,10 +45,19 @@ class LauncherActivity : Activity(), Tracking.Observer {
         Ui.edgeToEdge(this)
         Tracking.acquire(this)
         build()
+        openDesktopIfAsked(intent)
         stage = GlassesStage(this, null, home)
     }
 
     override fun onDestroy() { Tracking.release(); super.onDestroy() }
+
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); openDesktopIfAsked(intent) }
+
+    /** "am start ... --ez desktop true [--ez automation true]" opens the desktop directly (used by UI automation). */
+    private fun openDesktopIfAsked(i: Intent?) {
+        if (i?.getBooleanExtra("desktop", false) != true) return
+        startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_AUTOMATION, i.getBooleanExtra(DesktopActivity.EXTRA_AUTOMATION, false)))
+    }
 
     override fun onResume() {
         super.onResume()
@@ -67,6 +76,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
     }
 
     override fun onPause() {
+        // Still visible here, so Android allows the foreground service to start.
+        Tracking.keepAliveInBackground(this)
         ui.removeCallbacks(tick)
         Tracking.removeObserver(this)
         stage?.stop()
@@ -100,6 +111,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         bestText = Ui.text(this, "", 13f, Ui.MUTED)
         hero.add(bestText, topDp = 10)
         hero.add(Ui.button(this, "Play", primary = true) { startActivity(Intent(this, PlayActivity::class.java)) }, topDp = 16)
+        hero.add(Ui.button(this, "Spatial desktop") { startActivity(Intent(this, DesktopActivity::class.java)) }, topDp = 10)
         root.add(hero, topDp = 18)
 
         root.add(Ui.text(this, "Your XR apps", 18f, bold = true), topDp = 28)

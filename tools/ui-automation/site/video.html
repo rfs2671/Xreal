@@ -1,0 +1,4 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>video-loading</title>
+<style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%}</style></head>
+<body><video id="v" muted autoplay loop playsinline src="clip.mp4"></video>
+<script>var v=document.getElementById('v');var t=setInterval(function(){if(v.readyState>=2&&!v.paused&&v.currentTime>=3){document.title='video-playing-3';clearInterval(t);}},250);</script></body></html>

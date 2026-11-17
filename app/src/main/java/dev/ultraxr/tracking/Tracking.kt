@@ -136,6 +136,16 @@ object Tracking : GlassesLink.Listener {
         link?.stop()
     }
 
+    /**
+     * Called when an activity of this app leaves the foreground. A background app's threads are
+     * throttled (measured: about 8 estimator states a second instead of 30, a reset every 4 to 10 s),
+     * so while the glasses are streaming the tracking service keeps the process in the
+     * foreground-service state. The launcher stops the service again when it returns.
+     */
+    fun keepAliveInBackground(c: Context) {
+        if (link?.state == GlassesLink.State.STREAMING && !TrackingService.running) TrackingService.start(c.applicationContext)
+    }
+
     /** The glasses display mode the settings ask for. */
     fun wantedMode(): Int = when {
         !settings.use3d -> McuProtocol.MODE_2D_60
@@ -185,6 +195,8 @@ object Tracking : GlassesLink.Listener {
             }
             activeFactoryJson = factoryJson
             log("calibration: $calibrationSource")
+            // The exact calibration handed to the estimator, for offline analysis of captures.
+            try { java.io.File(appContext?.getExternalFilesDir(null), "basalt_calib.json").writeText(calib) } catch (_: Exception) {}
             parseRig(calib)
             val h = Native.vioCreate(calib, config)
             if (h == 0L) { vioError = Native.lastError(); log("6DoF init failed: $vioError") }
@@ -272,6 +284,8 @@ object Tracking : GlassesLink.Listener {
 
     override fun onState(state: GlassesLink.State, detail: String) {
         log("glasses: $state $detail")
+        // Glasses unplugged while only the keep-alive service holds tracking: nothing left to keep alive.
+        if (state == GlassesLink.State.NO_GLASSES && TrackingService.running && !dev.ultraxr.xr.XrHost.applicationConnected) appContext?.let { TrackingService.stop(it) }
         if (state == GlassesLink.State.STREAMING) link?.stats?.configJson?.let { json -> applyFactoryConfig(json); appContext?.let { if (Native.loaded) onFactoryConfig(it, json) } }
         notifyObservers()
     }
