@@ -85,6 +85,12 @@ object UltraXrFeed {
     fun configureEyes(ipdM: Float, virtualScreenDistanceM: Float) =
         PocketFeed.nativeConfigureEyes(ipdM, if (virtualScreenDistanceM > 0f) (ipdM / 2f) / virtualScreenDistanceM else 0f)
 
+    /**
+     * Before the runtime starts: true when the glasses show one picture to both eyes (a 2D mode). Both views then
+     * cover the whole picture from the head's centre, so the two eye pictures are never shown side by side.
+     */
+    fun configureSingleView(single: Boolean) = PocketFeed.nativeConfigureSingleView(single)
+
     /** The display's newest real vblank and measured period; a period of 0 gives Monado's pacer its own clock back. */
     fun vblank(lastVblankNs: Long, periodNs: Long) = PocketFeed.nativeVblank(lastVblankNs, periodNs)
 

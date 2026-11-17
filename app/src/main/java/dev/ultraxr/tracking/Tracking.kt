@@ -182,6 +182,8 @@ object Tracking : GlassesLink.Listener {
     }
     /** True while the glasses are showing half-width 3D (or a test build pretends they are). */
     @Volatile var forceHalfStereo = false
+    /** Test builds on an emulator: feed the runtime a made-up head and hands (xr/SimWearer) instead of real tracking. */
+    @Volatile var simulateWearer = false
     val halfStereoActive: Boolean get() = forceHalfStereo || link?.stereo?.state == dev.ultraxr.glasses.StereoSwitch.State.ACTIVE
 
     private val trackerLock = Object()

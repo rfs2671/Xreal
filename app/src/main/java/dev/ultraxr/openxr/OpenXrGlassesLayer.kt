@@ -56,6 +56,9 @@ object OpenXrGlassesLayer {
 
     @Volatile var host: Host? = null
 
+    /** The package of the application that last connected to the runtime ("" if unknown). */
+    @Volatile var clientPackage: String = ""
+
     private val main = Handler(Looper.getMainLooper())
     private var layer: View? = null
     private var layerManager: WindowManager? = null

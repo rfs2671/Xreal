@@ -3,6 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// -Pemu builds the variant for an x86-64 emulator: the OpenXR runtime only (src/emu/jniLibs), without the
+// arm64 tracking libraries, so the runtime, a browser and a simulated wearer can be tested with no glasses.
+val emu = project.hasProperty("emu")
+
 android {
     namespace = "dev.ultraxr"
     compileSdk = 35
@@ -14,11 +18,12 @@ android {
         targetSdk = 35
         versionCode = 7
         versionName = "0.5.1"
-        ndk { abiFilters += listOf("arm64-v8a") }
+        ndk { abiFilters += listOf(if (emu) "x86_64" else "arm64-v8a") }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
+        if (!emu) externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }
-    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
+    if (!emu) externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
+    if (emu) sourceSets { getByName("main") { jniLibs.srcDir("src/emu/jniLibs") } }
     signingConfigs {
         // A fixed debug key kept in the repo so every build installs over the previous one.
         getByName("debug") {

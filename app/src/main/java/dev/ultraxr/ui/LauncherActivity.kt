@@ -56,7 +56,12 @@ class LauncherActivity : Activity(), Tracking.Observer {
     /** "am start ... --ez desktop true [--ez automation true]" opens the desktop directly (used by UI automation). */
     private fun openDesktopIfAsked(i: Intent?) {
         // Test builds: treat the attached display as glasses in half-width 3D (used on an emulator).
-        if (i?.hasExtra("force_half_stereo") == true && applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) Tracking.forceHalfStereo = i.getBooleanExtra("force_half_stereo", false)
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            if (i?.hasExtra("force_half_stereo") == true) Tracking.forceHalfStereo = i.getBooleanExtra("force_half_stereo", false)
+            if (i?.hasExtra("sim_wearer") == true) Tracking.simulateWearer = i.getBooleanExtra("sim_wearer", false)
+            if (i?.getBooleanExtra("dump_egl", false) == true) dumpEglConfigs()
+            if (i?.getBooleanExtra("test_site", false) == true) dev.ultraxr.xr.TestSiteServer.start(applicationContext)
+        }
         if (i?.getBooleanExtra("desktop", false) != true) return
         startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_AUTOMATION, i.getBooleanExtra(DesktopActivity.EXTRA_AUTOMATION, false))
             .putExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, i.getBooleanExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, false)))
@@ -180,6 +185,24 @@ class LauncherActivity : Activity(), Tracking.Observer {
         for (app in apps) appsList.add(appCard(app), topDp = 8)
     }
 
+    /** Test builds: lists the display's EGL configurations in the log (what a browser or game can choose from). */
+    private fun dumpEglConfigs() {
+        val d = android.opengl.EGL14.eglGetDisplay(android.opengl.EGL14.EGL_DEFAULT_DISPLAY)
+        val v = IntArray(2); android.opengl.EGL14.eglInitialize(d, v, 0, v, 1)
+        val cfg = arrayOfNulls<android.opengl.EGLConfig>(1024); val n = IntArray(1)
+        android.opengl.EGL14.eglGetConfigs(d, cfg, 0, 1024, n, 0)
+        val seen = HashMap<String, Int>()
+        for (k in 0 until n[0]) {
+            fun a(attr: Int): Int { val o = IntArray(1); android.opengl.EGL14.eglGetConfigAttrib(d, cfg[k], attr, o, 0); return o[0] }
+            val key = "rgba " + a(android.opengl.EGL14.EGL_RED_SIZE) + a(android.opengl.EGL14.EGL_GREEN_SIZE) + a(android.opengl.EGL14.EGL_BLUE_SIZE) + a(android.opengl.EGL14.EGL_ALPHA_SIZE) +
+                " depth " + a(android.opengl.EGL14.EGL_DEPTH_SIZE) + " stencil " + a(android.opengl.EGL14.EGL_STENCIL_SIZE) + " samples " + a(android.opengl.EGL14.EGL_SAMPLES) +
+                " renderable 0x" + Integer.toHexString(a(android.opengl.EGL14.EGL_RENDERABLE_TYPE)) + " surface 0x" + Integer.toHexString(a(android.opengl.EGL14.EGL_SURFACE_TYPE))
+            seen[key] = (seen[key] ?: 0) + 1
+        }
+        Tracking.log("EGL " + v[0] + "." + v[1] + ": " + n[0] + " configurations")
+        for ((k, c) in seen.toSortedMap()) Tracking.log("EGL config x$c: $k")
+    }
+
     private var startingGame = false
     private var gameNote = false
 
@@ -206,8 +229,10 @@ class LauncherActivity : Activity(), Tracking.Observer {
                     isFinishing || isDestroyed -> { startingGame = false; Tracking.stereoWant("game", false) }
                     Tracking.halfStereoActive -> { startingGame = false; banner.visibility = View.GONE; stage?.stop(); XrRuntime.launch(this@LauncherActivity, info) }
                     sw.state == dev.ultraxr.glasses.StereoSwitch.State.GAVE_UP || android.os.SystemClock.uptimeMillis() - started > 90_000 -> {
+                        // 3D could not be had: the glasses are back in 2D and the game gets one picture for both eyes.
                         startingGame = false; gameNote = true; Tracking.stereoWant("game", false)
-                        showBanner("3D could not be started (" + sw.lastReason.ifEmpty { "no answer from the glasses" } + "). $label needs it: in 2D both eyes would see both halves of its picture.", "Try again") { play(info) }
+                        showBanner("3D could not be started (" + sw.lastReason.ifEmpty { "no answer from the glasses" } + "), so $label is shown in 2D: one picture for both eyes, without depth.", "Try 3D again") { play(info) }
+                        stage?.stop(); XrRuntime.launch(this@LauncherActivity, info, wantStereo = false)
                     }
                     else -> { showBanner("Starting 3D for $label (try ${sw.attempts.coerceAtLeast(1)} of 3). The picture blanks for a few seconds.", "Cancel") { startingGame = false; Tracking.stereoWant("game", false); banner.visibility = View.GONE; ui.removeCallbacks(this) }; ui.postDelayed(this, 500) }
                 }

@@ -46,7 +46,7 @@ def main():
     check("the sample finds Ultra XR through the standard runtime broker", "Got runtime: package: dev.ultraxr" in l)
     check("the runtime starts with a head, two controllers and hand tracking", "Ultra XR hands" in l and "Pocket XR left controller" in l and "head: Pocket XR glasses" in l)
     check("it is configured for half-width 3D on the 1920x1080 display", "runtime configured for 1920x1080@60, half-width 3D" in l)
-    check("the application's picture goes to the glasses' display", "an OpenXR application connected and owns the glasses" in l and "the application's surface is 1920x1080" in l)
+    check("the application's picture goes to the glasses' display", "an OpenXR application connected (" + HELLO + ", hands as joints and controllers) and owns the glasses" in l and "the application's surface is 1920x1080" in l)
     check("each eye is offered a 960x1080 view (rendered at 140%)", "view 0 with dimensions Width=1344 Height=1512" in l and "view 1 with dimensions Width=1344 Height=1512" in l)
     check("the session reaches FOCUSED", focused)
     time.sleep(4)

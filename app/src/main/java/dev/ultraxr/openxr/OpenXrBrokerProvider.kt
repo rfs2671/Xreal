@@ -52,8 +52,9 @@ class OpenXrBrokerProvider : ContentProvider() {
 
         val columns = projection ?: arrayOf(ID, PACKAGE_NAME, NATIVE_LIB_DIR, SO_FILENAME, HAS_FUNCTIONS)
         val cursor = MatrixCursor(columns)
-        // Only what was built: OpenXR 1.x, arm64-v8a. Anything else gets an empty table ("no active runtime").
-        if (major != OPENXR_MAJOR || abi != ABI) return cursor
+        // Only what was built: OpenXR 1.x, and the one ABI this install runs as (arm64-v8a on a phone; x86_64 in the
+        // emulator test build). Anything else gets an empty table ("no active runtime").
+        if (major != OPENXR_MAJOR || abi != android.os.Build.SUPPORTED_ABIS.firstOrNull { File(context!!.applicationInfo.nativeLibraryDir ?: "", SO_FILENAME_VALUE).exists() && context!!.applicationInfo.nativeLibraryDir.orEmpty().endsWith(abiDirName(it)) }) return cursor
         if (match == ACTIVE_ROW && segments.last() != "0") return cursor
         val libDir = nativeLibDir(abi) ?: return cursor
 
@@ -95,10 +96,12 @@ class OpenXrBrokerProvider : ContentProvider() {
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<String>?): Int = 0
 
+    /** The name Android gives the library directory of an ABI (lib/arm64, lib/x86_64). */
+    private fun abiDirName(abi: String) = when (abi) { "arm64-v8a" -> "arm64"; "armeabi-v7a" -> "arm"; else -> abi }
+
     private companion object {
         const val AUTHORITY = "org.khronos.openxr.runtime_broker"
         const val OPENXR_MAJOR = 1
-        const val ABI = "arm64-v8a"
         const val SO_FILENAME_VALUE = "libopenxr_monado.so"
 
         const val ID = "_id"

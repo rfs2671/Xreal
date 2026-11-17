@@ -1,5 +1,8 @@
 # Ultra XR as a gaming system: where it stands
 
+**The primary goal is now WebXR mixed-reality games in a browser: see WEBXR.md.** The OpenXR runtime
+described here is the layer under it. Quest APK compatibility is out of scope.
+
 The goal: wear the glasses, plug them into the Pixel, start a compatible VR game, look and move
 around, and use hands or controllers. This page says, phase by phase, what exists, what was
 measured, and what is not done. Nothing here is claimed for the real glasses unless it says so.
@@ -41,9 +44,9 @@ measured, and what is not done. Nothing here is claimed for the real glasses unl
 Not done: any of this on the Pixel (it was not reachable over Wi-Fi debugging), and anything on
 the glasses. The emulator translates arm64 code, so its frame timing says nothing about the phone.
 
-Known gap: when the glasses stay in 2D there is no single-view output for games. That needs a
-change inside Monado's compositor and a rebuild of the runtime (Linux build; Docker is available
-on this machine).
+When the glasses stay in 2D the runtime now draws one picture for both eyes (patch 0004), and the
+launcher starts the game that way after 3D fails. The runtime is rebuilt on this Windows machine
+with the Android NDK; no Linux is needed.
 
 ## Phase 2: 6DoF head tracking
 

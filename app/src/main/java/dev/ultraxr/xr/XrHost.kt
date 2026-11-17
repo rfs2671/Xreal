@@ -35,6 +35,19 @@ object XrHost : OpenXrGlassesLayer.Host {
     @Volatile private var feeding = false
     private var holdsTracking = false
     @Volatile var applicationConnected = false; private set
+
+    /**
+     * How hands are given to the running application. A browser gets the hand joints only: it turns a pinch into
+     * a click and a WebXR "select" itself, and passes the joints on to pages. With Touch-shaped controllers
+     * present as well, it uses those and hides the hands from pages. Other applications get both, because games
+     * written for controllers need the controllers.
+     */
+    val handsOnly: Boolean get() = when (Tracking.settings.xrInput) {
+        "hands" -> true
+        "controllers" -> false
+        else -> BROWSERS.any { OpenXrGlassesLayer.clientPackage.startsWith(it) }
+    }
+    private val BROWSERS = listOf("com.igalia.wolvic")
     /** Whether the glasses were in a 3D mode when the runtime was configured for the running application. */
     @Volatile var stereoAtStart = false; private set
     @Volatile var lastEvent = "no OpenXR application has connected yet"; private set
@@ -130,11 +143,15 @@ object XrHost : OpenXrGlassesLayer.Host {
             val half = !sideBySide && Tracking.halfStereoActive
             stereoAtStart = sideBySide || half
             UltraXrFeed.configureDisplay(m.physicalWidth, m.physicalHeight, m.refreshRate, tanH, tanV)
+            // In 2D the glasses show the whole picture to both eyes: the runtime then draws one view over all of
+            // it. The two eye pictures are never put side by side in front of both eyes.
+            UltraXrFeed.configureSingleView(!stereoAtStart)
             if (stereoAtStart) UltraXrFeed.configureEyes(s.ipdMm / 1000f, XrRenderer.VIRTUAL_SCREEN_M.toFloat()) else UltraXrFeed.configureEyes(0f, 0f)
             lastEvent = "runtime configured for ${m.physicalWidth}x${m.physicalHeight}@" + dev.ultraxr.core.Fmt.f(m.refreshRate, 0) +
-                (if (sideBySide) ", side-by-side 3D" else if (half) ", half-width 3D, eyes " + s.ipdMm.toInt() + " mm apart" else ", glasses in 2D: both eyes see both halves (not playable)")
+                (if (sideBySide) ", side-by-side 3D" else if (half) ", half-width 3D, eyes " + s.ipdMm.toInt() + " mm apart" else ", glasses in 2D: one picture for both eyes, no depth")
         } else {
             // No glasses display: the application shows Monado's side-by-side picture on the phone.
+            UltraXrFeed.configureSingleView(false)
             UltraXrFeed.configureDisplay(3840, 1080, 60f, tanH, tanV)
             UltraXrFeed.configureEyes(s.ipdMm / 1000f, 0f)
             lastEvent = "runtime configured without a glasses display"
@@ -147,7 +164,7 @@ object XrHost : OpenXrGlassesLayer.Host {
 
     override fun onApplicationConnected(onGlasses: Boolean) {
         applicationConnected = true
-        lastEvent = "an OpenXR application connected" + if (onGlasses) " and owns the glasses" else " (drawing on the phone: no glasses window)"
+        lastEvent = "an OpenXR application connected (" + OpenXrGlassesLayer.clientPackage.ifEmpty { "unknown" } + (if (handsOnly) ", hands as joints only" else ", hands as joints and controllers") + ")" + if (onGlasses) " and owns the glasses" else " (drawing on the phone: no glasses window)"
         Tracking.log("OpenXR: $lastEvent")
         Tracking.recenter()
         try {
@@ -179,6 +196,13 @@ object XrHost : OpenXrGlassesLayer.Host {
         val joints = FloatArray(UltraXrFeed.HAND_FLOATS)
         while (feeding) {
             try { Thread.sleep(3) } catch (_: InterruptedException) {}
+            if (Tracking.simulateWearer) {   // test builds on an emulator: a made-up head and hands
+                val now = System.nanoTime()
+                val hands = now - lastHandNs > 33_000_000L
+                SimWearer.feed(now, hands, controllers = !handsOnly); if (hands) lastHandNs = now
+                if (!recentred) recentred = UltraXrFeed.recenter()
+                continue
+            }
             val head = Tracking.head
             val t = head.latestImuNs
             if (t == 0L) continue
@@ -208,7 +232,7 @@ object XrHost : OpenXrGlassesLayer.Host {
                 }
                 UltraXrFeed.hand(side, hand.timestampNs, joints, true)
                 val st = states.firstOrNull { it.isRight == (side == 1) } ?: continue
-                feedController(side, hand, st, poses, pressed)
+                if (!handsOnly) feedController(side, hand, st, poses, pressed)
             }
         }
     }

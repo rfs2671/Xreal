@@ -65,7 +65,12 @@ class OpenXrRuntimeService : Service() {
      * (comp_window_android.c, comp_window_android_init_swapchain).
      */
     private class UltraMonado(context: Context) : MonadoImpl(context) {
-        override fun canDrawOverOtherApps(): Boolean = OpenXrGlassesLayer.canShow()
+        private val packages = context.packageManager
+        override fun canDrawOverOtherApps(): Boolean {
+            // The first thing an application asks over Binder: note who it is, so the host can feed it suitably.
+            OpenXrGlassesLayer.clientPackage = runCatching { packages.getNameForUid(android.os.Binder.getCallingUid()) }.getOrNull() ?: ""
+            return OpenXrGlassesLayer.canShow()
+        }
     }
 
     private companion object {

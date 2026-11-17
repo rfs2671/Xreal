@@ -23,8 +23,10 @@ object XrRuntime {
     fun statusLine(c: Context): String = (if (available) "Runtime packaged and loaded" else "Runtime unavailable") + ": $detail; ${installedApps(c).size} OpenXR app(s) installed; ${XrHost.lastEvent}"
 
     /** Starts an OpenXR app with tracking kept alive behind it. */
-    fun launch(c: Context, info: ResolveInfo) {
-        Tracking.stereoWant("game", true)   // kept until the application leaves (XrHost) or the launcher takes over again
+    fun launch(c: Context, info: ResolveInfo, wantStereo: Boolean = true) {
+        // 3D is kept until the application leaves (XrHost) or the launcher takes over again. After a failed
+        // switch it is not asked for again behind a running application: the glasses stay in 2D.
+        Tracking.stereoWant("game", wantStereo)
         TrackingService.start(c)
         XrHost.openShell()
         val i = Intent(Intent.ACTION_MAIN).addCategory(CATEGORY_IMMERSIVE).setClassName(info.activityInfo.packageName, info.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

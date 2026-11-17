@@ -546,3 +546,21 @@ Read in source, not run (needs a phone):
   server side only.
 - Pacing, latency, heat, and whether the default field of view and screen distance are right for the Air 2 Ultra.
 - `OpenXrBrokerProvider` and the service have never answered a real query.
+
+## 13. Patch 0004 and the rebuild of 17 November 2026
+
+`patches/0004-ultraxr-additive-blend-single-view.patch` (apply after 0001 to 0003): additive blend mode, single-view
+mode (`nativeConfigureSingleView`), runtime classes loaded with the boot class loader as parent, an off-screen surface
+when EGL has no surfaceless contexts, `XR_EXT_hand_interaction` not advertised, and a controller that is not fed
+reported as absent. Why each was needed: docs/WEBXR.md.
+
+Built on Windows with the Android SDK already installed (NDK 27.2.12479018, CMake 3.22.1), `glslangValidator` from the
+Khronos glslang release, and Monado's own Gradle wrapper:
+
+    gradlew.bat -Pandroid.injected.build.abi=<arm64-v8a|x86_64> -PxrtAndroidPackage=dev.ultraxr \n      -PxrtNdkVersion=27.2.12479018 :src:xrt:targets:openxr_android:externalNativeBuildOutOfProcessRelease \n      :src:xrt:ipc:assembleRelease :src:xrt:auxiliary:assembleRelease
+
+One ABI per run. A changed CMake argument makes a new build folder: delete `.cxx` and `build/intermediates/cxx` under
+`src/xrt/targets/openxr_android` first, or the old folder's libraries are picked up. The arm64 libraries are in
+`app/src/main/jniLibs`, the x86-64 ones (for the emulator build, `-Pemu`) in `app/src/emu/jniLibs`. Section 8 is out
+of date: an x86-64 emulator image with arm translation runs the arm64 runtime, and the x86-64 build runs natively.
+The host test of section 12 was not rerun for patch 0004.

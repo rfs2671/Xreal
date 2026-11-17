@@ -1,0 +1,3281 @@
+diff --git a/src/xrt/auxiliary/android/android_load_class.cpp b/src/xrt/auxiliary/android/android_load_class.cpp
+index 8c56af307..691c0473a 100644
+--- a/src/xrt/auxiliary/android/android_load_class.cpp
++++ b/src/xrt/auxiliary/android/android_load_class.cpp
+@@ -137,7 +137,32 @@ wrap::java::lang::Class
+ loadClassFromApk(jobject application_context, const char *apk_path, const char *clazz_name)
+ {
+ 	Context context = Context{application_context}.getApplicationContext();
+-	DexClassLoader classLoader = DexClassLoader::construct(apk_path, "", context.getClassLoader().object());
++	// Ultra XR: the runtime's classes are loaded with the application's class loader's PARENT (the boot class
++	// loader) as their parent, not the application's own. With the application's loader as parent, kotlin.* and
++	// androidx.* resolved to the application's copies first, and an application built with a code shrinker has
++	// those renamed or stripped: Wolvic 1.4 failed in xrCreateInstance with NoSuchMethodError on
++	// kotlin.jvm.internal.Intrinsics.checkNotNullParameter. Framework classes still come from the boot loader;
++	// everything else comes from the runtime's own APK.
++	// Named, so the references stay alive while their handles are used below.
++	wrap::java::lang::ClassLoader appLoader = context.getClassLoader();
++	jni::Object appLoaderObject = appLoader.object();
++	jni::Object parentObject = appLoaderObject;
++	jobject parent = appLoaderObject.getHandle();
++	{
++		JNIEnv *env = jni::env();
++		jclass loaderClass = env->FindClass("java/lang/ClassLoader");
++		jmethodID getParent = env->GetMethodID(loaderClass, "getParent", "()Ljava/lang/ClassLoader;");
++		jobject boot = env->CallObjectMethod(parent, getParent);
++		if (env->ExceptionCheck()) {
++			env->ExceptionClear();
++			boot = nullptr;
++		}
++		if (boot != nullptr) {
++			parentObject = jni::Object(boot, jni::Object::DeleteLocalInput);
++		}
++		env->DeleteLocalRef(loaderClass);
++	}
++	DexClassLoader classLoader = DexClassLoader::construct(apk_path, "", parentObject);
+ 	try {
+ 		auto loadedClass = classLoader.loadClass(std::string(clazz_name));
+ 		if (loadedClass.isNull()) {
+diff --git a/src/xrt/compositor/client/comp_egl_client.c b/src/xrt/compositor/client/comp_egl_client.c
+index f4b024b78..7c57954c8 100644
+--- a/src/xrt/compositor/client/comp_egl_client.c
++++ b/src/xrt/compositor/client/comp_egl_client.c
+@@ -1,789 +1,825 @@
+-// Copyright 2019-2021, Collabora, Ltd.
+-// SPDX-License-Identifier: BSL-1.0
+-/*!
+- * @file
+- * @brief  Glue code to EGL client side glue code.
+- * @author Drew DeVault <sir@cmpwn.com>
+- * @author Simon Ser <contact@emersion.fr>
+- * @author Jakob Bornecrantz <jakob@collabora.com>
+- * @ingroup comp_client
+- */
+-
+-#include "xrt/xrt_config_os.h"
+-#include "xrt/xrt_config_have.h"
+-#include "xrt/xrt_gfx_egl.h"
+-#include "xrt/xrt_handles.h"
+-
+-#include "util/u_misc.h"
+-#include "util/u_logging.h"
+-#include "util/u_debug.h"
+-
+-#include "ogl/egl_api.h"
+-#include "ogl/ogl_api.h"
+-
+-#include "client/comp_gl_client.h"
+-#include "client/comp_egl_client.h"
+-#include "client/comp_gl_memobj_swapchain.h"
+-#include "client/comp_gl_eglimage_swapchain.h"
+-
+-#include <stdio.h>
+-#include <stdlib.h>
+-
+-#ifndef XRT_HAVE_EGL
+-#error "This file shouldn't be compiled without EGL"
+-#endif
+-
+-
+-/*
+- *
+- * Logging.
+- *
+- */
+-
+-static enum u_logging_level log_level;
+-
+-#define EGL_TRACE(...) U_LOG_IFL_T(log_level, __VA_ARGS__)
+-#define EGL_DEBUG(...) U_LOG_IFL_D(log_level, __VA_ARGS__)
+-#define EGL_INFO(...) U_LOG_IFL_I(log_level, __VA_ARGS__)
+-#define EGL_WARN(...) U_LOG_IFL_W(log_level, __VA_ARGS__)
+-#define EGL_ERROR(...) U_LOG_IFL_E(log_level, __VA_ARGS__)
+-
+-DEBUG_GET_ONCE_LOG_OPTION(egl_log, "EGL_LOG", U_LOGGING_INFO)
+-
+-
+-/*
+- *
+- * Declarations.
+- *
+- */
+-
+-#ifdef XRT_OS_ANDROID
+-typedef const char *EGLAPIENTRY (*PFNEGLQUERYSTRINGIMPLEMENTATIONANDROIDPROC)(EGLDisplay dpy, EGLint name);
+-#endif
+-
+-// Not forward declared by mesa
+-typedef EGLBoolean
+-    EGLAPIENTRY (*PFNEGLMAKECURRENTPROC)(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
+-
+-static xrt_result_t
+-client_egl_insert_fence(struct xrt_compositor *xc, xrt_graphics_sync_handle_t *out_handle);
+-
+-
+-/*
+- *
+- * Old helper.
+- *
+- */
+-
+-static inline void
+-save_context(struct client_egl_context *ctx)
+-{
+-	ctx->dpy = eglGetCurrentDisplay();
+-	ctx->ctx = EGL_NO_CONTEXT;
+-	ctx->read = EGL_NO_SURFACE;
+-	ctx->draw = EGL_NO_SURFACE;
+-
+-	if (ctx->dpy != EGL_NO_DISPLAY) {
+-		ctx->ctx = eglGetCurrentContext();
+-		ctx->read = eglGetCurrentSurface(EGL_READ);
+-		ctx->draw = eglGetCurrentSurface(EGL_DRAW);
+-	}
+-}
+-
+-static inline bool
+-restore_context(struct client_egl_context *ctx)
+-{
+-	/* We're using the current display if we're trying to restore a null context */
+-	EGLDisplay dpy = ctx->dpy == EGL_NO_DISPLAY ? eglGetCurrentDisplay() : ctx->dpy;
+-
+-	if (dpy == EGL_NO_DISPLAY) {
+-		/* If the current display is also null then the call is a no-op */
+-		return true;
+-	}
+-
+-	return eglMakeCurrent(dpy, ctx->draw, ctx->read, ctx->ctx);
+-}
+-
+-
+-/*
+- *
+- * Helper functions.
+- *
+- */
+-
+-static const char *
+-egl_error_str(EGLint ret)
+-{
+-	switch (ret) {
+-	case EGL_SUCCESS: return "EGL_SUCCESS";
+-	case EGL_NOT_INITIALIZED: return "EGL_NOT_INITIALIZED";
+-	case EGL_BAD_ACCESS: return "EGL_BAD_ACCESS";
+-	case EGL_BAD_ALLOC: return "EGL_BAD_ALLOC";
+-	case EGL_BAD_ATTRIBUTE: return "EGL_BAD_ATTRIBUTE";
+-	case EGL_BAD_CONTEXT: return "EGL_BAD_CONTEXT";
+-	case EGL_BAD_CONFIG: return "EGL_BAD_CONFIG";
+-	case EGL_BAD_CURRENT_SURFACE: return "EGL_BAD_CURRENT_SURFACE";
+-	case EGL_BAD_DISPLAY: return "EGL_BAD_DISPLAY";
+-	case EGL_BAD_SURFACE: return "EGL_BAD_SURFACE";
+-	case EGL_BAD_MATCH: return "EGL_BAD_MATCH";
+-	case EGL_BAD_PARAMETER: return "EGL_BAD_PARAMETER";
+-	case EGL_BAD_NATIVE_PIXMAP: return "EGL_BAD_NATIVE_PIXMAP";
+-	case EGL_BAD_NATIVE_WINDOW: return "EGL_BAD_NATIVE_WINDOW";
+-	case EGL_CONTEXT_LOST: return "EGL_CONTEXT_LOST";
+-	default: return "EGL_<UNKNOWN>";
+-	}
+-}
+-
+-static inline void
+-destroy_context_with_check(EGLDisplay display, EGLContext context, const char *func)
+-{
+-	EGLBoolean eret = eglDestroyContext(display, context);
+-	if (eret == EGL_FALSE) {
+-		U_LOG_E("eglDestroyContext: %s (%s)", egl_error_str(eglGetError()), func);
+-	}
+-}
+-
+-#define DESTROY_CONTEXT(DPY, CTX) destroy_context_with_check(DPY, CTX, __func__)
+-
+-XRT_MAYBE_UNUSED static bool
+-has_extension(const char *extensions, const char *ext)
+-{
+-	const char *loc = NULL;
+-	const char *terminator = NULL;
+-
+-	if (extensions == NULL) {
+-		return false;
+-	}
+-
+-	while (1) {
+-		loc = strstr(extensions, ext);
+-		if (loc == NULL) {
+-			return false;
+-		}
+-
+-		terminator = loc + strlen(ext);
+-		if ((loc == extensions || *(loc - 1) == ' ') && (*terminator == ' ' || *terminator == '\0')) {
+-			return true;
+-		}
+-		extensions = terminator;
+-	}
+-}
+-
+-
+-/*
+- *
+- * Creation helper functions.
+- *
+- */
+-
+-static void
+-ensure_native_fence_is_loaded(EGLDisplay dpy, PFNEGLGETPROCADDRESSPROC get_gl_procaddr)
+-{
+-#ifdef XRT_OS_ANDROID
+-	// clang-format off
+-	PFNEGLQUERYSTRINGIMPLEMENTATIONANDROIDPROC eglQueryStringImplementationANDROID;
+-	// clang-format on
+-
+-	eglQueryStringImplementationANDROID =
+-	    (PFNEGLQUERYSTRINGIMPLEMENTATIONANDROIDPROC)get_gl_procaddr("eglQueryStringImplementationANDROID");
+-
+-	// On Android, EGL_ANDROID_native_fence_sync only shows up in this
+-	// extension list, not the normal one.
+-	const char *ext = eglQueryStringImplementationANDROID(dpy, EGL_EXTENSIONS);
+-	if (!has_extension(ext, "EGL_ANDROID_native_fence_sync")) {
+-		return;
+-	}
+-
+-	GLAD_EGL_ANDROID_native_fence_sync = true;
+-	glad_eglDupNativeFenceFDANDROID =
+-	    (PFNEGLDUPNATIVEFENCEFDANDROIDPROC)get_gl_procaddr("eglDupNativeFenceFDANDROID");
+-#endif
+-}
+-
+-struct egl_attrs
+-{
+-	EGLint api;
+-	EGLint major;
+-	EGLint minor;
+-	bool compat_profile; // Only for desktop OpenGL
+-	bool robust;
+-	bool lose_context_on_reset;
+-	EGLint image_prio;
+-};
+-
+-static int
+-make_egl_attrs(EGLint *attrs, size_t len, const struct egl_attrs *params)
+-{
+-	if (params->api != EGL_OPENGL_API && params->api != EGL_OPENGL_ES_API) {
+-		U_LOG_E("make_egl_attrs: only OpenGL and OpenGL ES is supported");
+-		return -1;
+-	}
+-
+-	size_t attrc = 0;
+-
+-#define ADD_ATTR(v)                                                                                                    \
+-	do {                                                                                                           \
+-		if (!len) {                                                                                            \
+-			return -1;                                                                                     \
+-		}                                                                                                      \
+-		len--;                                                                                                 \
+-		attrs[attrc++] = (v);                                                                                  \
+-	} while (0)
+-
+-#define ADD_PAIR(k, v)                                                                                                 \
+-	do {                                                                                                           \
+-		ADD_ATTR(k);                                                                                           \
+-		ADD_ATTR(v);                                                                                           \
+-	} while (0)
+-
+-	EGLint khr_flags = 0;
+-
+-	ADD_PAIR(EGL_CONTEXT_MAJOR_VERSION, params->major);
+-	ADD_PAIR(EGL_CONTEXT_MINOR_VERSION, params->minor);
+-
+-	if (params->api == EGL_OPENGL_API && params->compat_profile) {
+-		ADD_PAIR(EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT);
+-	}
+-
+-	if (params->robust) {
+-		if (params->api == EGL_OPENGL_ES_API) {
+-			ADD_PAIR(EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT, EGL_TRUE);
+-		} else if (params->api == EGL_OPENGL_API) {
+-			khr_flags |= EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR;
+-		}
+-	}
+-
+-	if (params->lose_context_on_reset) {
+-		if (params->api == EGL_OPENGL_ES_API) {
+-			ADD_PAIR(EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT, EGL_LOSE_CONTEXT_ON_RESET_EXT);
+-		} else if (params->api == EGL_OPENGL_API) {
+-			ADD_PAIR(EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR, EGL_LOSE_CONTEXT_ON_RESET_KHR);
+-		}
+-	}
+-
+-	if (params->api == EGL_OPENGL_API && khr_flags) {
+-		ADD_PAIR(EGL_CONTEXT_FLAGS_KHR, khr_flags);
+-	}
+-
+-	if (params->image_prio && params->image_prio != EGL_CONTEXT_PRIORITY_MEDIUM_IMG) {
+-		ADD_PAIR(EGL_CONTEXT_PRIORITY_LEVEL_IMG, params->image_prio);
+-	}
+-
+-	ADD_ATTR(EGL_NONE);
+-
+-#undef ADD_ATTR
+-#undef ADD_PAIR
+-
+-	return attrc;
+-}
+-
+-static void
+-print_egl_attrs(EGLint *attrs)
+-{
+-	int i = 0;
+-	EGL_DEBUG("egl attributes:");
+-	do {
+-		EGL_DEBUG("> attr: %d 0x%x", i, attrs[i]);
+-	} while (attrs[i++] != EGL_NONE);
+-}
+-
+-static EGLint
+-get_reset_strategy(EGLint api_type, EGLDisplay display, EGLContext app_context)
+-{
+-	EGLint ext;
+-	switch (api_type) {
+-	case EGL_OPENGL_ES_API: ext = EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT; break;
+-	case EGL_OPENGL_API:
+-		/* This is non-standard, but supported in mesa */
+-		ext = EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR;
+-		break;
+-	default: return 0;
+-	}
+-
+-	EGLint strategy = 0;
+-	if (!eglQueryContext(display, app_context, ext, &strategy)) {
+-		return 0;
+-	}
+-	return strategy;
+-}
+-
+-static xrt_result_t
+-create_context(
+-    EGLDisplay display, EGLConfig config, EGLContext app_context, EGLint api_type, EGLContext *out_our_context)
+-{
+-	EGLint old_api_type = eglQueryAPI();
+-
+-	eglBindAPI(api_type);
+-	const char *api_string =
+-	    api_type == EGL_OPENGL_API ? "opengl" : (api_type == EGL_OPENGL_ES_API ? "opengl_es" : "");
+-
+-	// Panfrost only supports 3.1
+-	const EGLint major = 3;
+-	const EGLint minor = 1;
+-
+-	EGLint image_prio;
+-	if (!eglQueryContext(display, app_context, EGL_CONTEXT_PRIORITY_LEVEL_IMG, &image_prio)) {
+-		image_prio = 0;
+-	}
+-
+-	const size_t attrs_len = 21;
+-	EGLint attrs[4][attrs_len];
+-	int attrc = 0;
+-
+-	struct egl_attrs build_attrs = {
+-	    .api = api_type,
+-	    .major = major,
+-	    .minor = minor,
+-	    .compat_profile = true,
+-	    .image_prio = image_prio,
+-	};
+-
+-	/* If the source context was created with robust and/or lose notify enabled,
+-	 * then we need to enable it too or we get EGL_BAD_MATCH.
+-	 *
+-	 * Problems with those options:
+-	 * 1. Different way to activate them for OpenGL and OpenGL ES.
+-	 * 2. No standard way to know if the options were used to create the original context.
+-	 *    (with an exception for OpenGL ES)
+-	 *
+-	 * So, the most reliable way to create our shared context is to try all those combinations...
+-	 */
+-	EGLint reset_strategy = get_reset_strategy(api_type, display, app_context);
+-	EGL_DEBUG("Current reset strategy (%s): 0x%x", api_string, reset_strategy);
+-	if (reset_strategy) {
+-		build_attrs.lose_context_on_reset = (reset_strategy == EGL_LOSE_CONTEXT_ON_RESET);
+-
+-		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
+-			return XRT_ERROR_OPENGL;
+-		}
+-
+-		build_attrs.robust = true;
+-		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
+-			return XRT_ERROR_OPENGL;
+-		}
+-	} else {
+-		/* Try context with all optional features disabled first */
+-		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
+-			return XRT_ERROR_OPENGL;
+-		}
+-
+-		/* Then, try all combination of robustness and lose notification */
+-		build_attrs.robust = false;
+-		build_attrs.lose_context_on_reset = true;
+-		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
+-			return XRT_ERROR_OPENGL;
+-		}
+-
+-		build_attrs.robust = true;
+-		build_attrs.lose_context_on_reset = false;
+-		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
+-			return XRT_ERROR_OPENGL;
+-		}
+-
+-		build_attrs.robust = true;
+-		build_attrs.lose_context_on_reset = true;
+-		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
+-			return XRT_ERROR_OPENGL;
+-		}
+-	}
+-
+-	assert((unsigned)attrc <= ARRAY_SIZE(attrs));
+-
+-	EGLContext our_context = EGL_NO_CONTEXT;
+-	const char *last_error = "";
+-	for (int i = 0; i != attrc; i++) {
+-		our_context = eglCreateContext(display, config, app_context, attrs[i]);
+-		if (our_context != EGL_NO_CONTEXT) {
+-			EGL_DEBUG("eglCreateContext (%s): try %d, context created", api_string, i);
+-			print_egl_attrs(attrs[i]);
+-			break;
+-		}
+-
+-		last_error = egl_error_str(eglGetError());
+-		EGL_DEBUG("eglCreateContext (%s): try %d, %s", api_string, i, last_error);
+-		print_egl_attrs(attrs[i]);
+-	}
+-
+-	// Restore old API type.
+-	if (old_api_type == EGL_NONE) {
+-		eglBindAPI(old_api_type);
+-	}
+-
+-	if (our_context == EGL_NO_CONTEXT) {
+-		EGL_ERROR("eglCreateContext (%s): %s", api_string, last_error);
+-		return XRT_ERROR_OPENGL;
+-	}
+-
+-	*out_our_context = our_context;
+-
+-	return XRT_SUCCESS;
+-}
+-
+-static xrt_result_t
+-load_gl_functions(EGLint egl_client_type, PFNEGLGETPROCADDRESSPROC get_gl_procaddr)
+-{
+-	switch (egl_client_type) {
+-	case EGL_OPENGL_API:
+-#if defined(XRT_HAVE_OPENGL)
+-		EGL_DEBUG("Loading GL functions");
+-		gladLoadGL(get_gl_procaddr);
+-		break;
+-#else
+-		EGL_ERROR("OpenGL support not including in this runtime build");
+-		return XRT_ERROR_OPENGL;
+-#endif
+-
+-	case EGL_OPENGL_ES_API:
+-#if defined(XRT_HAVE_OPENGLES)
+-		EGL_DEBUG("Loading GLES2 functions");
+-		gladLoadGLES2(get_gl_procaddr);
+-		break;
+-#else
+-		EGL_ERROR("OpenGL|ES support not including in this runtime build");
+-		return XRT_ERROR_OPENGL;
+-#endif
+-	default: EGL_ERROR("Unsupported EGL client type: 0x%x", egl_client_type); return XRT_ERROR_OPENGL;
+-	}
+-
+-	if (glGetString == NULL) {
+-		EGL_ERROR("glGetString not loaded!");
+-		return XRT_ERROR_OPENGL;
+-	}
+-
+-	return XRT_SUCCESS;
+-}
+-
+-static xrt_result_t
+-check_context_and_debug_print(EGLint egl_client_type)
+-{
+-	EGL_DEBUG(                    //
+-	    "OpenGL context:"         //
+-	    "\n\tGL_VERSION: %s"      //
+-	    "\n\tGL_RENDERER: %s"     //
+-	    "\n\tGL_VENDOR: %s",      //
+-	    glGetString(GL_VERSION),  //
+-	    glGetString(GL_RENDERER), //
+-	    glGetString(GL_VENDOR));  //
+-
+-
+-	/*
+-	 * If a renderer is old enough to not support OpenGL(ES) 3 or above
+-	 * it won't support Monado at all, it's not a hard requirement and
+-	 * lets us detect weird errors early on some platforms.
+-	 */
+-	if (!GLAD_GL_VERSION_3_0 && !GLAD_GL_ES_VERSION_3_0) {
+-		switch (egl_client_type) {
+-		default: EGL_ERROR("Unknown OpenGL version!"); break;
+-		case EGL_OPENGL_API: EGL_ERROR("Must have OpenGL 3.0 or above!"); break;
+-		case EGL_OPENGL_ES_API: EGL_ERROR("Must have OpenGL ES 3.0 or above!"); break;
+-		}
+-
+-		return XRT_ERROR_OPENGL;
+-	}
+-
+-
+-	EGL_DEBUG("Extension availability:");
+-#define DUMP_EXTENSION_STATUS(EXT) EGL_DEBUG("  - " #EXT ": %s", GLAD_##EXT ? "true" : "false")
+-
+-	DUMP_EXTENSION_STATUS(GL_EXT_memory_object);
+-	DUMP_EXTENSION_STATUS(GL_EXT_memory_object_fd);
+-	DUMP_EXTENSION_STATUS(GL_EXT_memory_object_win32);
+-	DUMP_EXTENSION_STATUS(GL_OES_EGL_image_external);
+-
+-	DUMP_EXTENSION_STATUS(EGL_ANDROID_get_native_client_buffer);
+-	DUMP_EXTENSION_STATUS(EGL_ANDROID_native_fence_sync);
+-	DUMP_EXTENSION_STATUS(EGL_EXT_image_dma_buf_import_modifiers);
+-	DUMP_EXTENSION_STATUS(EGL_KHR_fence_sync);
+-	DUMP_EXTENSION_STATUS(EGL_KHR_image);
+-	DUMP_EXTENSION_STATUS(EGL_KHR_image_base);
+-	DUMP_EXTENSION_STATUS(EGL_KHR_reusable_sync);
+-	DUMP_EXTENSION_STATUS(EGL_KHR_wait_sync);
+-
+-#undef DUMP_EXTENSION_STATUS
+-
+-
+-	return XRT_SUCCESS;
+-}
+-
+-static xrt_result_t
+-get_client_gl_functions(client_gl_swapchain_create_func_t *out_sc_create_func,
+-                        client_gl_insert_fence_func_t *out_insert_fence)
+-{
+-	client_gl_swapchain_create_func_t sc_create_func = NULL;
+-	client_gl_insert_fence_func_t insert_fence_func = NULL;
+-
+-
+-#if defined(XRT_GRAPHICS_BUFFER_HANDLE_IS_FD)
+-
+-	if (GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd) {
+-		EGL_DEBUG("Using GL memory object swapchain implementation");
+-		sc_create_func = client_gl_memobj_swapchain_create;
+-	}
+-
+-	if (sc_create_func == NULL && GLAD_EGL_EXT_image_dma_buf_import) {
+-		EGL_DEBUG("Using EGL_Image swapchain implementation");
+-		sc_create_func = client_gl_eglimage_swapchain_create;
+-	}
+-
+-	if (sc_create_func == NULL) {
+-		EGL_ERROR(
+-		    "Could not find a required extension: need either EGL_EXT_image_dma_buf_import or "
+-		    "GL_EXT_memory_object_fd");
+-		return XRT_ERROR_OPENGL;
+-	}
+-
+-#elif defined(XRT_GRAPHICS_BUFFER_HANDLE_IS_AHARDWAREBUFFER)
+-
+-	EGL_DEBUG("Using EGL_Image swapchain implementation with AHardwareBuffer");
+-	sc_create_func = client_gl_eglimage_swapchain_create;
+-
+-#endif
+-
+-	/*
+-	 * For now, only use the insert_fence callback only if
+-	 * EGL_ANDROID_native_fence_sync is available, revisit this when a more
+-	 * generic synchronization mechanism is implemented.
+-	 */
+-	if (GLAD_EGL_ANDROID_native_fence_sync) {
+-		insert_fence_func = client_egl_insert_fence;
+-	}
+-
+-	*out_sc_create_func = sc_create_func;
+-	*out_insert_fence = insert_fence_func;
+-
+-	return XRT_SUCCESS;
+-}
+-
+-
+-/*
+- *
+- * GL callback functions.
+- *
+- */
+-
+-static xrt_result_t
+-client_egl_insert_fence(struct xrt_compositor *xc, xrt_graphics_sync_handle_t *out_handle)
+-{
+-	struct client_egl_compositor *ceglc = client_egl_compositor(xc);
+-
+-	*out_handle = XRT_GRAPHICS_SYNC_HANDLE_INVALID;
+-	EGLDisplay dpy = ceglc->current.dpy;
+-
+-#ifdef XRT_GRAPHICS_SYNC_HANDLE_IS_FD
+-	// https://registry.khronos.org/EGL/extensions/ANDROID/EGL_ANDROID_native_fence_sync.txt
+-	// create also inserts the fence in the command stream
+-	EGLSyncKHR sync = eglCreateSyncKHR(dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, NULL);
+-	if (sync == EGL_NO_SYNC_KHR) {
+-		EGL_ERROR("Failed to insert fence!");
+-		return XRT_ERROR_FENCE_CREATE_FAILED;
+-	}
+-
+-	// Flush needed to create native FD
+-	glFlush();
+-
+-	int fence_fd = eglDupNativeFenceFDANDROID(dpy, sync);
+-	eglDestroySyncKHR(dpy, sync);
+-
+-	if (fence_fd == EGL_NO_NATIVE_FENCE_FD_ANDROID) {
+-		EGL_ERROR("Failed to get FD from fence!");
+-		return XRT_ERROR_NATIVE_HANDLE_FENCE_ERROR;
+-	}
+-
+-	*out_handle = fence_fd;
+-
+-#else
+-	(void)cglc;
+-#endif
+-
+-	return XRT_SUCCESS;
+-}
+-
+-static xrt_result_t
+-client_egl_context_begin(struct xrt_compositor *xc, enum client_gl_context_reason reason)
+-{
+-	struct client_egl_compositor *eglc = client_egl_compositor(xc);
+-
+-	//! @todo Handle this better, don't just assume that the context is current.
+-	if (reason == CLIENT_GL_CONTEXT_REASON_SYNCHRONIZE) {
+-		return XRT_SUCCESS;
+-	}
+-
+-	save_context(&eglc->previous);
+-	struct client_egl_context *cur = &eglc->current;
+-
+-	if (!eglMakeCurrent(cur->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, cur->ctx)) {
+-		return XRT_ERROR_OPENGL;
+-	}
+-	return XRT_SUCCESS;
+-}
+-
+-static void
+-client_egl_context_end(struct xrt_compositor *xc, enum client_gl_context_reason reason)
+-{
+-	struct client_egl_compositor *eglc = client_egl_compositor(xc);
+-
+-	//! @todo Handle this better, don't just assume that the context is current.
+-	if (reason == CLIENT_GL_CONTEXT_REASON_SYNCHRONIZE) {
+-		return;
+-	}
+-
+-	restore_context(&eglc->previous);
+-}
+-
+-static void
+-client_egl_compositor_destroy(struct xrt_compositor *xc)
+-{
+-	struct client_egl_compositor *ceglc = client_egl_compositor(xc);
+-
+-	client_gl_compositor_fini(&ceglc->base);
+-
+-	DESTROY_CONTEXT(ceglc->current.dpy, ceglc->current.ctx);
+-	ceglc->current.ctx = EGL_NO_CONTEXT;
+-	ceglc->current.dpy = EGL_NO_DISPLAY;
+-
+-	free(ceglc);
+-}
+-
+-
+-/*
+- *
+- * 'Exported' functions.
+- *
+- */
+-
+-xrt_result_t
+-xrt_gfx_provider_create_gl_egl(struct xrt_compositor_native *xcn,
+-                               EGLDisplay display,
+-                               EGLConfig config,
+-                               EGLContext context,
+-                               PFNEGLGETPROCADDRESSPROC get_gl_procaddr,
+-                               bool renderdoc_enabled,
+-                               struct xrt_compositor **out_xc)
+-{
+-	log_level = debug_get_log_option_egl_log();
+-	xrt_result_t xret;
+-
+-
+-	/*
+-	 * Init EGL functions
+-	 */
+-
+-	gladLoadEGL(display, get_gl_procaddr);
+-
+-	if (config == EGL_NO_CONFIG_KHR && !EGL_KHR_no_config_context) {
+-		EGL_ERROR("config == EGL_NO_CONFIG_KHR && !EGL_KHR_no_config_context");
+-		return XRT_ERROR_EGL_CONFIG_MISSING;
+-	}
+-
+-	// On Android this extension is 'hidden'.
+-	ensure_native_fence_is_loaded(display, get_gl_procaddr);
+-
+-
+-	/*
+-	 * Get client type.
+-	 */
+-
+-	EGLint egl_client_type;
+-	if (!eglQueryContext(display, context, EGL_CONTEXT_CLIENT_TYPE, &egl_client_type)) {
+-		EGL_ERROR("Could not query EGL client API type from context: %p", (void *)context);
+-		return XRT_ERROR_OPENGL;
+-	}
+-
+-
+-	/*
+-	 * Create context.
+-	 */
+-
+-	xret = create_context(display, config, context, egl_client_type, &context);
+-	if (xret != XRT_SUCCESS) {
+-		return xret;
+-	}
+-
+-
+-	/*
+-	 * Make current.
+-	 */
+-
+-	// Save old EGL display, context and drawables.
+-	struct client_egl_context old = {0};
+-	save_context(&old);
+-
+-	if (!eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context)) {
+-		EGL_ERROR(
+-		    "eglMakeCurrent: %s"
+-		    "\n\tFailed to make EGL context current"
+-		    "\n\told - dpy: %p, ctx: %p, read: %p, draw: %p"
+-		    "\n\tnew - dpy: %p, ctx: %p, read: %p, draw: %p",
+-		    egl_error_str(eglGetError()),                                         //
+-		    (void *)old.dpy, (void *)old.ctx, (void *)old.read, (void *)old.draw, //
+-		    (void *)display, (void *)context, NULL, NULL);                        //
+-
+-		DESTROY_CONTEXT(display, context);
+-
+-		// No need to restore on failure.
+-		return XRT_ERROR_OPENGL;
+-	}
+-
+-
+-	/*
+-	 * Use helpers to do all setup.
+-	 */
+-
+-	// Load GL functions, only EGL functions where loaded above.
+-	xret = load_gl_functions(egl_client_type, get_gl_procaddr);
+-	if (xret != XRT_SUCCESS) {
+-		restore_context(&old);
+-		DESTROY_CONTEXT(display, context);
+-		return xret;
+-	}
+-
+-	// Some consistency/extension availability checking.
+-	xret = check_context_and_debug_print(egl_client_type);
+-	if (xret != XRT_SUCCESS) {
+-		restore_context(&old);
+-		DESTROY_CONTEXT(display, context);
+-		return xret;
+-	}
+-
+-	// Get functions.
+-	client_gl_swapchain_create_func_t sc_create_func = NULL;
+-	client_gl_insert_fence_func_t insert_fence_func = NULL;
+-
+-	xret = get_client_gl_functions(&sc_create_func, &insert_fence_func);
+-	if (xret != XRT_SUCCESS) {
+-		restore_context(&old);
+-		DESTROY_CONTEXT(display, context);
+-		return xret;
+-	}
+-
+-
+-	/*
+-	 * Now do the allocation and init.
+-	 */
+-
+-	struct client_egl_compositor *ceglc = U_TYPED_CALLOC(struct client_egl_compositor);
+-	ceglc->current.dpy = display;
+-	ceglc->current.ctx = context;
+-	ceglc->base.renderdoc_enabled = renderdoc_enabled;
+-
+-	bool bret = client_gl_compositor_init( //
+-	    &ceglc->base,                      // c
+-	    xcn,                               // xcn
+-	    client_egl_context_begin,          // context_begin
+-	    client_egl_context_end,            // context_end
+-	    sc_create_func,                    // create_swapchain
+-	    insert_fence_func);                // insert_fence
+-	if (!bret) {
+-		free(ceglc);
+-		EGL_ERROR("Failed to initialize compositor");
+-		restore_context(&old);
+-		DESTROY_CONTEXT(display, context);
+-		return XRT_ERROR_OPENGL;
+-	}
+-
+-	ceglc->base.base.destroy = client_egl_compositor_destroy;
+-	restore_context(&old);
+-	*out_xc = &ceglc->base.base;
+-
+-	return XRT_SUCCESS;
+-}
++// Copyright 2019-2021, Collabora, Ltd.
++// SPDX-License-Identifier: BSL-1.0
++/*!
++ * @file
++ * @brief  Glue code to EGL client side glue code.
++ * @author Drew DeVault <sir@cmpwn.com>
++ * @author Simon Ser <contact@emersion.fr>
++ * @author Jakob Bornecrantz <jakob@collabora.com>
++ * @ingroup comp_client
++ */
++
++#include "xrt/xrt_config_os.h"
++#include "xrt/xrt_config_have.h"
++#include "xrt/xrt_gfx_egl.h"
++#include "xrt/xrt_handles.h"
++
++#include "util/u_misc.h"
++#include "util/u_logging.h"
++#include "util/u_debug.h"
++
++#include "ogl/egl_api.h"
++#include "ogl/ogl_api.h"
++
++#include "client/comp_gl_client.h"
++#include "client/comp_egl_client.h"
++#include "client/comp_gl_memobj_swapchain.h"
++#include "client/comp_gl_eglimage_swapchain.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++
++#ifndef XRT_HAVE_EGL
++#error "This file shouldn't be compiled without EGL"
++#endif
++
++
++/*
++ *
++ * Logging.
++ *
++ */
++
++static enum u_logging_level log_level;
++
++#define EGL_TRACE(...) U_LOG_IFL_T(log_level, __VA_ARGS__)
++#define EGL_DEBUG(...) U_LOG_IFL_D(log_level, __VA_ARGS__)
++#define EGL_INFO(...) U_LOG_IFL_I(log_level, __VA_ARGS__)
++#define EGL_WARN(...) U_LOG_IFL_W(log_level, __VA_ARGS__)
++#define EGL_ERROR(...) U_LOG_IFL_E(log_level, __VA_ARGS__)
++
++DEBUG_GET_ONCE_LOG_OPTION(egl_log, "EGL_LOG", U_LOGGING_INFO)
++
++
++/*
++ *
++ * Declarations.
++ *
++ */
++
++#ifdef XRT_OS_ANDROID
++typedef const char *EGLAPIENTRY (*PFNEGLQUERYSTRINGIMPLEMENTATIONANDROIDPROC)(EGLDisplay dpy, EGLint name);
++#endif
++
++// Not forward declared by mesa
++typedef EGLBoolean
++    EGLAPIENTRY (*PFNEGLMAKECURRENTPROC)(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
++
++static xrt_result_t
++client_egl_insert_fence(struct xrt_compositor *xc, xrt_graphics_sync_handle_t *out_handle);
++
++
++/*
++ *
++ * Old helper.
++ *
++ */
++
++static inline void
++save_context(struct client_egl_context *ctx)
++{
++	ctx->dpy = eglGetCurrentDisplay();
++	ctx->ctx = EGL_NO_CONTEXT;
++	ctx->read = EGL_NO_SURFACE;
++	ctx->draw = EGL_NO_SURFACE;
++
++	if (ctx->dpy != EGL_NO_DISPLAY) {
++		ctx->ctx = eglGetCurrentContext();
++		ctx->read = eglGetCurrentSurface(EGL_READ);
++		ctx->draw = eglGetCurrentSurface(EGL_DRAW);
++	}
++}
++
++static inline bool
++restore_context(struct client_egl_context *ctx)
++{
++	/* We're using the current display if we're trying to restore a null context */
++	EGLDisplay dpy = ctx->dpy == EGL_NO_DISPLAY ? eglGetCurrentDisplay() : ctx->dpy;
++
++	if (dpy == EGL_NO_DISPLAY) {
++		/* If the current display is also null then the call is a no-op */
++		return true;
++	}
++
++	return eglMakeCurrent(dpy, ctx->draw, ctx->read, ctx->ctx);
++}
++
++
++/*
++ *
++ * Helper functions.
++ *
++ */
++
++static const char *
++egl_error_str(EGLint ret)
++{
++	switch (ret) {
++	case EGL_SUCCESS: return "EGL_SUCCESS";
++	case EGL_NOT_INITIALIZED: return "EGL_NOT_INITIALIZED";
++	case EGL_BAD_ACCESS: return "EGL_BAD_ACCESS";
++	case EGL_BAD_ALLOC: return "EGL_BAD_ALLOC";
++	case EGL_BAD_ATTRIBUTE: return "EGL_BAD_ATTRIBUTE";
++	case EGL_BAD_CONTEXT: return "EGL_BAD_CONTEXT";
++	case EGL_BAD_CONFIG: return "EGL_BAD_CONFIG";
++	case EGL_BAD_CURRENT_SURFACE: return "EGL_BAD_CURRENT_SURFACE";
++	case EGL_BAD_DISPLAY: return "EGL_BAD_DISPLAY";
++	case EGL_BAD_SURFACE: return "EGL_BAD_SURFACE";
++	case EGL_BAD_MATCH: return "EGL_BAD_MATCH";
++	case EGL_BAD_PARAMETER: return "EGL_BAD_PARAMETER";
++	case EGL_BAD_NATIVE_PIXMAP: return "EGL_BAD_NATIVE_PIXMAP";
++	case EGL_BAD_NATIVE_WINDOW: return "EGL_BAD_NATIVE_WINDOW";
++	case EGL_CONTEXT_LOST: return "EGL_CONTEXT_LOST";
++	default: return "EGL_<UNKNOWN>";
++	}
++}
++
++static inline void
++destroy_context_with_check(EGLDisplay display, EGLContext context, const char *func)
++{
++	EGLBoolean eret = eglDestroyContext(display, context);
++	if (eret == EGL_FALSE) {
++		U_LOG_E("eglDestroyContext: %s (%s)", egl_error_str(eglGetError()), func);
++	}
++}
++
++#define DESTROY_CONTEXT(DPY, CTX) destroy_context_with_check(DPY, CTX, __func__)
++
++XRT_MAYBE_UNUSED static bool
++has_extension(const char *extensions, const char *ext)
++{
++	const char *loc = NULL;
++	const char *terminator = NULL;
++
++	if (extensions == NULL) {
++		return false;
++	}
++
++	while (1) {
++		loc = strstr(extensions, ext);
++		if (loc == NULL) {
++			return false;
++		}
++
++		terminator = loc + strlen(ext);
++		if ((loc == extensions || *(loc - 1) == ' ') && (*terminator == ' ' || *terminator == '\0')) {
++			return true;
++		}
++		extensions = terminator;
++	}
++}
++
++
++/*
++ *
++ * Creation helper functions.
++ *
++ */
++
++static void
++ensure_native_fence_is_loaded(EGLDisplay dpy, PFNEGLGETPROCADDRESSPROC get_gl_procaddr)
++{
++#ifdef XRT_OS_ANDROID
++	// clang-format off
++	PFNEGLQUERYSTRINGIMPLEMENTATIONANDROIDPROC eglQueryStringImplementationANDROID;
++	// clang-format on
++
++	eglQueryStringImplementationANDROID =
++	    (PFNEGLQUERYSTRINGIMPLEMENTATIONANDROIDPROC)get_gl_procaddr("eglQueryStringImplementationANDROID");
++
++	// On Android, EGL_ANDROID_native_fence_sync only shows up in this
++	// extension list, not the normal one.
++	const char *ext = eglQueryStringImplementationANDROID(dpy, EGL_EXTENSIONS);
++	if (!has_extension(ext, "EGL_ANDROID_native_fence_sync")) {
++		return;
++	}
++
++	GLAD_EGL_ANDROID_native_fence_sync = true;
++	glad_eglDupNativeFenceFDANDROID =
++	    (PFNEGLDUPNATIVEFENCEFDANDROIDPROC)get_gl_procaddr("eglDupNativeFenceFDANDROID");
++#endif
++}
++
++struct egl_attrs
++{
++	EGLint api;
++	EGLint major;
++	EGLint minor;
++	bool compat_profile; // Only for desktop OpenGL
++	bool robust;
++	bool lose_context_on_reset;
++	EGLint image_prio;
++};
++
++static int
++make_egl_attrs(EGLint *attrs, size_t len, const struct egl_attrs *params)
++{
++	if (params->api != EGL_OPENGL_API && params->api != EGL_OPENGL_ES_API) {
++		U_LOG_E("make_egl_attrs: only OpenGL and OpenGL ES is supported");
++		return -1;
++	}
++
++	size_t attrc = 0;
++
++#define ADD_ATTR(v)                                                                                                    \
++	do {                                                                                                           \
++		if (!len) {                                                                                            \
++			return -1;                                                                                     \
++		}                                                                                                      \
++		len--;                                                                                                 \
++		attrs[attrc++] = (v);                                                                                  \
++	} while (0)
++
++#define ADD_PAIR(k, v)                                                                                                 \
++	do {                                                                                                           \
++		ADD_ATTR(k);                                                                                           \
++		ADD_ATTR(v);                                                                                           \
++	} while (0)
++
++	EGLint khr_flags = 0;
++
++	ADD_PAIR(EGL_CONTEXT_MAJOR_VERSION, params->major);
++	ADD_PAIR(EGL_CONTEXT_MINOR_VERSION, params->minor);
++
++	if (params->api == EGL_OPENGL_API && params->compat_profile) {
++		ADD_PAIR(EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT);
++	}
++
++	if (params->robust) {
++		if (params->api == EGL_OPENGL_ES_API) {
++			ADD_PAIR(EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT, EGL_TRUE);
++		} else if (params->api == EGL_OPENGL_API) {
++			khr_flags |= EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR;
++		}
++	}
++
++	if (params->lose_context_on_reset) {
++		if (params->api == EGL_OPENGL_ES_API) {
++			ADD_PAIR(EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT, EGL_LOSE_CONTEXT_ON_RESET_EXT);
++		} else if (params->api == EGL_OPENGL_API) {
++			ADD_PAIR(EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR, EGL_LOSE_CONTEXT_ON_RESET_KHR);
++		}
++	}
++
++	if (params->api == EGL_OPENGL_API && khr_flags) {
++		ADD_PAIR(EGL_CONTEXT_FLAGS_KHR, khr_flags);
++	}
++
++	if (params->image_prio && params->image_prio != EGL_CONTEXT_PRIORITY_MEDIUM_IMG) {
++		ADD_PAIR(EGL_CONTEXT_PRIORITY_LEVEL_IMG, params->image_prio);
++	}
++
++	ADD_ATTR(EGL_NONE);
++
++#undef ADD_ATTR
++#undef ADD_PAIR
++
++	return attrc;
++}
++
++static void
++print_egl_attrs(EGLint *attrs)
++{
++	int i = 0;
++	EGL_DEBUG("egl attributes:");
++	do {
++		EGL_DEBUG("> attr: %d 0x%x", i, attrs[i]);
++	} while (attrs[i++] != EGL_NONE);
++}
++
++static EGLint
++get_reset_strategy(EGLint api_type, EGLDisplay display, EGLContext app_context)
++{
++	EGLint ext;
++	switch (api_type) {
++	case EGL_OPENGL_ES_API: ext = EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT; break;
++	case EGL_OPENGL_API:
++		/* This is non-standard, but supported in mesa */
++		ext = EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR;
++		break;
++	default: return 0;
++	}
++
++	EGLint strategy = 0;
++	if (!eglQueryContext(display, app_context, ext, &strategy)) {
++		return 0;
++	}
++	return strategy;
++}
++
++static xrt_result_t
++create_context(
++    EGLDisplay display, EGLConfig config, EGLContext app_context, EGLint api_type, EGLContext *out_our_context)
++{
++	EGLint old_api_type = eglQueryAPI();
++
++	eglBindAPI(api_type);
++	const char *api_string =
++	    api_type == EGL_OPENGL_API ? "opengl" : (api_type == EGL_OPENGL_ES_API ? "opengl_es" : "");
++
++	// Panfrost only supports 3.1
++	const EGLint major = 3;
++	const EGLint minor = 1;
++
++	EGLint image_prio;
++	if (!eglQueryContext(display, app_context, EGL_CONTEXT_PRIORITY_LEVEL_IMG, &image_prio)) {
++		image_prio = 0;
++	}
++
++	const size_t attrs_len = 21;
++	EGLint attrs[4][attrs_len];
++	int attrc = 0;
++
++	struct egl_attrs build_attrs = {
++	    .api = api_type,
++	    .major = major,
++	    .minor = minor,
++	    .compat_profile = true,
++	    .image_prio = image_prio,
++	};
++
++	/* If the source context was created with robust and/or lose notify enabled,
++	 * then we need to enable it too or we get EGL_BAD_MATCH.
++	 *
++	 * Problems with those options:
++	 * 1. Different way to activate them for OpenGL and OpenGL ES.
++	 * 2. No standard way to know if the options were used to create the original context.
++	 *    (with an exception for OpenGL ES)
++	 *
++	 * So, the most reliable way to create our shared context is to try all those combinations...
++	 */
++	EGLint reset_strategy = get_reset_strategy(api_type, display, app_context);
++	EGL_DEBUG("Current reset strategy (%s): 0x%x", api_string, reset_strategy);
++	if (reset_strategy) {
++		build_attrs.lose_context_on_reset = (reset_strategy == EGL_LOSE_CONTEXT_ON_RESET);
++
++		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
++			return XRT_ERROR_OPENGL;
++		}
++
++		build_attrs.robust = true;
++		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
++			return XRT_ERROR_OPENGL;
++		}
++	} else {
++		/* Try context with all optional features disabled first */
++		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
++			return XRT_ERROR_OPENGL;
++		}
++
++		/* Then, try all combination of robustness and lose notification */
++		build_attrs.robust = false;
++		build_attrs.lose_context_on_reset = true;
++		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
++			return XRT_ERROR_OPENGL;
++		}
++
++		build_attrs.robust = true;
++		build_attrs.lose_context_on_reset = false;
++		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
++			return XRT_ERROR_OPENGL;
++		}
++
++		build_attrs.robust = true;
++		build_attrs.lose_context_on_reset = true;
++		if (make_egl_attrs(attrs[attrc++], attrs_len, &build_attrs) == -1) {
++			return XRT_ERROR_OPENGL;
++		}
++	}
++
++	assert((unsigned)attrc <= ARRAY_SIZE(attrs));
++
++	EGLContext our_context = EGL_NO_CONTEXT;
++	const char *last_error = "";
++	for (int i = 0; i != attrc; i++) {
++		our_context = eglCreateContext(display, config, app_context, attrs[i]);
++		if (our_context != EGL_NO_CONTEXT) {
++			EGL_DEBUG("eglCreateContext (%s): try %d, context created", api_string, i);
++			print_egl_attrs(attrs[i]);
++			break;
++		}
++
++		last_error = egl_error_str(eglGetError());
++		EGL_DEBUG("eglCreateContext (%s): try %d, %s", api_string, i, last_error);
++		print_egl_attrs(attrs[i]);
++	}
++
++	// Restore old API type.
++	if (old_api_type == EGL_NONE) {
++		eglBindAPI(old_api_type);
++	}
++
++	if (our_context == EGL_NO_CONTEXT) {
++		EGL_ERROR("eglCreateContext (%s): %s", api_string, last_error);
++		return XRT_ERROR_OPENGL;
++	}
++
++	*out_our_context = our_context;
++
++	return XRT_SUCCESS;
++}
++
++static xrt_result_t
++load_gl_functions(EGLint egl_client_type, PFNEGLGETPROCADDRESSPROC get_gl_procaddr)
++{
++	switch (egl_client_type) {
++	case EGL_OPENGL_API:
++#if defined(XRT_HAVE_OPENGL)
++		EGL_DEBUG("Loading GL functions");
++		gladLoadGL(get_gl_procaddr);
++		break;
++#else
++		EGL_ERROR("OpenGL support not including in this runtime build");
++		return XRT_ERROR_OPENGL;
++#endif
++
++	case EGL_OPENGL_ES_API:
++#if defined(XRT_HAVE_OPENGLES)
++		EGL_DEBUG("Loading GLES2 functions");
++		gladLoadGLES2(get_gl_procaddr);
++		break;
++#else
++		EGL_ERROR("OpenGL|ES support not including in this runtime build");
++		return XRT_ERROR_OPENGL;
++#endif
++	default: EGL_ERROR("Unsupported EGL client type: 0x%x", egl_client_type); return XRT_ERROR_OPENGL;
++	}
++
++	if (glGetString == NULL) {
++		EGL_ERROR("glGetString not loaded!");
++		return XRT_ERROR_OPENGL;
++	}
++
++	return XRT_SUCCESS;
++}
++
++static xrt_result_t
++check_context_and_debug_print(EGLint egl_client_type)
++{
++	EGL_DEBUG(                    //
++	    "OpenGL context:"         //
++	    "\n\tGL_VERSION: %s"      //
++	    "\n\tGL_RENDERER: %s"     //
++	    "\n\tGL_VENDOR: %s",      //
++	    glGetString(GL_VERSION),  //
++	    glGetString(GL_RENDERER), //
++	    glGetString(GL_VENDOR));  //
++
++
++	/*
++	 * If a renderer is old enough to not support OpenGL(ES) 3 or above
++	 * it won't support Monado at all, it's not a hard requirement and
++	 * lets us detect weird errors early on some platforms.
++	 */
++	if (!GLAD_GL_VERSION_3_0 && !GLAD_GL_ES_VERSION_3_0) {
++		switch (egl_client_type) {
++		default: EGL_ERROR("Unknown OpenGL version!"); break;
++		case EGL_OPENGL_API: EGL_ERROR("Must have OpenGL 3.0 or above!"); break;
++		case EGL_OPENGL_ES_API: EGL_ERROR("Must have OpenGL ES 3.0 or above!"); break;
++		}
++
++		return XRT_ERROR_OPENGL;
++	}
++
++
++	EGL_DEBUG("Extension availability:");
++#define DUMP_EXTENSION_STATUS(EXT) EGL_DEBUG("  - " #EXT ": %s", GLAD_##EXT ? "true" : "false")
++
++	DUMP_EXTENSION_STATUS(GL_EXT_memory_object);
++	DUMP_EXTENSION_STATUS(GL_EXT_memory_object_fd);
++	DUMP_EXTENSION_STATUS(GL_EXT_memory_object_win32);
++	DUMP_EXTENSION_STATUS(GL_OES_EGL_image_external);
++
++	DUMP_EXTENSION_STATUS(EGL_ANDROID_get_native_client_buffer);
++	DUMP_EXTENSION_STATUS(EGL_ANDROID_native_fence_sync);
++	DUMP_EXTENSION_STATUS(EGL_EXT_image_dma_buf_import_modifiers);
++	DUMP_EXTENSION_STATUS(EGL_KHR_fence_sync);
++	DUMP_EXTENSION_STATUS(EGL_KHR_image);
++	DUMP_EXTENSION_STATUS(EGL_KHR_image_base);
++	DUMP_EXTENSION_STATUS(EGL_KHR_reusable_sync);
++	DUMP_EXTENSION_STATUS(EGL_KHR_wait_sync);
++
++#undef DUMP_EXTENSION_STATUS
++
++
++	return XRT_SUCCESS;
++}
++
++static xrt_result_t
++get_client_gl_functions(client_gl_swapchain_create_func_t *out_sc_create_func,
++                        client_gl_insert_fence_func_t *out_insert_fence)
++{
++	client_gl_swapchain_create_func_t sc_create_func = NULL;
++	client_gl_insert_fence_func_t insert_fence_func = NULL;
++
++
++#if defined(XRT_GRAPHICS_BUFFER_HANDLE_IS_FD)
++
++	if (GLAD_GL_EXT_memory_object && GLAD_GL_EXT_memory_object_fd) {
++		EGL_DEBUG("Using GL memory object swapchain implementation");
++		sc_create_func = client_gl_memobj_swapchain_create;
++	}
++
++	if (sc_create_func == NULL && GLAD_EGL_EXT_image_dma_buf_import) {
++		EGL_DEBUG("Using EGL_Image swapchain implementation");
++		sc_create_func = client_gl_eglimage_swapchain_create;
++	}
++
++	if (sc_create_func == NULL) {
++		EGL_ERROR(
++		    "Could not find a required extension: need either EGL_EXT_image_dma_buf_import or "
++		    "GL_EXT_memory_object_fd");
++		return XRT_ERROR_OPENGL;
++	}
++
++#elif defined(XRT_GRAPHICS_BUFFER_HANDLE_IS_AHARDWAREBUFFER)
++
++	EGL_DEBUG("Using EGL_Image swapchain implementation with AHardwareBuffer");
++	sc_create_func = client_gl_eglimage_swapchain_create;
++
++#endif
++
++	/*
++	 * For now, only use the insert_fence callback only if
++	 * EGL_ANDROID_native_fence_sync is available, revisit this when a more
++	 * generic synchronization mechanism is implemented.
++	 */
++	if (GLAD_EGL_ANDROID_native_fence_sync) {
++		insert_fence_func = client_egl_insert_fence;
++	}
++
++	*out_sc_create_func = sc_create_func;
++	*out_insert_fence = insert_fence_func;
++
++	return XRT_SUCCESS;
++}
++
++
++/*
++ *
++ * GL callback functions.
++ *
++ */
++
++static xrt_result_t
++client_egl_insert_fence(struct xrt_compositor *xc, xrt_graphics_sync_handle_t *out_handle)
++{
++	struct client_egl_compositor *ceglc = client_egl_compositor(xc);
++
++	*out_handle = XRT_GRAPHICS_SYNC_HANDLE_INVALID;
++	EGLDisplay dpy = ceglc->current.dpy;
++
++#ifdef XRT_GRAPHICS_SYNC_HANDLE_IS_FD
++	// https://registry.khronos.org/EGL/extensions/ANDROID/EGL_ANDROID_native_fence_sync.txt
++	// create also inserts the fence in the command stream
++	EGLSyncKHR sync = eglCreateSyncKHR(dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, NULL);
++	if (sync == EGL_NO_SYNC_KHR) {
++		EGL_ERROR("Failed to insert fence!");
++		return XRT_ERROR_FENCE_CREATE_FAILED;
++	}
++
++	// Flush needed to create native FD
++	glFlush();
++
++	int fence_fd = eglDupNativeFenceFDANDROID(dpy, sync);
++	eglDestroySyncKHR(dpy, sync);
++
++	if (fence_fd == EGL_NO_NATIVE_FENCE_FD_ANDROID) {
++		EGL_ERROR("Failed to get FD from fence!");
++		return XRT_ERROR_NATIVE_HANDLE_FENCE_ERROR;
++	}
++
++	*out_handle = fence_fd;
++
++#else
++	(void)cglc;
++#endif
++
++	return XRT_SUCCESS;
++}
++
++/*
++ * Ultra XR: an EGL implementation without EGL_KHR_surfaceless_context (the Android emulator's) refuses to make a
++ * context current with no surface. The context is then made current on a small off-screen surface of its own
++ * configuration instead. One client compositor per process, so one such surface.
++ */
++static EGLSurface g_fallback_surface = EGL_NO_SURFACE;
++
++static EGLBoolean
++make_current_without_window(EGLDisplay dpy, EGLContext ctx)
++{
++	if (g_fallback_surface == EGL_NO_SURFACE) {
++		if (eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
++			return EGL_TRUE;
++		}
++		(void)eglGetError();
++
++		EGLint config_id = 0;
++		EGLConfig config = NULL;
++		EGLint count = 0;
++		if (!eglQueryContext(dpy, ctx, EGL_CONFIG_ID, &config_id)) {
++			return EGL_FALSE;
++		}
++		const EGLint want[] = {EGL_CONFIG_ID, config_id, EGL_NONE};
++		if (!eglChooseConfig(dpy, want, &config, 1, &count) || count < 1) {
++			return EGL_FALSE;
++		}
++		const EGLint attribs[] = {EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE};
++		g_fallback_surface = eglCreatePbufferSurface(dpy, config, attribs);
++		if (g_fallback_surface == EGL_NO_SURFACE) {
++			return EGL_FALSE;
++		}
++		U_LOG_W("EGL has no surfaceless contexts: using an off-screen surface for the OpenXR context");
++	}
++	return eglMakeCurrent(dpy, g_fallback_surface, g_fallback_surface, ctx);
++}
++
++static xrt_result_t
++client_egl_context_begin(struct xrt_compositor *xc, enum client_gl_context_reason reason)
++{
++	struct client_egl_compositor *eglc = client_egl_compositor(xc);
++
++	//! @todo Handle this better, don't just assume that the context is current.
++	if (reason == CLIENT_GL_CONTEXT_REASON_SYNCHRONIZE) {
++		return XRT_SUCCESS;
++	}
++
++	save_context(&eglc->previous);
++	struct client_egl_context *cur = &eglc->current;
++
++	if (!make_current_without_window(cur->dpy, cur->ctx)) {
++		return XRT_ERROR_OPENGL;
++	}
++	return XRT_SUCCESS;
++}
++
++static void
++client_egl_context_end(struct xrt_compositor *xc, enum client_gl_context_reason reason)
++{
++	struct client_egl_compositor *eglc = client_egl_compositor(xc);
++
++	//! @todo Handle this better, don't just assume that the context is current.
++	if (reason == CLIENT_GL_CONTEXT_REASON_SYNCHRONIZE) {
++		return;
++	}
++
++	restore_context(&eglc->previous);
++}
++
++static void
++client_egl_compositor_destroy(struct xrt_compositor *xc)
++{
++	struct client_egl_compositor *ceglc = client_egl_compositor(xc);
++
++	client_gl_compositor_fini(&ceglc->base);
++
++	DESTROY_CONTEXT(ceglc->current.dpy, ceglc->current.ctx);
++	ceglc->current.ctx = EGL_NO_CONTEXT;
++	ceglc->current.dpy = EGL_NO_DISPLAY;
++
++	free(ceglc);
++}
++
++
++/*
++ *
++ * 'Exported' functions.
++ *
++ */
++
++xrt_result_t
++xrt_gfx_provider_create_gl_egl(struct xrt_compositor_native *xcn,
++                               EGLDisplay display,
++                               EGLConfig config,
++                               EGLContext context,
++                               PFNEGLGETPROCADDRESSPROC get_gl_procaddr,
++                               bool renderdoc_enabled,
++                               struct xrt_compositor **out_xc)
++{
++	log_level = debug_get_log_option_egl_log();
++	xrt_result_t xret;
++
++
++	/*
++	 * Init EGL functions
++	 */
++
++	gladLoadEGL(display, get_gl_procaddr);
++
++	if (config == EGL_NO_CONFIG_KHR && !EGL_KHR_no_config_context) {
++		EGL_ERROR("config == EGL_NO_CONFIG_KHR && !EGL_KHR_no_config_context");
++		return XRT_ERROR_EGL_CONFIG_MISSING;
++	}
++
++	// On Android this extension is 'hidden'.
++	ensure_native_fence_is_loaded(display, get_gl_procaddr);
++
++
++	/*
++	 * Get client type.
++	 */
++
++	EGLint egl_client_type;
++	if (!eglQueryContext(display, context, EGL_CONTEXT_CLIENT_TYPE, &egl_client_type)) {
++		EGL_ERROR("Could not query EGL client API type from context: %p", (void *)context);
++		return XRT_ERROR_OPENGL;
++	}
++
++
++	/*
++	 * Create context.
++	 */
++
++	xret = create_context(display, config, context, egl_client_type, &context);
++	if (xret != XRT_SUCCESS) {
++		return xret;
++	}
++
++
++	/*
++	 * Make current.
++	 */
++
++	// Save old EGL display, context and drawables.
++	struct client_egl_context old = {0};
++	save_context(&old);
++
++	if (!make_current_without_window(display, context)) {
++		EGL_ERROR(
++		    "eglMakeCurrent: %s"
++		    "\n\tFailed to make EGL context current"
++		    "\n\told - dpy: %p, ctx: %p, read: %p, draw: %p"
++		    "\n\tnew - dpy: %p, ctx: %p, read: %p, draw: %p",
++		    egl_error_str(eglGetError()),                                         //
++		    (void *)old.dpy, (void *)old.ctx, (void *)old.read, (void *)old.draw, //
++		    (void *)display, (void *)context, NULL, NULL);                        //
++
++		DESTROY_CONTEXT(display, context);
++
++		// No need to restore on failure.
++		return XRT_ERROR_OPENGL;
++	}
++
++
++	/*
++	 * Use helpers to do all setup.
++	 */
++
++	// Load GL functions, only EGL functions where loaded above.
++	xret = load_gl_functions(egl_client_type, get_gl_procaddr);
++	if (xret != XRT_SUCCESS) {
++		restore_context(&old);
++		DESTROY_CONTEXT(display, context);
++		return xret;
++	}
++
++	// Some consistency/extension availability checking.
++	xret = check_context_and_debug_print(egl_client_type);
++	if (xret != XRT_SUCCESS) {
++		restore_context(&old);
++		DESTROY_CONTEXT(display, context);
++		return xret;
++	}
++
++	// Get functions.
++	client_gl_swapchain_create_func_t sc_create_func = NULL;
++	client_gl_insert_fence_func_t insert_fence_func = NULL;
++
++	xret = get_client_gl_functions(&sc_create_func, &insert_fence_func);
++	if (xret != XRT_SUCCESS) {
++		restore_context(&old);
++		DESTROY_CONTEXT(display, context);
++		return xret;
++	}
++
++
++	/*
++	 * Now do the allocation and init.
++	 */
++
++	struct client_egl_compositor *ceglc = U_TYPED_CALLOC(struct client_egl_compositor);
++	ceglc->current.dpy = display;
++	ceglc->current.ctx = context;
++	ceglc->base.renderdoc_enabled = renderdoc_enabled;
++
++	bool bret = client_gl_compositor_init( //
++	    &ceglc->base,                      // c
++	    xcn,                               // xcn
++	    client_egl_context_begin,          // context_begin
++	    client_egl_context_end,            // context_end
++	    sc_create_func,                    // create_swapchain
++	    insert_fence_func);                // insert_fence
++	if (!bret) {
++		free(ceglc);
++		EGL_ERROR("Failed to initialize compositor");
++		restore_context(&old);
++		DESTROY_CONTEXT(display, context);
++		return XRT_ERROR_OPENGL;
++	}
++
++	ceglc->base.base.destroy = client_egl_compositor_destroy;
++	restore_context(&old);
++	*out_xc = &ceglc->base.base;
++
++	return XRT_SUCCESS;
++}
+diff --git a/src/xrt/drivers/pocketxr/pocketxr_hmd.c b/src/xrt/drivers/pocketxr/pocketxr_hmd.c
+index de6c6e0c2..e69c9ae38 100644
+--- a/src/xrt/drivers/pocketxr/pocketxr_hmd.c
++++ b/src/xrt/drivers/pocketxr/pocketxr_hmd.c
+@@ -1,762 +1,791 @@
+-// Copyright 2026, Pocket XR contributors.
+-// SPDX-License-Identifier: BSL-1.0
+-/*!
+- * @file
+- * @brief  A head mounted display whose pose and optics are fed in by the Pocket XR app.
+- *
+- * Based on the sample driver. The glasses' own tracking runs in the app, so this device only keeps the poses it is
+- * given and answers from them. There is no lens distortion to undo: the glasses do that themselves.
+- *
+- * @ingroup drv_pocketxr
+- */
+-
+-#include "os/os_time.h"
+-#include "xrt/xrt_defines.h"
+-#include "xrt/xrt_device.h"
+-#include "xrt/xrt_prober.h"
+-
+-#include "math/m_api.h"
+-#include "math/m_mathinclude.h" // IWYU pragma: keep
+-#include "math/m_relation_history.h"
+-#include "math/m_space.h"
+-
+-#include "util/u_device.h"
+-#include "util/u_distortion_mesh.h"
+-#include "util/u_logging.h"
+-#include "util/u_misc.h"
+-#include "util/u_pacing.h"
+-#include "util/u_time.h"
+-#include "util/u_visibility_mask.h"
+-#include "xrt/xrt_results.h"
+-
+-#include "pocketxr_interface.h"
+-
+-#include <pthread.h>
+-#include <stdio.h>
+-#include <stdlib.h>
+-
+-struct pocketxr_hmd
+-{
+-	struct xrt_device base;
+-
+-	// Has a built-in mutex, so it is thread safe.
+-	struct m_relation_history *relation_hist;
+-};
+-
+-struct pocketxr_prober
+-{
+-	struct xrt_auto_prober base;
+-};
+-
+-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+-static struct pocketxr_hmd *g_hmd = NULL;
+-
+-static int32_t g_width_px = 3840;
+-static int32_t g_height_px = 1080;
+-static float g_refresh_hz = 60.0f;
+-static float g_tan_half_x = 0.47f;
+-static float g_tan_half_y = 0.27f;
+-//! The wearer's IPD, metres; 0 leaves the application's.
+-static float g_ipd_m = 0.0f;
+-/*!
+- * Each eye's view centre moved outward by this tangent: the glasses' optics angle both eyes in so a picture with no
+- * disparity sits at their 3D distance, not at infinity. Without it every depth is pulled toward that distance.
+- */
+-static float g_eye_shift_tan = 0.0f;
+-
+-/*
+- * Ultra XR: one tracking origin for the head, the controllers and the hands, so everything the app feeds is in one
+- * space. Left to themselves (U_DEVICE_ALLOC_TRACKING_NONE) each device has its own origin, and the builder puts the
+- * head's 1.6 m up and the hands' at (-0.2 or 0.2, 1.3, -0.5): poses fed in one space come out in three.
+- */
+-static struct xrt_tracking_origin g_origin = {
+-    .name = "Ultra XR",
+-    .type = XRT_TRACKING_TYPE_OTHER,
+-    .initial_offset = XRT_POSE_IDENTITY,
+-};
+-
+-/*!
+- * Where the app's tracking space sits in the runtime's (the STAGE space): fed space to stage. The 1.6 m is the
+- * nominal standing height the builder gave the head before, for a tracker that starts at zero.
+- */
+-static struct xrt_pose g_origin_offset = {
+-    .orientation = XRT_QUAT_IDENTITY,
+-    .position = {0.0f, 1.6f, 0.0f},
+-};
+-
+-void
+-pocketxr_get_origin_offset(struct xrt_pose *out_offset)
+-{
+-	pthread_mutex_lock(&g_lock);
+-	*out_offset = g_origin_offset;
+-	pthread_mutex_unlock(&g_lock);
+-}
+-
+-struct xrt_tracking_origin *
+-pocketxr_get_origin(void)
+-{
+-	return &g_origin;
+-}
+-
+-//! Moves a relation in the fed space into the runtime's.
+-static void
+-apply_origin_offset(struct xrt_space_relation *relation)
+-{
+-	if (relation->relation_flags == 0) {
+-		return;
+-	}
+-	struct xrt_pose offset;
+-	pocketxr_get_origin_offset(&offset);
+-
+-	struct xrt_relation_chain xrc = {0};
+-	m_relation_chain_push_relation(&xrc, relation);
+-	m_relation_chain_push_pose_if_not_identity(&xrc, &offset);
+-	m_relation_chain_resolve(&xrc, relation);
+-}
+-
+-static inline struct pocketxr_hmd *
+-pocketxr_hmd(struct xrt_device *xdev)
+-{
+-	return (struct pocketxr_hmd *)xdev;
+-}
+-
+-static void
+-pocketxr_hmd_destroy(struct xrt_device *xdev)
+-{
+-	struct pocketxr_hmd *hmd = pocketxr_hmd(xdev);
+-
+-	pthread_mutex_lock(&g_lock);
+-	if (g_hmd == hmd) {
+-		g_hmd = NULL;
+-	}
+-	pthread_mutex_unlock(&g_lock);
+-
+-	m_relation_history_destroy(&hmd->relation_hist);
+-	u_device_free(&hmd->base);
+-}
+-
+-static xrt_result_t
+-pocketxr_hmd_get_tracked_pose(struct xrt_device *xdev,
+-                              enum xrt_input_name name,
+-                              int64_t at_timestamp_ns,
+-                              struct xrt_space_relation *out_relation)
+-{
+-	struct pocketxr_hmd *hmd = pocketxr_hmd(xdev);
+-
+-	if (name != XRT_INPUT_GENERIC_HEAD_POSE) {
+-		return XRT_ERROR_INPUT_UNSUPPORTED;
+-	}
+-
+-	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
+-	m_relation_history_get(hmd->relation_hist, at_timestamp_ns, &relation);
+-
+-	if ((relation.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) != 0) {
+-		math_quat_normalize(&relation.pose.orientation);
+-	}
+-	apply_origin_offset(&relation);
+-
+-	*out_relation = relation;
+-	return XRT_SUCCESS;
+-}
+-
+-static xrt_result_t
+-pocketxr_hmd_get_view_poses(struct xrt_device *xdev,
+-                            const struct xrt_vec3 *default_eye_relation,
+-                            int64_t at_timestamp_ns,
+-                            enum xrt_view_type view_type,
+-                            uint32_t view_count,
+-                            struct xrt_space_relation *out_head_relation,
+-                            struct xrt_fov *out_fovs,
+-                            struct xrt_pose *out_poses)
+-{
+-	struct xrt_vec3 eyes = *default_eye_relation;
+-	pthread_mutex_lock(&g_lock);
+-	const float ipd_m = g_ipd_m;
+-	pthread_mutex_unlock(&g_lock);
+-	if (ipd_m > 0.04f && ipd_m < 0.09f) {
+-		eyes.x = ipd_m;
+-	}
+-	return u_device_get_view_poses(xdev, &eyes, at_timestamp_ns, view_type, view_count, out_head_relation, out_fovs,
+-	                               out_poses);
+-}
+-
+-static xrt_result_t
+-pocketxr_hmd_get_visibility_mask(struct xrt_device *xdev,
+-                                 enum xrt_visibility_mask_type type,
+-                                 uint32_t view_index,
+-                                 struct xrt_visibility_mask **out_mask)
+-{
+-	struct xrt_fov fov = xdev->hmd->distortion.fov[view_index];
+-	u_visibility_mask_get_default(type, &fov, out_mask);
+-	return XRT_SUCCESS;
+-}
+-
+-static struct xrt_device *
+-pocketxr_hmd_create(void)
+-{
+-	enum u_device_alloc_flags flags =
+-	    (enum u_device_alloc_flags)(U_DEVICE_ALLOC_HMD | U_DEVICE_ALLOC_TRACKING_NONE);
+-
+-	struct pocketxr_hmd *hmd = U_DEVICE_ALLOCATE(struct pocketxr_hmd, flags, 1, 0);
+-	hmd->base.tracking_origin = &g_origin;
+-	// Ultra XR: what this device does not do answers "not implemented" instead of being a null pointer.
+-	u_device_populate_function_pointers(&hmd->base, pocketxr_hmd_get_tracked_pose, pocketxr_hmd_destroy);
+-
+-	size_t idx = 0;
+-	hmd->base.hmd->blend_modes[idx++] = XRT_BLEND_MODE_OPAQUE;
+-	hmd->base.hmd->blend_mode_count = idx;
+-
+-	hmd->base.update_inputs = u_device_noop_update_inputs;
+-	hmd->base.get_tracked_pose = pocketxr_hmd_get_tracked_pose;
+-	hmd->base.get_view_poses = pocketxr_hmd_get_view_poses;
+-	hmd->base.get_visibility_mask = pocketxr_hmd_get_visibility_mask;
+-	hmd->base.destroy = pocketxr_hmd_destroy;
+-
+-	snprintf(hmd->base.str, XRT_DEVICE_NAME_LEN, "Pocket XR glasses");
+-	snprintf(hmd->base.serial, XRT_DEVICE_NAME_LEN, "Pocket XR glasses");
+-
+-	m_relation_history_create(&hmd->relation_hist);
+-
+-	hmd->base.name = XRT_DEVICE_GENERIC_HMD;
+-	hmd->base.device_type = XRT_DEVICE_TYPE_HMD;
+-	hmd->base.inputs[0].name = XRT_INPUT_GENERIC_HEAD_POSE;
+-	hmd->base.supported.orientation_tracking = true;
+-	// Ultra XR: the app feeds a position (pocketxr_feed_pose6).
+-	hmd->base.supported.position_tracking = true;
+-
+-	pthread_mutex_lock(&g_lock);
+-	const int32_t width = g_width_px;
+-	const int32_t height = g_height_px;
+-	const float refresh = g_refresh_hz;
+-	const float tan_x = g_tan_half_x;
+-	const float tan_y = g_tan_half_y;
+-	const float shift = g_eye_shift_tan;
+-	pthread_mutex_unlock(&g_lock);
+-
+-	hmd->base.hmd->screens[0].nominal_frame_interval_ns = time_s_to_ns(1.0f / refresh);
+-	hmd->base.hmd->screens[0].w_pixels = width;
+-	hmd->base.hmd->screens[0].h_pixels = height;
+-
+-	const int32_t eye_w = width / 2;
+-	for (uint8_t eye = 0; eye < 2; ++eye) {
+-		hmd->base.hmd->views[eye].display.w_pixels = eye_w;
+-		hmd->base.hmd->views[eye].display.h_pixels = height;
+-		hmd->base.hmd->views[eye].viewport.x_pixels = eye == 0 ? 0 : eye_w;
+-		hmd->base.hmd->views[eye].viewport.y_pixels = 0;
+-		hmd->base.hmd->views[eye].viewport.w_pixels = eye_w;
+-		hmd->base.hmd->views[eye].viewport.h_pixels = height;
+-		hmd->base.hmd->views[eye].rot = u_device_rotation_ident;
+-
+-		// The glasses show each eye's picture turned toward the nose by the shift (the left eye's to the right), so
+-		// that eye's view centre turns the same way and a thing at infinity is seen straight ahead.
+-		const float out = eye == 0 ? shift : -shift;
+-		hmd->base.hmd->distortion.fov[eye].angle_left = -atanf(tan_x - out);
+-		hmd->base.hmd->distortion.fov[eye].angle_right = atanf(tan_x + out);
+-		hmd->base.hmd->distortion.fov[eye].angle_up = atanf(tan_y);
+-		hmd->base.hmd->distortion.fov[eye].angle_down = -atanf(tan_y);
+-	}
+-
+-	u_distortion_mesh_set_none(&hmd->base);
+-
+-	struct xrt_space_relation identity = XRT_SPACE_RELATION_ZERO;
+-	identity.relation_flags = (enum xrt_space_relation_flags)(XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
+-	                                                          XRT_SPACE_RELATION_ORIENTATION_VALID_BIT);
+-	identity.pose.orientation.w = 1.0f;
+-	m_relation_history_push(hmd->relation_hist, &identity, os_monotonic_get_ns());
+-
+-	pthread_mutex_lock(&g_lock);
+-	g_hmd = hmd;
+-	pthread_mutex_unlock(&g_lock);
+-
+-	U_LOG_I("Pocket XR glasses: %dx%d at %.1f Hz, eye centres out by tangent %.4f", width, height, refresh, shift);
+-	return &hmd->base;
+-}
+-
+-void
+-pocketxr_configure(int32_t width_px, int32_t height_px, float refresh_hz, float tan_half_x, float tan_half_y)
+-{
+-	pthread_mutex_lock(&g_lock);
+-	g_width_px = width_px;
+-	g_height_px = height_px;
+-	g_refresh_hz = refresh_hz;
+-	g_tan_half_x = tan_half_x;
+-	g_tan_half_y = tan_half_y;
+-	pthread_mutex_unlock(&g_lock);
+-}
+-
+-void
+-pocketxr_configure_eyes(float ipd_m, float eye_shift_tan)
+-{
+-	pthread_mutex_lock(&g_lock);
+-	g_ipd_m = ipd_m;
+-	g_eye_shift_tan = eye_shift_tan;
+-	pthread_mutex_unlock(&g_lock);
+-}
+-
+-void
+-pocketxr_feed_vblank(int64_t last_vblank_ns, int64_t period_ns)
+-{
+-	u_pc_fake_external_vblank(last_vblank_ns, period_ns);
+-}
+-
+-void
+-pocketxr_feed_pose(int64_t timestamp_ns, float x, float y, float z, float w, float ang_x, float ang_y, float ang_z)
+-{
+-	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
+-	relation.relation_flags = (enum xrt_space_relation_flags)(XRT_SPACE_RELATION_ORIENTATION_VALID_BIT |
+-	                                                          XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
+-	                                                          XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT);
+-	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
+-	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
+-
+-	pthread_mutex_lock(&g_lock);
+-	if (g_hmd != NULL) {
+-		m_relation_history_push(g_hmd->relation_hist, &relation, timestamp_ns);
+-	}
+-	pthread_mutex_unlock(&g_lock);
+-}
+-
+-void
+-pocketxr_feed_pose6(int64_t timestamp_ns,
+-                    float px,
+-                    float py,
+-                    float pz,
+-                    float x,
+-                    float y,
+-                    float z,
+-                    float w,
+-                    float ang_x,
+-                    float ang_y,
+-                    float ang_z,
+-                    float vel_x,
+-                    float vel_y,
+-                    float vel_z,
+-                    int position_tracked)
+-{
+-	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
+-	uint32_t flags = XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
+-	                 XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_POSITION_VALID_BIT;
+-	if (position_tracked) {
+-		flags |= XRT_SPACE_RELATION_POSITION_TRACKED_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT;
+-		relation.linear_velocity = (struct xrt_vec3){.x = vel_x, .y = vel_y, .z = vel_z};
+-	}
+-	relation.relation_flags = (enum xrt_space_relation_flags)flags;
+-	relation.pose.position = (struct xrt_vec3){.x = px, .y = py, .z = pz};
+-	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
+-	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
+-
+-	pthread_mutex_lock(&g_lock);
+-	if (g_hmd != NULL) {
+-		m_relation_history_push(g_hmd->relation_hist, &relation, timestamp_ns);
+-	}
+-	pthread_mutex_unlock(&g_lock);
+-}
+-
+-/*
+- *
+- * Controllers: two Touch-shaped devices, so games and streaming clients bind them with no extra work.
+- *
+- */
+-
+-enum pocketxr_input
+-{
+-	PX_PRIMARY,
+-	PX_SECONDARY,
+-	PX_MENU,
+-	PX_SQUEEZE,
+-	PX_TRIGGER,
+-	PX_STICK_CLICK,
+-	PX_STICK,
+-	PX_GRIP,
+-	PX_AIM,
+-	PX_PRIMARY_TOUCH,
+-	PX_SECONDARY_TOUCH,
+-	PX_TRIGGER_TOUCH,
+-	PX_STICK_TOUCH,
+-	PX_THUMBREST_TOUCH,
+-	PX_INPUT_COUNT,
+-};
+-
+-#define PX_CONTROLLER_TIMEOUT_NS (2000000000LL)
+-
+-/*
+- * How far past its newest sample a controller is predicted. Up to PX_PREDICT_FULL_NS the turn rate and speed are used
+- * in full; past it the horizon grows ever more slowly toward PX_PREDICT_FULL_NS + PX_PREDICT_TAIL_NS, so a game that
+- * asks 100 ms ahead does not swing a saber past where the hand stops. A Joy-Con silent for PX_STALE_NS stops being
+- * tracked, so a dropped one does not keep spinning.
+- */
+-#define PX_PREDICT_FULL_NS (30000000LL)
+-#define PX_PREDICT_TAIL_NS (40000000LL)
+-#define PX_STALE_NS (150000000LL)
+-
+-struct pocketxr_controller
+-{
+-	struct xrt_device base;
+-	struct m_relation_history *relation_hist;
+-	//! Ultra XR: the aim pose when it is fed on its own (pocketxr_feed_controller_aim), else the grip's is used.
+-	struct m_relation_history *aim_hist;
+-	int32_t hand;
+-
+-	// Under g_lock.
+-	uint32_t buttons;
+-	float trigger;
+-	float squeeze;
+-	float stick_x;
+-	float stick_y;
+-	int64_t last_ns;
+-	int64_t last_aim_ns;
+-};
+-
+-static struct pocketxr_controller *g_controllers[2] = {NULL, NULL};
+-
+-static inline struct pocketxr_controller *
+-pocketxr_controller(struct xrt_device *xdev)
+-{
+-	return (struct pocketxr_controller *)xdev;
+-}
+-
+-static void
+-pocketxr_controller_destroy(struct xrt_device *xdev)
+-{
+-	struct pocketxr_controller *c = pocketxr_controller(xdev);
+-
+-	pthread_mutex_lock(&g_lock);
+-	if (g_controllers[c->hand] == c) {
+-		g_controllers[c->hand] = NULL;
+-	}
+-	pthread_mutex_unlock(&g_lock);
+-
+-	m_relation_history_destroy(&c->relation_hist);
+-	m_relation_history_destroy(&c->aim_hist);
+-	u_device_free(&c->base);
+-}
+-
+-static xrt_result_t
+-pocketxr_controller_update_inputs(struct xrt_device *xdev)
+-{
+-	struct pocketxr_controller *c = pocketxr_controller(xdev);
+-	const int64_t now = os_monotonic_get_ns();
+-
+-	pthread_mutex_lock(&g_lock);
+-	const bool live = c->last_ns != 0 && now - c->last_ns < PX_CONTROLLER_TIMEOUT_NS;
+-	for (uint32_t i = 0; i < PX_INPUT_COUNT; i++) {
+-		xdev->inputs[i].active = live;
+-		xdev->inputs[i].timestamp = now;
+-	}
+-	xdev->inputs[PX_PRIMARY].value.boolean = (c->buttons & 1) != 0;
+-	xdev->inputs[PX_SECONDARY].value.boolean = (c->buttons & 2) != 0;
+-	xdev->inputs[PX_MENU].value.boolean = (c->buttons & 4) != 0;
+-	xdev->inputs[PX_STICK_CLICK].value.boolean = (c->buttons & 8) != 0;
+-	xdev->inputs[PX_SQUEEZE].value.vec1.x = c->squeeze;
+-	xdev->inputs[PX_TRIGGER].value.vec1.x = c->trigger;
+-	xdev->inputs[PX_STICK].value.vec2.x = c->stick_x;
+-	xdev->inputs[PX_STICK].value.vec2.y = c->stick_y;
+-	xdev->inputs[PX_PRIMARY_TOUCH].value.boolean = (c->buttons & 0x10) != 0;
+-	xdev->inputs[PX_SECONDARY_TOUCH].value.boolean = (c->buttons & 0x20) != 0;
+-	xdev->inputs[PX_TRIGGER_TOUCH].value.boolean = (c->buttons & 0x40) != 0;
+-	xdev->inputs[PX_STICK_TOUCH].value.boolean = (c->buttons & 0x80) != 0;
+-	xdev->inputs[PX_THUMBREST_TOUCH].value.boolean = (c->buttons & 0x100) != 0;
+-	pthread_mutex_unlock(&g_lock);
+-
+-	return XRT_SUCCESS;
+-}
+-
+-static xrt_result_t
+-pocketxr_controller_get_tracked_pose(struct xrt_device *xdev,
+-                                     enum xrt_input_name name,
+-                                     int64_t at_timestamp_ns,
+-                                     struct xrt_space_relation *out_relation)
+-{
+-	struct pocketxr_controller *c = pocketxr_controller(xdev);
+-
+-	if (name != XRT_INPUT_TOUCH_GRIP_POSE && name != XRT_INPUT_TOUCH_AIM_POSE) {
+-		return XRT_ERROR_INPUT_UNSUPPORTED;
+-	}
+-
+-	pthread_mutex_lock(&g_lock);
+-	const int64_t last_ns = c->last_ns;
+-	const int64_t last_aim_ns = c->last_aim_ns;
+-	pthread_mutex_unlock(&g_lock);
+-
+-	// Ultra XR: an aim pose fed on its own is used while it is as fresh as the controller's state.
+-	const bool own_aim = name == XRT_INPUT_TOUCH_AIM_POSE && last_aim_ns != 0 && last_ns != 0 &&
+-	                     last_ns - last_aim_ns < PX_STALE_NS;
+-
+-	int64_t at = at_timestamp_ns;
+-	if (last_ns != 0 && at > last_ns + PX_PREDICT_FULL_NS) {
+-		const double over = (double)(at - last_ns - PX_PREDICT_FULL_NS);
+-		at = last_ns + PX_PREDICT_FULL_NS + (int64_t)(PX_PREDICT_TAIL_NS * (1.0 - exp(-over / PX_PREDICT_TAIL_NS)));
+-	}
+-
+-	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
+-	m_relation_history_get(own_aim ? c->aim_hist : c->relation_hist, at, &relation);
+-
+-	if ((relation.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) != 0) {
+-		math_quat_normalize(&relation.pose.orientation);
+-	}
+-	if (last_ns == 0 || os_monotonic_get_ns() - last_ns > PX_STALE_NS) {
+-		relation.relation_flags = (enum xrt_space_relation_flags)(
+-		    relation.relation_flags &
+-		    ~(XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
+-		      XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT));
+-		relation.angular_velocity = (struct xrt_vec3){0};
+-		relation.linear_velocity = (struct xrt_vec3){0};
+-	}
+-	apply_origin_offset(&relation);
+-
+-	*out_relation = relation;
+-	return XRT_SUCCESS;
+-}
+-
+-static xrt_result_t
+-pocketxr_controller_set_output(struct xrt_device *xdev,
+-                               enum xrt_output_name name,
+-                               const struct xrt_output_value *value)
+-{
+-	// Haptics are not wired up yet.
+-	return XRT_SUCCESS;
+-}
+-
+-static struct xrt_device *
+-pocketxr_controller_create(int32_t hand)
+-{
+-	enum u_device_alloc_flags flags = (enum u_device_alloc_flags)(U_DEVICE_ALLOC_TRACKING_NONE);
+-	struct pocketxr_controller *c = U_DEVICE_ALLOCATE(struct pocketxr_controller, flags, PX_INPUT_COUNT, 1);
+-	c->base.tracking_origin = &g_origin;
+-	u_device_populate_function_pointers(&c->base, pocketxr_controller_get_tracked_pose, pocketxr_controller_destroy);
+-
+-	c->hand = hand;
+-	c->base.update_inputs = pocketxr_controller_update_inputs;
+-	c->base.get_tracked_pose = pocketxr_controller_get_tracked_pose;
+-	c->base.set_output = pocketxr_controller_set_output;
+-	c->base.destroy = pocketxr_controller_destroy;
+-
+-	c->base.name = XRT_DEVICE_TOUCH_CONTROLLER;
+-	c->base.device_type = hand == 0 ? XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER : XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER;
+-	c->base.supported.orientation_tracking = true;
+-	c->base.supported.position_tracking = true;
+-
+-	snprintf(c->base.str, XRT_DEVICE_NAME_LEN, "Pocket XR %s controller", hand == 0 ? "left" : "right");
+-	snprintf(c->base.serial, XRT_DEVICE_NAME_LEN, "Pocket XR %s controller", hand == 0 ? "left" : "right");
+-
+-	c->base.inputs[PX_PRIMARY].name = hand == 0 ? XRT_INPUT_TOUCH_X_CLICK : XRT_INPUT_TOUCH_A_CLICK;
+-	c->base.inputs[PX_SECONDARY].name = hand == 0 ? XRT_INPUT_TOUCH_Y_CLICK : XRT_INPUT_TOUCH_B_CLICK;
+-	c->base.inputs[PX_MENU].name = hand == 0 ? XRT_INPUT_TOUCH_MENU_CLICK : XRT_INPUT_TOUCH_SYSTEM_CLICK;
+-	c->base.inputs[PX_SQUEEZE].name = XRT_INPUT_TOUCH_SQUEEZE_VALUE;
+-	c->base.inputs[PX_TRIGGER].name = XRT_INPUT_TOUCH_TRIGGER_VALUE;
+-	c->base.inputs[PX_STICK_CLICK].name = XRT_INPUT_TOUCH_THUMBSTICK_CLICK;
+-	c->base.inputs[PX_STICK].name = XRT_INPUT_TOUCH_THUMBSTICK;
+-	c->base.inputs[PX_GRIP].name = XRT_INPUT_TOUCH_GRIP_POSE;
+-	c->base.inputs[PX_AIM].name = XRT_INPUT_TOUCH_AIM_POSE;
+-	c->base.inputs[PX_PRIMARY_TOUCH].name = hand == 0 ? XRT_INPUT_TOUCH_X_TOUCH : XRT_INPUT_TOUCH_A_TOUCH;
+-	c->base.inputs[PX_SECONDARY_TOUCH].name = hand == 0 ? XRT_INPUT_TOUCH_Y_TOUCH : XRT_INPUT_TOUCH_B_TOUCH;
+-	c->base.inputs[PX_TRIGGER_TOUCH].name = XRT_INPUT_TOUCH_TRIGGER_TOUCH;
+-	c->base.inputs[PX_STICK_TOUCH].name = XRT_INPUT_TOUCH_THUMBSTICK_TOUCH;
+-	c->base.inputs[PX_THUMBREST_TOUCH].name = XRT_INPUT_TOUCH_THUMBREST_TOUCH;
+-	c->base.outputs[0].name = XRT_OUTPUT_NAME_TOUCH_HAPTIC;
+-
+-	m_relation_history_create(&c->relation_hist);
+-	m_relation_history_create(&c->aim_hist);
+-
+-	pthread_mutex_lock(&g_lock);
+-	g_controllers[hand] = c;
+-	pthread_mutex_unlock(&g_lock);
+-
+-	return &c->base;
+-}
+-
+-void
+-pocketxr_feed_controller(int32_t hand,
+-                         int64_t timestamp_ns,
+-                         float px,
+-                         float py,
+-                         float pz,
+-                         float x,
+-                         float y,
+-                         float z,
+-                         float w,
+-                         float ang_x,
+-                         float ang_y,
+-                         float ang_z,
+-                         float vel_x,
+-                         float vel_y,
+-                         float vel_z,
+-                         uint32_t buttons,
+-                         float trigger,
+-                         float squeeze,
+-                         float stick_x,
+-                         float stick_y)
+-{
+-	if (hand < 0 || hand > 1) {
+-		return;
+-	}
+-
+-	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
+-	relation.relation_flags = (enum xrt_space_relation_flags)(
+-	    XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
+-	    XRT_SPACE_RELATION_POSITION_VALID_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
+-	    XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT);
+-	relation.pose.position = (struct xrt_vec3){.x = px, .y = py, .z = pz};
+-	relation.linear_velocity = (struct xrt_vec3){.x = vel_x, .y = vel_y, .z = vel_z};
+-	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
+-	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
+-
+-	pthread_mutex_lock(&g_lock);
+-	struct pocketxr_controller *c = g_controllers[hand];
+-	if (c != NULL) {
+-		m_relation_history_push(c->relation_hist, &relation, timestamp_ns);
+-		c->buttons = buttons;
+-		c->trigger = trigger;
+-		c->squeeze = squeeze;
+-		c->stick_x = stick_x;
+-		c->stick_y = stick_y;
+-		c->last_ns = timestamp_ns;
+-	}
+-	pthread_mutex_unlock(&g_lock);
+-}
+-
+-void
+-pocketxr_feed_controller_aim(int32_t hand,
+-                             int64_t timestamp_ns,
+-                             float px,
+-                             float py,
+-                             float pz,
+-                             float x,
+-                             float y,
+-                             float z,
+-                             float w,
+-                             float ang_x,
+-                             float ang_y,
+-                             float ang_z,
+-                             float vel_x,
+-                             float vel_y,
+-                             float vel_z)
+-{
+-	if (hand < 0 || hand > 1) {
+-		return;
+-	}
+-
+-	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
+-	relation.relation_flags = (enum xrt_space_relation_flags)(
+-	    XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
+-	    XRT_SPACE_RELATION_POSITION_VALID_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
+-	    XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT);
+-	relation.pose.position = (struct xrt_vec3){.x = px, .y = py, .z = pz};
+-	relation.linear_velocity = (struct xrt_vec3){.x = vel_x, .y = vel_y, .z = vel_z};
+-	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
+-	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
+-
+-	pthread_mutex_lock(&g_lock);
+-	struct pocketxr_controller *c = g_controllers[hand];
+-	if (c != NULL) {
+-		m_relation_history_push(c->aim_hist, &relation, timestamp_ns);
+-		c->last_aim_ns = timestamp_ns;
+-	}
+-	pthread_mutex_unlock(&g_lock);
+-}
+-
+-void
+-pocketxr_set_origin_offset(float px, float py, float pz, float x, float y, float z, float w)
+-{
+-	struct xrt_pose offset = {
+-	    .orientation = {.x = x, .y = y, .z = z, .w = w},
+-	    .position = {.x = px, .y = py, .z = pz},
+-	};
+-	if (!math_quat_validate(&offset.orientation)) {
+-		const float n = sqrtf(x * x + y * y + z * z + w * w);
+-		if (!(n > 1e-6f)) {
+-			offset.orientation = (struct xrt_quat)XRT_QUAT_IDENTITY;
+-		} else {
+-			math_quat_normalize(&offset.orientation);
+-		}
+-	}
+-
+-	pthread_mutex_lock(&g_lock);
+-	g_origin_offset = offset;
+-	pthread_mutex_unlock(&g_lock);
+-}
+-
+-int
+-pocketxr_recenter(void)
+-{
+-	struct xrt_space_relation head = XRT_SPACE_RELATION_ZERO;
+-	int64_t head_ns = 0;
+-
+-	pthread_mutex_lock(&g_lock);
+-	const bool have = g_hmd != NULL && m_relation_history_get_latest(g_hmd->relation_hist, &head_ns, &head);
+-	const float keep_y = g_origin_offset.position.y;
+-	pthread_mutex_unlock(&g_lock);
+-
+-	if (!have || (head.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) == 0) {
+-		return 0;
+-	}
+-
+-	// Where the head looks, on the floor plane: a yaw only, so the horizon stays level.
+-	math_quat_normalize(&head.pose.orientation);
+-	const struct xrt_vec3 forward = {0.0f, 0.0f, -1.0f};
+-	struct xrt_vec3 looking;
+-	math_quat_rotate_vec3(&head.pose.orientation, &forward, &looking);
+-	float yaw = 0.0f;
+-	if (looking.x * looking.x + looking.z * looking.z > 1e-6f) {
+-		yaw = atan2f(-looking.x, -looking.z);
+-	}
+-
+-	struct xrt_pose flat = XRT_POSE_IDENTITY;
+-	const struct xrt_vec3 up = {0.0f, 1.0f, 0.0f};
+-	math_quat_from_angle_vector(yaw, &up, &flat.orientation);
+-	if ((head.relation_flags & XRT_SPACE_RELATION_POSITION_VALID_BIT) != 0) {
+-		flat.position.x = head.pose.position.x;
+-		flat.position.z = head.pose.position.z;
+-	}
+-
+-	// The head's flat pose goes to the origin, facing -z; the height offset stays as it was set.
+-	struct xrt_pose offset;
+-	math_pose_invert(&flat, &offset);
+-	offset.position.y = keep_y;
+-
+-	pthread_mutex_lock(&g_lock);
+-	g_origin_offset = offset;
+-	pthread_mutex_unlock(&g_lock);
+-
+-	U_LOG_I("Ultra XR: recentred, the fed space turned %.1f degrees and moved (%.2f, %.2f) m on the floor",
+-	        -yaw * 180.0 / M_PI, offset.position.x, offset.position.z);
+-	return 1;
+-}
+-
+-static void
+-pocketxr_prober_destroy(struct xrt_auto_prober *p)
+-{
+-	free(p);
+-}
+-
+-static int
+-pocketxr_prober_autoprobe(struct xrt_auto_prober *xap,
+-                          cJSON *attached_data,
+-                          bool no_hmds,
+-                          struct xrt_prober *xp,
+-                          struct xrt_device **out_xdevs)
+-{
+-	if (no_hmds) {
+-		return 0;
+-	}
+-	struct xrt_device *xdev = pocketxr_hmd_create();
+-	if (xdev == NULL) {
+-		return 0;
+-	}
+-	out_xdevs[0] = xdev;
+-	out_xdevs[1] = pocketxr_controller_create(0);
+-	out_xdevs[2] = pocketxr_controller_create(1);
+-	// Ultra XR: the hands' joints for XR_EXT_hand_tracking (pocketxr_hands.c).
+-	out_xdevs[3] = pocketxr_hands_create();
+-	return out_xdevs[3] != NULL ? 4 : 3;
+-}
+-
+-struct xrt_auto_prober *
+-pocketxr_create_auto_prober(void)
+-{
+-	struct pocketxr_prober *p = U_TYPED_CALLOC(struct pocketxr_prober);
+-	p->base.name = "Pocket XR";
+-	p->base.destroy = pocketxr_prober_destroy;
+-	p->base.lelo_dallas_autoprobe = pocketxr_prober_autoprobe;
+-	return &p->base;
+-}
++// Copyright 2026, Pocket XR contributors.
++// SPDX-License-Identifier: BSL-1.0
++/*!
++ * @file
++ * @brief  A head mounted display whose pose and optics are fed in by the Pocket XR app.
++ *
++ * Based on the sample driver. The glasses' own tracking runs in the app, so this device only keeps the poses it is
++ * given and answers from them. There is no lens distortion to undo: the glasses do that themselves.
++ *
++ * @ingroup drv_pocketxr
++ */
++
++#include "os/os_time.h"
++#include "xrt/xrt_defines.h"
++#include "xrt/xrt_device.h"
++#include "xrt/xrt_prober.h"
++
++#include "math/m_api.h"
++#include "math/m_mathinclude.h" // IWYU pragma: keep
++#include "math/m_relation_history.h"
++#include "math/m_space.h"
++
++#include "util/u_device.h"
++#include "util/u_distortion_mesh.h"
++#include "util/u_logging.h"
++#include "util/u_misc.h"
++#include "util/u_pacing.h"
++#include "util/u_time.h"
++#include "util/u_visibility_mask.h"
++#include "xrt/xrt_results.h"
++
++#include "pocketxr_interface.h"
++
++#include <pthread.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++struct pocketxr_hmd
++{
++	struct xrt_device base;
++
++	// Has a built-in mutex, so it is thread safe.
++	struct m_relation_history *relation_hist;
++};
++
++struct pocketxr_prober
++{
++	struct xrt_auto_prober base;
++};
++
++static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct pocketxr_hmd *g_hmd = NULL;
++
++static int32_t g_width_px = 3840;
++static int32_t g_height_px = 1080;
++static float g_refresh_hz = 60.0f;
++static float g_tan_half_x = 0.47f;
++static float g_tan_half_y = 0.27f;
++//! The wearer's IPD, metres; 0 leaves the application's.
++static float g_ipd_m = 0.0f;
++/*!
++ * Each eye's view centre moved outward by this tangent: the glasses' optics angle both eyes in so a picture with no
++ * disparity sits at their 3D distance, not at infinity. Without it every depth is pulled toward that distance.
++ */
++static float g_eye_shift_tan = 0.0f;
++// Ultra XR: one picture for both eyes (glasses in a 2D mode). Both views then cover the whole panel from the
++// head's centre, so the two eye pictures are never shown side by side.
++static bool g_single_view = false;
++
++/*
++ * Ultra XR: one tracking origin for the head, the controllers and the hands, so everything the app feeds is in one
++ * space. Left to themselves (U_DEVICE_ALLOC_TRACKING_NONE) each device has its own origin, and the builder puts the
++ * head's 1.6 m up and the hands' at (-0.2 or 0.2, 1.3, -0.5): poses fed in one space come out in three.
++ */
++static struct xrt_tracking_origin g_origin = {
++    .name = "Ultra XR",
++    .type = XRT_TRACKING_TYPE_OTHER,
++    .initial_offset = XRT_POSE_IDENTITY,
++};
++
++/*!
++ * Where the app's tracking space sits in the runtime's (the STAGE space): fed space to stage. The 1.6 m is the
++ * nominal standing height the builder gave the head before, for a tracker that starts at zero.
++ */
++static struct xrt_pose g_origin_offset = {
++    .orientation = XRT_QUAT_IDENTITY,
++    .position = {0.0f, 1.6f, 0.0f},
++};
++
++void
++pocketxr_get_origin_offset(struct xrt_pose *out_offset)
++{
++	pthread_mutex_lock(&g_lock);
++	*out_offset = g_origin_offset;
++	pthread_mutex_unlock(&g_lock);
++}
++
++struct xrt_tracking_origin *
++pocketxr_get_origin(void)
++{
++	return &g_origin;
++}
++
++//! Moves a relation in the fed space into the runtime's.
++static void
++apply_origin_offset(struct xrt_space_relation *relation)
++{
++	if (relation->relation_flags == 0) {
++		return;
++	}
++	struct xrt_pose offset;
++	pocketxr_get_origin_offset(&offset);
++
++	struct xrt_relation_chain xrc = {0};
++	m_relation_chain_push_relation(&xrc, relation);
++	m_relation_chain_push_pose_if_not_identity(&xrc, &offset);
++	m_relation_chain_resolve(&xrc, relation);
++}
++
++static inline struct pocketxr_hmd *
++pocketxr_hmd(struct xrt_device *xdev)
++{
++	return (struct pocketxr_hmd *)xdev;
++}
++
++static void
++pocketxr_hmd_destroy(struct xrt_device *xdev)
++{
++	struct pocketxr_hmd *hmd = pocketxr_hmd(xdev);
++
++	pthread_mutex_lock(&g_lock);
++	if (g_hmd == hmd) {
++		g_hmd = NULL;
++	}
++	pthread_mutex_unlock(&g_lock);
++
++	m_relation_history_destroy(&hmd->relation_hist);
++	u_device_free(&hmd->base);
++}
++
++static xrt_result_t
++pocketxr_hmd_get_tracked_pose(struct xrt_device *xdev,
++                              enum xrt_input_name name,
++                              int64_t at_timestamp_ns,
++                              struct xrt_space_relation *out_relation)
++{
++	struct pocketxr_hmd *hmd = pocketxr_hmd(xdev);
++
++	if (name != XRT_INPUT_GENERIC_HEAD_POSE) {
++		return XRT_ERROR_INPUT_UNSUPPORTED;
++	}
++
++	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
++	m_relation_history_get(hmd->relation_hist, at_timestamp_ns, &relation);
++
++	if ((relation.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) != 0) {
++		math_quat_normalize(&relation.pose.orientation);
++	}
++	apply_origin_offset(&relation);
++
++	*out_relation = relation;
++	return XRT_SUCCESS;
++}
++
++static xrt_result_t
++pocketxr_hmd_get_view_poses(struct xrt_device *xdev,
++                            const struct xrt_vec3 *default_eye_relation,
++                            int64_t at_timestamp_ns,
++                            enum xrt_view_type view_type,
++                            uint32_t view_count,
++                            struct xrt_space_relation *out_head_relation,
++                            struct xrt_fov *out_fovs,
++                            struct xrt_pose *out_poses)
++{
++	struct xrt_vec3 eyes = *default_eye_relation;
++	pthread_mutex_lock(&g_lock);
++	const float ipd_m = g_ipd_m;
++	const bool single = g_single_view;
++	pthread_mutex_unlock(&g_lock);
++	if (ipd_m > 0.04f && ipd_m < 0.09f) {
++		eyes.x = ipd_m;
++	}
++	if (single) {
++		// Both views from the head's centre: the same picture twice.
++		eyes.x = 0.0f;
++		eyes.y = 0.0f;
++		eyes.z = 0.0f;
++	}
++	return u_device_get_view_poses(xdev, &eyes, at_timestamp_ns, view_type, view_count, out_head_relation, out_fovs,
++	                               out_poses);
++}
++
++static xrt_result_t
++pocketxr_hmd_get_visibility_mask(struct xrt_device *xdev,
++                                 enum xrt_visibility_mask_type type,
++                                 uint32_t view_index,
++                                 struct xrt_visibility_mask **out_mask)
++{
++	struct xrt_fov fov = xdev->hmd->distortion.fov[view_index];
++	u_visibility_mask_get_default(type, &fov, out_mask);
++	return XRT_SUCCESS;
++}
++
++static struct xrt_device *
++pocketxr_hmd_create(void)
++{
++	enum u_device_alloc_flags flags =
++	    (enum u_device_alloc_flags)(U_DEVICE_ALLOC_HMD | U_DEVICE_ALLOC_TRACKING_NONE);
++
++	struct pocketxr_hmd *hmd = U_DEVICE_ALLOCATE(struct pocketxr_hmd, flags, 1, 0);
++	hmd->base.tracking_origin = &g_origin;
++	// Ultra XR: what this device does not do answers "not implemented" instead of being a null pointer.
++	u_device_populate_function_pointers(&hmd->base, pocketxr_hmd_get_tracked_pose, pocketxr_hmd_destroy);
++
++	size_t idx = 0;
++	hmd->base.hmd->blend_modes[idx++] = XRT_BLEND_MODE_OPAQUE;
++	// Ultra XR: the glasses are optical see-through, where black is nothing and light adds to the room. That is
++	// the additive blend mode; applications that ask for it (augmented reality) are no longer refused.
++	hmd->base.hmd->blend_modes[idx++] = XRT_BLEND_MODE_ADDITIVE;
++	hmd->base.hmd->blend_mode_count = idx;
++
++	hmd->base.update_inputs = u_device_noop_update_inputs;
++	hmd->base.get_tracked_pose = pocketxr_hmd_get_tracked_pose;
++	hmd->base.get_view_poses = pocketxr_hmd_get_view_poses;
++	hmd->base.get_visibility_mask = pocketxr_hmd_get_visibility_mask;
++	hmd->base.destroy = pocketxr_hmd_destroy;
++
++	snprintf(hmd->base.str, XRT_DEVICE_NAME_LEN, "Pocket XR glasses");
++	snprintf(hmd->base.serial, XRT_DEVICE_NAME_LEN, "Pocket XR glasses");
++
++	m_relation_history_create(&hmd->relation_hist);
++
++	hmd->base.name = XRT_DEVICE_GENERIC_HMD;
++	hmd->base.device_type = XRT_DEVICE_TYPE_HMD;
++	hmd->base.inputs[0].name = XRT_INPUT_GENERIC_HEAD_POSE;
++	hmd->base.supported.orientation_tracking = true;
++	// Ultra XR: the app feeds a position (pocketxr_feed_pose6).
++	hmd->base.supported.position_tracking = true;
++
++	pthread_mutex_lock(&g_lock);
++	const int32_t width = g_width_px;
++	const int32_t height = g_height_px;
++	const float refresh = g_refresh_hz;
++	const float tan_x = g_tan_half_x;
++	const float tan_y = g_tan_half_y;
++	const bool single = g_single_view;
++	const float shift = single ? 0.0f : g_eye_shift_tan;
++	pthread_mutex_unlock(&g_lock);
++
++	hmd->base.hmd->screens[0].nominal_frame_interval_ns = time_s_to_ns(1.0f / refresh);
++	hmd->base.hmd->screens[0].w_pixels = width;
++	hmd->base.hmd->screens[0].h_pixels = height;
++
++	const int32_t eye_w = single ? width : width / 2;
++	for (uint8_t eye = 0; eye < 2; ++eye) {
++		hmd->base.hmd->views[eye].display.w_pixels = eye_w;
++		hmd->base.hmd->views[eye].display.h_pixels = height;
++		hmd->base.hmd->views[eye].viewport.x_pixels = (eye == 0 || single) ? 0 : eye_w;
++		hmd->base.hmd->views[eye].viewport.y_pixels = 0;
++		hmd->base.hmd->views[eye].viewport.w_pixels = eye_w;
++		hmd->base.hmd->views[eye].viewport.h_pixels = height;
++		hmd->base.hmd->views[eye].rot = u_device_rotation_ident;
++
++		// The glasses show each eye's picture turned toward the nose by the shift (the left eye's to the right), so
++		// that eye's view centre turns the same way and a thing at infinity is seen straight ahead.
++		const float out = eye == 0 ? shift : -shift;
++		hmd->base.hmd->distortion.fov[eye].angle_left = -atanf(tan_x - out);
++		hmd->base.hmd->distortion.fov[eye].angle_right = atanf(tan_x + out);
++		hmd->base.hmd->distortion.fov[eye].angle_up = atanf(tan_y);
++		hmd->base.hmd->distortion.fov[eye].angle_down = -atanf(tan_y);
++	}
++
++	u_distortion_mesh_set_none(&hmd->base);
++
++	struct xrt_space_relation identity = XRT_SPACE_RELATION_ZERO;
++	identity.relation_flags = (enum xrt_space_relation_flags)(XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
++	                                                          XRT_SPACE_RELATION_ORIENTATION_VALID_BIT);
++	identity.pose.orientation.w = 1.0f;
++	m_relation_history_push(hmd->relation_hist, &identity, os_monotonic_get_ns());
++
++	pthread_mutex_lock(&g_lock);
++	g_hmd = hmd;
++	pthread_mutex_unlock(&g_lock);
++
++	U_LOG_I("Pocket XR glasses: %dx%d at %.1f Hz, eye centres out by tangent %.4f%s", width, height, refresh, shift,
++	        single ? ", one picture for both eyes" : ", one half of the picture for each eye");
++	return &hmd->base;
++}
++
++void
++pocketxr_configure(int32_t width_px, int32_t height_px, float refresh_hz, float tan_half_x, float tan_half_y)
++{
++	pthread_mutex_lock(&g_lock);
++	g_width_px = width_px;
++	g_height_px = height_px;
++	g_refresh_hz = refresh_hz;
++	g_tan_half_x = tan_half_x;
++	g_tan_half_y = tan_half_y;
++	pthread_mutex_unlock(&g_lock);
++}
++
++void
++pocketxr_configure_single_view(bool single_view)
++{
++	pthread_mutex_lock(&g_lock);
++	g_single_view = single_view;
++	pthread_mutex_unlock(&g_lock);
++}
++
++void
++pocketxr_configure_eyes(float ipd_m, float eye_shift_tan)
++{
++	pthread_mutex_lock(&g_lock);
++	g_ipd_m = ipd_m;
++	g_eye_shift_tan = eye_shift_tan;
++	pthread_mutex_unlock(&g_lock);
++}
++
++void
++pocketxr_feed_vblank(int64_t last_vblank_ns, int64_t period_ns)
++{
++	u_pc_fake_external_vblank(last_vblank_ns, period_ns);
++}
++
++void
++pocketxr_feed_pose(int64_t timestamp_ns, float x, float y, float z, float w, float ang_x, float ang_y, float ang_z)
++{
++	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
++	relation.relation_flags = (enum xrt_space_relation_flags)(XRT_SPACE_RELATION_ORIENTATION_VALID_BIT |
++	                                                          XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
++	                                                          XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT);
++	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
++	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
++
++	pthread_mutex_lock(&g_lock);
++	if (g_hmd != NULL) {
++		m_relation_history_push(g_hmd->relation_hist, &relation, timestamp_ns);
++	}
++	pthread_mutex_unlock(&g_lock);
++}
++
++void
++pocketxr_feed_pose6(int64_t timestamp_ns,
++                    float px,
++                    float py,
++                    float pz,
++                    float x,
++                    float y,
++                    float z,
++                    float w,
++                    float ang_x,
++                    float ang_y,
++                    float ang_z,
++                    float vel_x,
++                    float vel_y,
++                    float vel_z,
++                    int position_tracked)
++{
++	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
++	uint32_t flags = XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
++	                 XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_POSITION_VALID_BIT;
++	if (position_tracked) {
++		flags |= XRT_SPACE_RELATION_POSITION_TRACKED_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT;
++		relation.linear_velocity = (struct xrt_vec3){.x = vel_x, .y = vel_y, .z = vel_z};
++	}
++	relation.relation_flags = (enum xrt_space_relation_flags)flags;
++	relation.pose.position = (struct xrt_vec3){.x = px, .y = py, .z = pz};
++	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
++	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
++
++	pthread_mutex_lock(&g_lock);
++	if (g_hmd != NULL) {
++		m_relation_history_push(g_hmd->relation_hist, &relation, timestamp_ns);
++	}
++	pthread_mutex_unlock(&g_lock);
++}
++
++/*
++ *
++ * Controllers: two Touch-shaped devices, so games and streaming clients bind them with no extra work.
++ *
++ */
++
++enum pocketxr_input
++{
++	PX_PRIMARY,
++	PX_SECONDARY,
++	PX_MENU,
++	PX_SQUEEZE,
++	PX_TRIGGER,
++	PX_STICK_CLICK,
++	PX_STICK,
++	PX_GRIP,
++	PX_AIM,
++	PX_PRIMARY_TOUCH,
++	PX_SECONDARY_TOUCH,
++	PX_TRIGGER_TOUCH,
++	PX_STICK_TOUCH,
++	PX_THUMBREST_TOUCH,
++	PX_INPUT_COUNT,
++};
++
++#define PX_CONTROLLER_TIMEOUT_NS (2000000000LL)
++
++/*
++ * How far past its newest sample a controller is predicted. Up to PX_PREDICT_FULL_NS the turn rate and speed are used
++ * in full; past it the horizon grows ever more slowly toward PX_PREDICT_FULL_NS + PX_PREDICT_TAIL_NS, so a game that
++ * asks 100 ms ahead does not swing a saber past where the hand stops. A Joy-Con silent for PX_STALE_NS stops being
++ * tracked, so a dropped one does not keep spinning.
++ */
++#define PX_PREDICT_FULL_NS (30000000LL)
++#define PX_PREDICT_TAIL_NS (40000000LL)
++#define PX_STALE_NS (150000000LL)
++
++struct pocketxr_controller
++{
++	struct xrt_device base;
++	struct m_relation_history *relation_hist;
++	//! Ultra XR: the aim pose when it is fed on its own (pocketxr_feed_controller_aim), else the grip's is used.
++	struct m_relation_history *aim_hist;
++	int32_t hand;
++
++	// Under g_lock.
++	uint32_t buttons;
++	float trigger;
++	float squeeze;
++	float stick_x;
++	float stick_y;
++	int64_t last_ns;
++	int64_t last_aim_ns;
++};
++
++static struct pocketxr_controller *g_controllers[2] = {NULL, NULL};
++
++static inline struct pocketxr_controller *
++pocketxr_controller(struct xrt_device *xdev)
++{
++	return (struct pocketxr_controller *)xdev;
++}
++
++static void
++pocketxr_controller_destroy(struct xrt_device *xdev)
++{
++	struct pocketxr_controller *c = pocketxr_controller(xdev);
++
++	pthread_mutex_lock(&g_lock);
++	if (g_controllers[c->hand] == c) {
++		g_controllers[c->hand] = NULL;
++	}
++	pthread_mutex_unlock(&g_lock);
++
++	m_relation_history_destroy(&c->relation_hist);
++	m_relation_history_destroy(&c->aim_hist);
++	u_device_free(&c->base);
++}
++
++static xrt_result_t
++pocketxr_controller_update_inputs(struct xrt_device *xdev)
++{
++	struct pocketxr_controller *c = pocketxr_controller(xdev);
++	const int64_t now = os_monotonic_get_ns();
++
++	pthread_mutex_lock(&g_lock);
++	const bool live = c->last_ns != 0 && now - c->last_ns < PX_CONTROLLER_TIMEOUT_NS;
++	for (uint32_t i = 0; i < PX_INPUT_COUNT; i++) {
++		xdev->inputs[i].active = live;
++		xdev->inputs[i].timestamp = now;
++	}
++	xdev->inputs[PX_PRIMARY].value.boolean = (c->buttons & 1) != 0;
++	xdev->inputs[PX_SECONDARY].value.boolean = (c->buttons & 2) != 0;
++	xdev->inputs[PX_MENU].value.boolean = (c->buttons & 4) != 0;
++	xdev->inputs[PX_STICK_CLICK].value.boolean = (c->buttons & 8) != 0;
++	xdev->inputs[PX_SQUEEZE].value.vec1.x = c->squeeze;
++	xdev->inputs[PX_TRIGGER].value.vec1.x = c->trigger;
++	xdev->inputs[PX_STICK].value.vec2.x = c->stick_x;
++	xdev->inputs[PX_STICK].value.vec2.y = c->stick_y;
++	xdev->inputs[PX_PRIMARY_TOUCH].value.boolean = (c->buttons & 0x10) != 0;
++	xdev->inputs[PX_SECONDARY_TOUCH].value.boolean = (c->buttons & 0x20) != 0;
++	xdev->inputs[PX_TRIGGER_TOUCH].value.boolean = (c->buttons & 0x40) != 0;
++	xdev->inputs[PX_STICK_TOUCH].value.boolean = (c->buttons & 0x80) != 0;
++	xdev->inputs[PX_THUMBREST_TOUCH].value.boolean = (c->buttons & 0x100) != 0;
++	pthread_mutex_unlock(&g_lock);
++
++	return XRT_SUCCESS;
++}
++
++static xrt_result_t
++pocketxr_controller_get_tracked_pose(struct xrt_device *xdev,
++                                     enum xrt_input_name name,
++                                     int64_t at_timestamp_ns,
++                                     struct xrt_space_relation *out_relation)
++{
++	struct pocketxr_controller *c = pocketxr_controller(xdev);
++
++	if (name != XRT_INPUT_TOUCH_GRIP_POSE && name != XRT_INPUT_TOUCH_AIM_POSE) {
++		return XRT_ERROR_INPUT_UNSUPPORTED;
++	}
++
++	pthread_mutex_lock(&g_lock);
++	const int64_t last_ns = c->last_ns;
++	const int64_t last_aim_ns = c->last_aim_ns;
++	pthread_mutex_unlock(&g_lock);
++
++	// Ultra XR: an aim pose fed on its own is used while it is as fresh as the controller's state.
++	const bool own_aim = name == XRT_INPUT_TOUCH_AIM_POSE && last_aim_ns != 0 && last_ns != 0 &&
++	                     last_ns - last_aim_ns < PX_STALE_NS;
++
++	int64_t at = at_timestamp_ns;
++	if (last_ns != 0 && at > last_ns + PX_PREDICT_FULL_NS) {
++		const double over = (double)(at - last_ns - PX_PREDICT_FULL_NS);
++		at = last_ns + PX_PREDICT_FULL_NS + (int64_t)(PX_PREDICT_TAIL_NS * (1.0 - exp(-over / PX_PREDICT_TAIL_NS)));
++	}
++
++	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
++	m_relation_history_get(own_aim ? c->aim_hist : c->relation_hist, at, &relation);
++
++	if ((relation.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) != 0) {
++		math_quat_normalize(&relation.pose.orientation);
++	}
++	if (last_ns == 0 || os_monotonic_get_ns() - last_ns > PX_STALE_NS) {
++		relation.relation_flags = (enum xrt_space_relation_flags)(
++		    relation.relation_flags &
++		    ~(XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
++		      XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT));
++		relation.angular_velocity = (struct xrt_vec3){0};
++		relation.linear_velocity = (struct xrt_vec3){0};
++	}
++	// Ultra XR: a controller that was never fed, or not for two seconds, is not there at all. With only "not
++	// tracked", an application that gets hands as joints (a browser) still took the controller as present and
++	// never looked at the hands.
++	if (last_ns == 0 || os_monotonic_get_ns() - last_ns > PX_CONTROLLER_TIMEOUT_NS) {
++		relation.relation_flags = XRT_SPACE_RELATION_BITMASK_NONE;
++	}
++	apply_origin_offset(&relation);
++
++	*out_relation = relation;
++	return XRT_SUCCESS;
++}
++
++static xrt_result_t
++pocketxr_controller_set_output(struct xrt_device *xdev,
++                               enum xrt_output_name name,
++                               const struct xrt_output_value *value)
++{
++	// Haptics are not wired up yet.
++	return XRT_SUCCESS;
++}
++
++static struct xrt_device *
++pocketxr_controller_create(int32_t hand)
++{
++	enum u_device_alloc_flags flags = (enum u_device_alloc_flags)(U_DEVICE_ALLOC_TRACKING_NONE);
++	struct pocketxr_controller *c = U_DEVICE_ALLOCATE(struct pocketxr_controller, flags, PX_INPUT_COUNT, 1);
++	c->base.tracking_origin = &g_origin;
++	u_device_populate_function_pointers(&c->base, pocketxr_controller_get_tracked_pose, pocketxr_controller_destroy);
++
++	c->hand = hand;
++	c->base.update_inputs = pocketxr_controller_update_inputs;
++	c->base.get_tracked_pose = pocketxr_controller_get_tracked_pose;
++	c->base.set_output = pocketxr_controller_set_output;
++	c->base.destroy = pocketxr_controller_destroy;
++
++	c->base.name = XRT_DEVICE_TOUCH_CONTROLLER;
++	c->base.device_type = hand == 0 ? XRT_DEVICE_TYPE_LEFT_HAND_CONTROLLER : XRT_DEVICE_TYPE_RIGHT_HAND_CONTROLLER;
++	c->base.supported.orientation_tracking = true;
++	c->base.supported.position_tracking = true;
++
++	snprintf(c->base.str, XRT_DEVICE_NAME_LEN, "Pocket XR %s controller", hand == 0 ? "left" : "right");
++	snprintf(c->base.serial, XRT_DEVICE_NAME_LEN, "Pocket XR %s controller", hand == 0 ? "left" : "right");
++
++	c->base.inputs[PX_PRIMARY].name = hand == 0 ? XRT_INPUT_TOUCH_X_CLICK : XRT_INPUT_TOUCH_A_CLICK;
++	c->base.inputs[PX_SECONDARY].name = hand == 0 ? XRT_INPUT_TOUCH_Y_CLICK : XRT_INPUT_TOUCH_B_CLICK;
++	c->base.inputs[PX_MENU].name = hand == 0 ? XRT_INPUT_TOUCH_MENU_CLICK : XRT_INPUT_TOUCH_SYSTEM_CLICK;
++	c->base.inputs[PX_SQUEEZE].name = XRT_INPUT_TOUCH_SQUEEZE_VALUE;
++	c->base.inputs[PX_TRIGGER].name = XRT_INPUT_TOUCH_TRIGGER_VALUE;
++	c->base.inputs[PX_STICK_CLICK].name = XRT_INPUT_TOUCH_THUMBSTICK_CLICK;
++	c->base.inputs[PX_STICK].name = XRT_INPUT_TOUCH_THUMBSTICK;
++	c->base.inputs[PX_GRIP].name = XRT_INPUT_TOUCH_GRIP_POSE;
++	c->base.inputs[PX_AIM].name = XRT_INPUT_TOUCH_AIM_POSE;
++	c->base.inputs[PX_PRIMARY_TOUCH].name = hand == 0 ? XRT_INPUT_TOUCH_X_TOUCH : XRT_INPUT_TOUCH_A_TOUCH;
++	c->base.inputs[PX_SECONDARY_TOUCH].name = hand == 0 ? XRT_INPUT_TOUCH_Y_TOUCH : XRT_INPUT_TOUCH_B_TOUCH;
++	c->base.inputs[PX_TRIGGER_TOUCH].name = XRT_INPUT_TOUCH_TRIGGER_TOUCH;
++	c->base.inputs[PX_STICK_TOUCH].name = XRT_INPUT_TOUCH_THUMBSTICK_TOUCH;
++	c->base.inputs[PX_THUMBREST_TOUCH].name = XRT_INPUT_TOUCH_THUMBREST_TOUCH;
++	c->base.outputs[0].name = XRT_OUTPUT_NAME_TOUCH_HAPTIC;
++
++	m_relation_history_create(&c->relation_hist);
++	m_relation_history_create(&c->aim_hist);
++
++	pthread_mutex_lock(&g_lock);
++	g_controllers[hand] = c;
++	pthread_mutex_unlock(&g_lock);
++
++	return &c->base;
++}
++
++void
++pocketxr_feed_controller(int32_t hand,
++                         int64_t timestamp_ns,
++                         float px,
++                         float py,
++                         float pz,
++                         float x,
++                         float y,
++                         float z,
++                         float w,
++                         float ang_x,
++                         float ang_y,
++                         float ang_z,
++                         float vel_x,
++                         float vel_y,
++                         float vel_z,
++                         uint32_t buttons,
++                         float trigger,
++                         float squeeze,
++                         float stick_x,
++                         float stick_y)
++{
++	if (hand < 0 || hand > 1) {
++		return;
++	}
++
++	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
++	relation.relation_flags = (enum xrt_space_relation_flags)(
++	    XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
++	    XRT_SPACE_RELATION_POSITION_VALID_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
++	    XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT);
++	relation.pose.position = (struct xrt_vec3){.x = px, .y = py, .z = pz};
++	relation.linear_velocity = (struct xrt_vec3){.x = vel_x, .y = vel_y, .z = vel_z};
++	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
++	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
++
++	pthread_mutex_lock(&g_lock);
++	struct pocketxr_controller *c = g_controllers[hand];
++	if (c != NULL) {
++		m_relation_history_push(c->relation_hist, &relation, timestamp_ns);
++		c->buttons = buttons;
++		c->trigger = trigger;
++		c->squeeze = squeeze;
++		c->stick_x = stick_x;
++		c->stick_y = stick_y;
++		c->last_ns = timestamp_ns;
++	}
++	pthread_mutex_unlock(&g_lock);
++}
++
++void
++pocketxr_feed_controller_aim(int32_t hand,
++                             int64_t timestamp_ns,
++                             float px,
++                             float py,
++                             float pz,
++                             float x,
++                             float y,
++                             float z,
++                             float w,
++                             float ang_x,
++                             float ang_y,
++                             float ang_z,
++                             float vel_x,
++                             float vel_y,
++                             float vel_z)
++{
++	if (hand < 0 || hand > 1) {
++		return;
++	}
++
++	struct xrt_space_relation relation = XRT_SPACE_RELATION_ZERO;
++	relation.relation_flags = (enum xrt_space_relation_flags)(
++	    XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT |
++	    XRT_SPACE_RELATION_POSITION_VALID_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT |
++	    XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT | XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT);
++	relation.pose.position = (struct xrt_vec3){.x = px, .y = py, .z = pz};
++	relation.linear_velocity = (struct xrt_vec3){.x = vel_x, .y = vel_y, .z = vel_z};
++	relation.pose.orientation = (struct xrt_quat){.x = x, .y = y, .z = z, .w = w};
++	relation.angular_velocity = (struct xrt_vec3){.x = ang_x, .y = ang_y, .z = ang_z};
++
++	pthread_mutex_lock(&g_lock);
++	struct pocketxr_controller *c = g_controllers[hand];
++	if (c != NULL) {
++		m_relation_history_push(c->aim_hist, &relation, timestamp_ns);
++		c->last_aim_ns = timestamp_ns;
++	}
++	pthread_mutex_unlock(&g_lock);
++}
++
++void
++pocketxr_set_origin_offset(float px, float py, float pz, float x, float y, float z, float w)
++{
++	struct xrt_pose offset = {
++	    .orientation = {.x = x, .y = y, .z = z, .w = w},
++	    .position = {.x = px, .y = py, .z = pz},
++	};
++	if (!math_quat_validate(&offset.orientation)) {
++		const float n = sqrtf(x * x + y * y + z * z + w * w);
++		if (!(n > 1e-6f)) {
++			offset.orientation = (struct xrt_quat)XRT_QUAT_IDENTITY;
++		} else {
++			math_quat_normalize(&offset.orientation);
++		}
++	}
++
++	pthread_mutex_lock(&g_lock);
++	g_origin_offset = offset;
++	pthread_mutex_unlock(&g_lock);
++}
++
++int
++pocketxr_recenter(void)
++{
++	struct xrt_space_relation head = XRT_SPACE_RELATION_ZERO;
++	int64_t head_ns = 0;
++
++	pthread_mutex_lock(&g_lock);
++	const bool have = g_hmd != NULL && m_relation_history_get_latest(g_hmd->relation_hist, &head_ns, &head);
++	const float keep_y = g_origin_offset.position.y;
++	pthread_mutex_unlock(&g_lock);
++
++	if (!have || (head.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) == 0) {
++		return 0;
++	}
++
++	// Where the head looks, on the floor plane: a yaw only, so the horizon stays level.
++	math_quat_normalize(&head.pose.orientation);
++	const struct xrt_vec3 forward = {0.0f, 0.0f, -1.0f};
++	struct xrt_vec3 looking;
++	math_quat_rotate_vec3(&head.pose.orientation, &forward, &looking);
++	float yaw = 0.0f;
++	if (looking.x * looking.x + looking.z * looking.z > 1e-6f) {
++		yaw = atan2f(-looking.x, -looking.z);
++	}
++
++	struct xrt_pose flat = XRT_POSE_IDENTITY;
++	const struct xrt_vec3 up = {0.0f, 1.0f, 0.0f};
++	math_quat_from_angle_vector(yaw, &up, &flat.orientation);
++	if ((head.relation_flags & XRT_SPACE_RELATION_POSITION_VALID_BIT) != 0) {
++		flat.position.x = head.pose.position.x;
++		flat.position.z = head.pose.position.z;
++	}
++
++	// The head's flat pose goes to the origin, facing -z; the height offset stays as it was set.
++	struct xrt_pose offset;
++	math_pose_invert(&flat, &offset);
++	offset.position.y = keep_y;
++
++	pthread_mutex_lock(&g_lock);
++	g_origin_offset = offset;
++	pthread_mutex_unlock(&g_lock);
++
++	U_LOG_I("Ultra XR: recentred, the fed space turned %.1f degrees and moved (%.2f, %.2f) m on the floor",
++	        -yaw * 180.0 / M_PI, offset.position.x, offset.position.z);
++	return 1;
++}
++
++static void
++pocketxr_prober_destroy(struct xrt_auto_prober *p)
++{
++	free(p);
++}
++
++static int
++pocketxr_prober_autoprobe(struct xrt_auto_prober *xap,
++                          cJSON *attached_data,
++                          bool no_hmds,
++                          struct xrt_prober *xp,
++                          struct xrt_device **out_xdevs)
++{
++	if (no_hmds) {
++		return 0;
++	}
++	struct xrt_device *xdev = pocketxr_hmd_create();
++	if (xdev == NULL) {
++		return 0;
++	}
++	out_xdevs[0] = xdev;
++	out_xdevs[1] = pocketxr_controller_create(0);
++	out_xdevs[2] = pocketxr_controller_create(1);
++	// Ultra XR: the hands' joints for XR_EXT_hand_tracking (pocketxr_hands.c).
++	out_xdevs[3] = pocketxr_hands_create();
++	return out_xdevs[3] != NULL ? 4 : 3;
++}
++
++struct xrt_auto_prober *
++pocketxr_create_auto_prober(void)
++{
++	struct pocketxr_prober *p = U_TYPED_CALLOC(struct pocketxr_prober);
++	p->base.name = "Pocket XR";
++	p->base.destroy = pocketxr_prober_destroy;
++	p->base.lelo_dallas_autoprobe = pocketxr_prober_autoprobe;
++	return &p->base;
++}
+diff --git a/src/xrt/drivers/pocketxr/pocketxr_interface.h b/src/xrt/drivers/pocketxr/pocketxr_interface.h
+index 701a65a5e..47ab88ee3 100644
+--- a/src/xrt/drivers/pocketxr/pocketxr_interface.h
++++ b/src/xrt/drivers/pocketxr/pocketxr_interface.h
+@@ -46,6 +46,13 @@ pocketxr_feed_vblank(int64_t last_vblank_ns, int64_t period_ns);
+ void
+ pocketxr_configure_eyes(float ipd_m, float eye_shift_tan);
+ 
++/*!
++ * Ultra XR. Before the server starts: true when the glasses show one picture to both eyes (a 2D mode). Both views
++ * then cover the whole panel from the head's centre. False (the default) puts the left eye in the left half.
++ */
++void
++pocketxr_configure_single_view(bool single_view);
++
+ /*!
+  * One head pose, on CLOCK_MONOTONIC. Any thread. Dropped when no device exists yet.
+  *
+diff --git a/src/xrt/ipc/android/src/main/java/org/freedesktop/monado/ipc/PocketFeed.java b/src/xrt/ipc/android/src/main/java/org/freedesktop/monado/ipc/PocketFeed.java
+index c99c08d11..e1109b776 100644
+--- a/src/xrt/ipc/android/src/main/java/org/freedesktop/monado/ipc/PocketFeed.java
++++ b/src/xrt/ipc/android/src/main/java/org/freedesktop/monado/ipc/PocketFeed.java
+@@ -23,6 +23,9 @@ public final class PocketFeed {
+      */
+     public static native void nativeConfigureEyes(float ipdM, float eyeShiftTan);
+ 
++    /** Ultra XR. Before the runtime starts: true when the glasses show one picture to both eyes (a 2D mode). */
++    public static native void nativeConfigureSingleView(boolean singleView);
++
+     /**
+      * The display's latest real vblank on System.nanoTime and its measured period, so Monado's pacer locks to the
+      * display. A period of 0 gives the pacer back its own clock.
+diff --git a/src/xrt/targets/openxr_android/build.gradle b/src/xrt/targets/openxr_android/build.gradle
+index 7e2acf40c..5dffb58e7 100644
+--- a/src/xrt/targets/openxr_android/build.gradle
++++ b/src/xrt/targets/openxr_android/build.gradle
+@@ -204,7 +204,11 @@ android {
+                     "-DANDROID_STL=${project.stl}",
+                     "-DANDROID_ARM_NEON=TRUE",
+                     // Pocket XR: 16 KB page size support, required by Google Play (NDK 27 links 4 KB by default)
+-                    "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
++                    "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
++                    // Ultra XR: XR_EXT_hand_interaction is not served by the driver (hands arrive as joints and,
++                    // for controller games, as Touch-shaped controllers). Advertising it made a browser wait for a
++                    // hand interaction profile that never becomes active instead of using the hand joints.
++                    "-DXRT_FEATURE_OPENXR_INTERACTION_EXT_HAND=OFF"
+ 
+             }
+             if (project.pythonBinary != null) {
+diff --git a/src/xrt/targets/service-lib/service_target.cpp b/src/xrt/targets/service-lib/service_target.cpp
+index b962e3ea9..d635b6d19 100644
+--- a/src/xrt/targets/service-lib/service_target.cpp
++++ b/src/xrt/targets/service-lib/service_target.cpp
+@@ -192,6 +192,12 @@ Java_org_freedesktop_monado_ipc_PocketFeed_nativeConfigureEyes(JNIEnv *env, jcla
+ 	pocketxr_configure_eyes(ipd_m, eye_shift_tan);
+ }
+ 
++extern "C" JNIEXPORT void JNICALL
++Java_org_freedesktop_monado_ipc_PocketFeed_nativeConfigureSingleView(JNIEnv *env, jclass clazz, jboolean single_view)
++{
++	pocketxr_configure_single_view(single_view == JNI_TRUE);
++}
++
+ extern "C" JNIEXPORT void JNICALL
+ Java_org_freedesktop_monado_ipc_PocketFeed_nativeVblank(JNIEnv *env, jclass clazz, jlong last_vblank_ns, jlong period_ns)
+ {

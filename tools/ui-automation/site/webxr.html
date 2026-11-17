@@ -1,0 +1,146 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>webxr-test</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1020; color: #e8ecf4; font: 28px/1.4 sans-serif; }
+  #go { position: fixed; inset: 0; width: 100%; height: 100%; font: inherit; font-size: 64px; background: #17306b; color: #fff; border: 0; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+  #log { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px; background: #000a; font-size: 20px; white-space: pre-wrap; pointer-events: none; }
+</style></head>
+<body>
+<button id="go">Enter XR</button>
+<div id="log">starting</div>
+<canvas id="c" style="display:none"></canvas>
+<script>
+// Reports what this browser's WebXR really delivers, to the page and to the test server (/report).
+const R = { ua: navigator.userAgent, hasXR: !!navigator.xr, vr: null, ar: null, mode: null, error: null,
+  frames: 0, views: 0, viewports: [], projections: [], eyeSeparation: null, blend: null, features: null,
+  refSpaces: {}, headYawMin: null, headYawMax: null, headXMin: null, headXMax: null, emulatedPosition: null,
+  inputs: [], handsSeen: 0, jointsValid: 0, jointRadius: 0, selectEvents: 0, squeezeEvents: 0, triggerMax: 0,
+  pinchGapMin: null, pinchGapMax: null, frameMsAvg: null, clicks: 0, hitTest: null, anchors: null, ended: false };
+const logEl = document.getElementById('log');
+function show() { logEl.textContent = JSON.stringify(R, null, 0).slice(0, 900); }
+function report() { show(); fetch('/report', { method: 'POST', body: JSON.stringify(R) }).catch(() => {}); }
+setInterval(report, 1000);
+
+async function probe() {
+  if (!navigator.xr) { report(); return; }
+  try { R.vr = await navigator.xr.isSessionSupported('immersive-vr'); } catch (e) { R.vr = 'error ' + e; }
+  try { R.ar = await navigator.xr.isSessionSupported('immersive-ar'); } catch (e) { R.ar = 'error ' + e; }
+  report();
+}
+probe();
+
+let session = null, gl = null, refSpace = null, lastT = 0, sumMs = 0;
+async function enter() {
+  R.clicks++;
+  if (session || !navigator.xr) { report(); return; }
+  const want = new URLSearchParams(location.search).get('mode') || (R.ar === true ? 'immersive-ar' : 'immersive-vr');
+  try {
+    // hit-test and anchors are not asked for by default: nothing implements them here, and Wolvic 1.4 (Chromium)
+    // ends the page with "Environment integration is not supported" when a session asks for them. ?extra=hit-test,anchors adds them.
+    const extra = (new URLSearchParams(location.search).get('extra') || '').split(',').filter(x => x);
+    session = await navigator.xr.requestSession(want, { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'].concat(extra) });
+  } catch (e) { R.error = 'requestSession(' + want + '): ' + e; report(); return; }
+  R.mode = want; R.blend = session.environmentBlendMode;
+  try { R.features = session.enabledFeatures ? Array.from(session.enabledFeatures) : 'not reported'; } catch (e) { R.features = 'error'; }
+  R.hitTest = typeof session.requestHitTestSource === 'function' && Array.isArray(R.features) && R.features.includes('hit-test');
+  R.anchors = Array.isArray(R.features) && R.features.includes('anchors');
+  const canvas = document.getElementById('c');
+  gl = canvas.getContext('webgl2', { xrCompatible: true }) || canvas.getContext('webgl', { xrCompatible: true });
+  try { await gl.makeXRCompatible(); } catch (e) {}
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  for (const name of ['viewer', 'local', 'local-floor', 'bounded-floor', 'unbounded']) {
+    try { await session.requestReferenceSpace(name); R.refSpaces[name] = true; } catch (e) { R.refSpaces[name] = false; }
+  }
+  refSpace = await session.requestReferenceSpace(R.refSpaces['local-floor'] ? 'local-floor' : 'local');
+  session.addEventListener('select', () => { R.selectEvents++; });
+  session.addEventListener('squeeze', () => { R.squeezeEvents++; });
+  session.addEventListener('end', () => { R.ended = true; session = null; report(); });
+  session.requestAnimationFrame(frame);
+  report();
+}
+document.getElementById('go').addEventListener('click', enter);
+// What kinds of pointer events the browser turns a pinch into (for diagnosing a click that does not arrive).
+R.events = {};
+for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'pointermove', 'touchstart', 'touchend', 'touchcancel', 'mousedown', 'mouseup', 'click', 'contextmenu'])
+  window.addEventListener(type, () => { R.events[type] = (R.events[type] || 0) + 1; }, true);
+
+function mm(a, b) { return [Math.min(a === null ? b : a, b), Math.max(a === null ? b : a, b)]; }
+// Where a point (world) lands in a view, as a pixel in that view's viewport.
+function project(view, vp, p) {
+  const v = view.transform.inverse.matrix, m = view.projectionMatrix;
+  const e = [v[0]*p[0]+v[4]*p[1]+v[8]*p[2]+v[12], v[1]*p[0]+v[5]*p[1]+v[9]*p[2]+v[13], v[2]*p[0]+v[6]*p[1]+v[10]*p[2]+v[14], 1];
+  const c = [m[0]*e[0]+m[4]*e[1]+m[8]*e[2]+m[12], m[1]*e[0]+m[5]*e[1]+m[9]*e[2]+m[13], 0, m[3]*e[0]+m[7]*e[1]+m[11]*e[2]+m[15]];
+  if (c[3] <= 0) return null;
+  return [vp.x + (c[0] / c[3] * 0.5 + 0.5) * vp.width, vp.y + (c[1] / c[3] * 0.5 + 0.5) * vp.height];
+}
+function box(x, y, half, r, g, b) {
+  gl.scissor(Math.round(x - half), Math.round(y - half), Math.round(half * 2), Math.round(half * 2));
+  gl.clearColor(r, g, b, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+}
+
+let anchorPoint = null;
+function frame(t, f) {
+  session.requestAnimationFrame(frame);
+  if (lastT) { sumMs += t - lastT; R.frameMsAvg = +(sumMs / R.frames).toFixed(2); }
+  lastT = t;
+  const pose = f.getViewerPose(refSpace);
+  const layer = session.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+  gl.enable(gl.SCISSOR_TEST);
+  if (!pose) return;
+  R.frames++;
+  R.views = pose.views.length; R.emulatedPosition = pose.emulatedPosition;
+  const o = pose.transform.orientation, p = pose.transform.position;
+  const yaw = Math.atan2(2 * (o.w * o.y + o.x * o.z), 1 - 2 * (o.y * o.y + o.x * o.x));
+  R.headYawMin = +Math.min(R.headYawMin ?? yaw, yaw).toFixed(3); R.headYawMax = +Math.max(R.headYawMax ?? yaw, yaw).toFixed(3);
+  R.headXMin = +Math.min(R.headXMin ?? p.x, p.x).toFixed(3); R.headXMax = +Math.max(R.headXMax ?? p.x, p.x).toFixed(3);
+  // A fixed point in the room, 1.5 m in front of where the head was at the first frame.
+  if (!anchorPoint) { const fw = [-Math.sin(yaw), 0, -Math.cos(yaw)]; anchorPoint = [p.x + fw[0] * 1.5, p.y, p.z + fw[2] * 1.5]; }
+  R.viewports = []; R.projections = [];
+  const colours = [[0.0, 0.25, 0.9], [0.9, 0.2, 0.0]];
+  pose.views.forEach((view, i) => {
+    const vp = layer.getViewport(view);
+    R.viewports.push([vp.x, vp.y, vp.width, vp.height, view.eye]);
+    R.projections.push([+view.projectionMatrix[0].toFixed(3), +view.projectionMatrix[5].toFixed(3), +view.projectionMatrix[8].toFixed(4)]);
+    gl.viewport(vp.x, vp.y, vp.width, vp.height);
+    gl.scissor(vp.x, vp.y, vp.width, vp.height);
+    gl.clearColor(0, 0, 0, session.environmentBlendMode === 'opaque' ? 1 : 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    const s = project(view, vp, anchorPoint);
+    if (s && s[0] > vp.x + 40 && s[0] < vp.x + vp.width - 40) box(s[0], s[1], 36, ...colours[i % 2]);
+    // green squares at each tracked index finger tip
+    for (const src of session.inputSources) {
+      if (!src.hand || !f.getJointPose) continue;
+      const jp = f.getJointPose(src.hand.get('index-finger-tip'), refSpace);
+      if (!jp) continue;
+      const q = project(view, vp, [jp.transform.position.x, jp.transform.position.y, jp.transform.position.z]);
+      if (q && q[0] > vp.x + 12 && q[0] < vp.x + vp.width - 12) box(q[0], q[1], 10, 0.1, 0.9, 0.2);
+    }
+  });
+  if (pose.views.length >= 2) {
+    const a = pose.views[0].transform.position, b = pose.views[1].transform.position;
+    R.eyeSeparation = +Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z).toFixed(4);
+  }
+  // input
+  R.inputs = []; let hands = 0;
+  for (const src of session.inputSources) {
+    const d = { hand: src.handedness, ray: src.targetRayMode, profiles: Array.from(src.profiles || []), joints: 0, grip: false, aim: false, buttons: 0 };
+    if (src.gripSpace) d.grip = !!f.getPose(src.gripSpace, refSpace);
+    if (src.targetRaySpace) d.aim = !!f.getPose(src.targetRaySpace, refSpace);
+    if (src.gamepad) { d.buttons = src.gamepad.buttons.length; d.axes = src.gamepad.axes.length; if (src.gamepad.buttons[0]) R.triggerMax = Math.max(R.triggerMax, src.gamepad.buttons[0].value); }
+    if (src.hand && f.getJointPose) {
+      hands++;
+      let n = 0, rad = 0;
+      for (const [name, space] of src.hand) { const jp = f.getJointPose(space, refSpace); if (jp) { n++; rad = jp.radius || rad; } }
+      d.joints = n; R.jointsValid = Math.max(R.jointsValid, n); R.jointRadius = rad;
+      const a = f.getJointPose(src.hand.get('thumb-tip'), refSpace), b = f.getJointPose(src.hand.get('index-finger-tip'), refSpace);
+      if (a && b) {
+        const gap = Math.hypot(a.transform.position.x - b.transform.position.x, a.transform.position.y - b.transform.position.y, a.transform.position.z - b.transform.position.z);
+        R.pinchGapMin = +Math.min(R.pinchGapMin ?? gap, gap).toFixed(4); R.pinchGapMax = +Math.max(R.pinchGapMax ?? gap, gap).toFixed(4);
+      }
+    }
+    R.inputs.push(d);
+  }
+  R.handsSeen = Math.max(R.handsSeen, hands);
+}
+</script></body></html>
