@@ -1,55 +1,83 @@
-# The five-minute physical test
+# The next physical session
 
-Everything that can be checked without a person is checked by scripts (see "What is automatic"
-below). This is the part that needs your eyes and hands. One game, five steps, about five
-minutes. You answer three yes-or-no questions; the phone records the rest.
+Everything that can be checked without a person is checked by scripts (see "What is automatic").
+This is the part that needs your eyes and the glasses. It is written for the build after the
+first live runs of 17 November 2026, which showed what works on the Pixel and what does not
+(`docs/PIXEL_RESULTS.md`).
 
-**Before:** phone unlocked and on Wi-Fi, glasses plugged straight into the phone, a lit room with
-things in it (tracking fails in the dark and facing a blank wall), two steps of clear floor.
+What that build is, plainly:
 
-1. **Start.** Open Ultra XR and tap **XR dragging** under WebXR games. A banner says it is
-   starting 3D; the picture blanks for a few seconds once or more; then the browser's window
-   appears in the glasses.
-2. **Enter.** Hold a hand up so a thin line shows where it points. Point at **START XR** and
-   touch thumb and index finger together briefly. If a card says "press any button to continue",
-   pinch once more. Coloured shapes now float in your room.
-   **Question 1: close one eye, then the other. Do the shapes shift against the room?** (yes = real 3D)
-3. **Move.** Take two steps to one side, then back.
-   **Question 2: do the shapes stay where they are in the room while you move?**
-4. **Grab.** Point at a shape, pinch and hold, move your hand, let go. Try the other hand.
-   **Question 3: did a shape come with your hand and stay where you let go?**
-5. **Recentre and leave.** Pinch with both hands and hold for two seconds: the scene jumps back in
-   front of you. Press Back on the phone, then unplug the glasses.
+- **One picture, no depth.** The glasses do not hold their 3D mode from this phone, and trying it
+  left them black. It is no longer tried unless you switch it on in Settings.
+- **The phone is the controller.** Its screen becomes a touchpad in a game, so nothing depends on
+  hand tracking. Hands still work when they are tracked.
+- **Position tracking** is the same as in the live runs; a change to it is prepared but not yet
+  measured.
 
-That is all. Tell me the three answers (and anything that looked wrong). If the phone stays on
-Wi-Fi with wireless debugging on, the details are read from it directly:
+## Once, before the first game (about two minutes)
+
+1. **Switch the touchpad on.** Open Ultra XR. In the card "Phone as a touchpad" tap
+   **Switch it on in Android settings**, choose **Ultra XR touchpad** and allow it. Android asks
+   because the touchpad listens to the screen and the volume keys while a game runs; it reads
+   nothing else.
+2. **Accept the browser's terms.** Plug the glasses in, tap **XR dragging**. The browser's terms
+   of service appear in the glasses. Drag a finger on the phone to move the pointer onto
+   **AGREE**, tap the phone once. This is yours to accept; the app never does it for you.
+3. **Let games start by themselves from now on.** Press Back, open Ultra XR's **Settings**, and
+   switch on **Enter games automatically**.
+
+## The session (about three minutes)
+
+**Before:** a lit room with things in it, two steps of clear floor, glasses plugged straight
+into the phone.
+
+1. **Start.** Tap **XR dragging**. Look straight ahead and hold still for about fifteen seconds
+   while the page loads; Ultra XR presses the page's start button for you. Coloured shapes
+   appear in your room. If they do not, point at **START XR** with the touchpad and tap.
+2. **Move.** Take two steps to one side, then back.
+   **Question 1: do the shapes stay where they are in the room while you move?**
+3. **Grab.** Drag on the phone until the pointer line is on a shape. Hold volume-down (or put a
+   second finger on the screen), drag to carry the shape, let go.
+   **Question 2: did the shape come along and stay where you let go?**
+4. **Hands, if you like.** Hold a hand up for ten seconds, pinch a few times at a shape.
+   **Question 3: did a pinch pick a shape up?** (A "no" is useful: the phone records how close
+   your fingertips came, which is what the pinch rule is tuned on.)
+5. **Leave.** Press Back on the phone, unplug the glasses.
+
+Volume-up recentres the view and the pointer at any time.
+
+Tell me the three answers. With the phone on Wi-Fi and wireless debugging on, the rest is read
+from it:
 
     python tools/pixel/pixel_check.py journal
 
-which shows, for that session: whether the glasses got one view per eye or fell back to one
-picture, how much of the time position was tracked, how far the head moved, how many frames each
-hand was seen, how many pinches each hand made, and whether the recentre gesture fired.
+which shows for that session: one picture or one per eye, how much of the time position was
+tracked, how far the head moved, how many frames each hand was seen, the smallest thumb-to-index
+distance of each hand, pinches, touchpad selections, and recentres.
 
 ## What is automatic
 
 | Check | Where | Script |
 |---|---|---|
-| Both apps on the phone are exactly the built files (SHA-256), the phone's runtime broker hands out Ultra XR's runtime, screen timeout and stay-awake unchanged | Pixel, over adb | `tools/pixel/pixel_check.py install` or `verify` |
+| Both apps on the phone are exactly the built files, the runtime broker hands out Ultra XR's runtime, screen timeout and stay-awake unchanged | Pixel, over adb | `tools/pixel/pixel_check.py install` or `verify` |
+| The touchpad alone enters a game through the page's own start button, selects, and carries an object | emulator | `tools/ui-automation/pointer_test.py` |
+| One tap on a game card ends in the game's session without pointing at anything | emulator | `tools/ui-automation/enter_test.py` |
+| Frame pacing: when the compositor's frames really reached the display, for both pacing modes | emulator, and the Pixel with `-s` | `tools/ui-automation/pacing_test.py` |
 | WebXR sessions: AR and VR offered, two eye views, additive blending, 6DoF pose, hands with joints, selects (20 checks) | emulator | `tools/ui-automation/webxr_test.py` |
-| Existing third-party pages start sessions and receive stereo, head motion and hands | emulator | `tools/ui-automation/webxr_pages.py` |
+| Third-party pages start sessions and receive head motion and hands | emulator | `tools/ui-automation/webxr_pages.py` |
 | A simulated hand picks up and moves an object in a third-party page | emulator | `tools/ui-automation/webxr_interact.py` |
-| The OpenXR sample app renders one view per eye through the runtime (11 checks) | emulator | `tools/ui-automation/openxr_test.py` |
-| Desktop, stereo geometry, 3D switch rules, recentre gesture, game library (unit tests) | this machine | `gradlew testDebugUnitTest` |
+| The OpenXR sample app renders through the runtime (11 checks) | emulator | `tools/ui-automation/openxr_test.py` |
+| What a tracking recording contains, and whether the calibration agrees with the two cameras | this machine | `tools/tracking/analyse_recording.py`, `stereo_check.py` |
+| Desktop, stereo geometry, 3D switch rules, recentre gesture, touchpad pointer rules, game library (unit tests) | this machine | `gradlew testDebugUnitTest` |
 
-The emulator checks use simulated tracking. They show that the software path works, not that real
-tracking is accurate; only the five steps above can show that.
+The emulator checks use a simulated head and no real hands. They show that the software path
+works, not how it feels in the glasses.
 
-## If something fails
+## Not possible to check without you
 
-- **Stays in 2D** (the banner says 3D could not be started): the game still runs, as one picture
-  without depth. Note it; question 1 is then "no".
-- **No pointing line from the hands in the browser window:** hand tracking is not reaching the
-  browser. Note whether your hands were in view of the glasses' cameras and well lit.
-- **Shapes swim or jump when you move:** position tracking is not good enough yet. Run
-  **Settings, Record 60 seconds** once (look around, walk four steps and back): that recording is
-  what tracking is tuned on afterwards.
+- The volume keys. Android keeps key presses made by a test away from accessibility services, so
+  only the real button shows that part. If volume-down does nothing, a second finger on the
+  screen does the same.
+- Whether the automatic start finds the page's button on the phone. It was found on the emulator
+  at one place; the app tries three places, three times. Pointing and tapping always works.
+- Anything about how steady, sharp or comfortable the picture is.

@@ -1,0 +1,116 @@
+{
+ "ua": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36 Mobile VR Wolvic/1.4",
+ "hasXR": true,
+ "vr": true,
+ "ar": true,
+ "mode": "immersive-ar",
+ "error": null,
+ "frames": 1524,
+ "views": 2,
+ "viewports": [
+  [
+   0,
+   0,
+   1344,
+   1512,
+   "left"
+  ],
+  [
+   1344,
+   0,
+   1344,
+   1512,
+   "right"
+  ]
+ ],
+ "projections": [
+  [
+   2.515,
+   4.468,
+   0.0201
+  ],
+  [
+   2.515,
+   4.468,
+   -0.0201
+  ]
+ ],
+ "eyeSeparation": 0.064,
+ "blend": "additive",
+ "features": [
+  "local",
+  "viewer",
+  "bounded-floor",
+  "hand-tracking",
+  "local-floor"
+ ],
+ "refSpaces": {
+  "viewer": true,
+  "local": true,
+  "local-floor": true,
+  "bounded-floor": true,
+  "unbounded": false
+ },
+ "headYawMin": -0.25,
+ "headYawMax": 0.25,
+ "headXMin": -0.05,
+ "headXMax": 0.05,
+ "emulatedPosition": false,
+ "inputs": [
+  {
+   "hand": "right",
+   "ray": "tracked-pointer",
+   "profiles": [
+    "generic-hand",
+    "oculus-touch-v3",
+    "oculus-touch-v2",
+    "oculus-touch",
+    "generic-trigger-squeeze-thumbstick"
+   ],
+   "joints": 25,
+   "grip": true,
+   "aim": true,
+   "buttons": 1,
+   "axes": 0
+  },
+  {
+   "hand": "left",
+   "ray": "tracked-pointer",
+   "profiles": [
+    "generic-hand",
+    "oculus-touch-v3",
+    "oculus-touch-v2",
+    "oculus-touch",
+    "generic-trigger-squeeze-thumbstick"
+   ],
+   "joints": 25,
+   "grip": true,
+   "aim": true,
+   "buttons": 1,
+   "axes": 0
+  }
+ ],
+ "handsSeen": 2,
+ "jointsValid": 25,
+ "jointRadius": 0.007000000216066837,
+ "selectEvents": 14,
+ "squeezeEvents": 0,
+ "triggerMax": 1,
+ "pinchGapMin": 0.004,
+ "pinchGapMax": 0.1457,
+ "frameMsAvg": 20.21,
+ "clicks": 1,
+ "hitTest": false,
+ "anchors": false,
+ "ended": false,
+ "events": {
+  "pointermove": 7,
+  "pointerdown": 1,
+  "touchstart": 1,
+  "pointerup": 1,
+  "touchend": 1,
+  "mousedown": 1,
+  "mouseup": 1,
+  "click": 1
+ }
+}

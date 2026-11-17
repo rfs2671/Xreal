@@ -137,6 +137,36 @@ Done over wireless adb on the Pixel 10 Pro XL, 17 November 2026:
   service, which the owner has to accept. No WebXR session, no stereo, no real tracking and no
   hands have been exercised on the phone or the glasses.
 
+## Frame pacing
+
+The live run on the Pixel logged about 63 % of compositor frames as late (3,172 warnings in 84 s,
+median 3.9 ms). What that number is and is not:
+
+- The warning comes from the compositor comparing its own plan with its own clock. It does not
+  say a frame missed the display. 3,172 warnings in 84 s also means the compositor was producing
+  more than 37 frames a second, so it was not stuck at half rate.
+- The compositor's pacer was written to be locked to the display's real refresh by timestamps fed
+  from the app (`u_pc_fake_external_vblank`). Nothing feeds them: the app cannot observe the
+  refresh of an external display (Android's frame callbacks follow the phone's own panel, which
+  runs at 60 or 120 Hz on its own clock). So the pacer has been free-running at an arbitrary
+  phase to the glasses' refresh. That is a scheduling defect, not a performance limit.
+
+`tools/ui-automation/pacing_test.py` measures what matters instead: SurfaceFlinger's record of
+when each compositor frame actually reached the display.
+
+| Emulator, 40 s, browser's XR world | frames a second | frames on time | shown twice |
+|---|---|---|---|
+| paced by its own clock (as shipped until now) | 30.0 | 0 % | 1,208 of 1,209 |
+| paced by the display's reported present times | 59.0 | 98.3 % | 41 of 2,379 |
+
+The second mode is Monado's own display-timing pacer, which the Android target had switched off
+upstream as untested; the Android swapchain does report real present times. It is now a setting
+("Pace frames by the display", Settings; or `debug.xrt.ULTRAXR_DISPLAY_TIMING=1`), off by default,
+because the emulator's GPU path is not the Pixel's and an earlier note in the source says the
+reported times were frozen on one Samsung phone. The same script with `-s <phone>` measures the
+Pixel; that has not been run, the phone was not reachable. Until it has, there is no claim that
+pacing on the Pixel is better.
+
 ## Timing on the emulator
 
 From `webxr_pages.py` (x86-64 emulator, software-translated arm64 pages, simulated tracking):
@@ -159,6 +189,41 @@ also follows the site's XR permission instead of always being denied.
 Emulator: three.js hand input cubes, which lists `hand-tracking` as required, now starts a
 session and receives both hands with joints. The same change is in the copy installed on the
 Pixel (verified by SHA-256); it has not been run there.
+
+## Playing without hand tracking: the phone as a touchpad
+
+The first live runs ended at the browser's terms of service, which have to be accepted with a
+pointer inside the glasses, and no pinch was registered. A game must not depend on that.
+
+Android gives touches and keys to the application in front, which is the browser, not Ultra XR.
+The supported way for another app to receive them is an accessibility service, so Ultra XR has
+one (`xr/PointerService`): the owner switches it on once in Android's settings. While an XR
+application runs it shows a touchpad on the phone's screen and listens to the volume keys; it
+asks for no screen content and no accessibility events.
+
+| On the phone | In the game |
+|---|---|
+| Drag | the pointer moves |
+| Tap | select (a pinch) |
+| Second finger down, or volume-down held | press and keep pressed: grab and carry |
+| Volume-up | recentre the view and the pointer |
+| A mouse | moves and clicks the same pointer |
+
+The application is given a pointing right hand whose place the touchpad steers and whose pinch
+the tap makes (`core/PointerInput`, `SimWearer.feedHand` with the real head pose). It is the same
+kind of input a tracked hand gives, so whatever works with a hand works with it; when the
+touchpad has not been touched for twenty seconds, tracked hands have the right hand back.
+
+Consent is not bypassed: the terms of service are shown as before and the owner accepts them by
+moving the pointer onto AGREE and tapping. "Enter games automatically" (Settings, off by default)
+makes Ultra XR press a game page's own start button after the page has loaded; it is off until
+the owner switches it on because on the very first run the terms are where that button will be.
+
+Emulator (`pointer_test.py`, 4 of 4): the touchpad alone found and tapped the START XR button of
+three.js XR dragging, the page started its session, taps arrived as select events, and a held
+press with a drag carried a shape to a new place where it stayed (checked by eye in the
+captures). Not testable there: the volume keys, because Android keeps key presses injected by a
+test away from accessibility services. Not run on the phone.
 
 ## Not working
 

@@ -161,6 +161,8 @@ object XrHost : OpenXrGlassesLayer.Host {
             try { latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: InterruptedException) {}
         }
         val s = Tracking.settings
+        // Read by the compositor when it is created, a moment from now, in this process.
+        try { android.system.Os.setenv("ULTRAXR_DISPLAY_TIMING", if (s.paceByDisplay) "1" else "0", true) } catch (_: Throwable) {}
         val d = shell?.display ?: glassesDisplay()
         val scale = s.fovScale
         val tanH = (Tracking.displayTanH * scale).toFloat(); val tanV = (Tracking.displayTanV * scale).toFloat()
@@ -223,6 +225,36 @@ object XrHost : OpenXrGlassesLayer.Host {
 
     // ------------------------------------------------------------ feed
 
+    /**
+     * Presses a page's own start button with the touchpad pointer once the browser is up: the pointer goes to each of
+     * [spots] in turn and taps. A tap after the game has started is an ordinary select in the game. Only called when
+     * the owner has switched "Enter games automatically" on.
+     */
+    fun autoEnter(spots: List<List<Double>>, pageLoadMs: Long = 12_000) {
+        if (spots.isEmpty()) return
+        thread(name = "auto-enter") {
+            val give = System.nanoTime() + 40_000_000_000L
+            while (!applicationConnected && System.nanoTime() < give) Thread.sleep(200)
+            if (!applicationConnected) return@thread
+            Thread.sleep(pageLoadMs)
+            // Three rounds, because how long a page takes to load is not known. A tap after the game has started is a
+            // plain select in the game.
+            for (round in 0..2) {
+                if (round > 0) Thread.sleep(7000)
+                for (s in spots) {
+                    if (!applicationConnected) return@thread
+                    var now = System.nanoTime()
+                    dev.ultraxr.core.PointerInput.center(now); dev.ultraxr.core.PointerInput.move(now, s[0], s[1])
+                    Thread.sleep(700)
+                    now = System.nanoTime(); dev.ultraxr.core.PointerInput.tap(now)
+                    Tracking.log("OpenXR: pressed the game's start button for the wearer at " + s[0] + ", " + s[1])
+                    Thread.sleep(2000)
+                }
+            }
+            dev.ultraxr.core.PointerInput.center(System.nanoTime())
+        }
+    }
+
     @Volatile private var recentreRequested = false
     /** Recentre the running session (the touchpad's volume-up key). */
     fun recentreNow() { recentreRequested = true }
@@ -273,6 +305,7 @@ object XrHost : OpenXrGlassesLayer.Host {
                 pointerFedNs = nowNs
                 SimWearer.feedHand(1, t, p, q, dev.ultraxr.core.PointerInput.offset(), 0.0, 0.0, dev.ultraxr.core.PointerInput.pressed(nowNs), controllers = false)
                 if (!pointerSaid) { pointerSaid = true; Tracking.log("OpenXR: the touchpad pointer is the right hand") }
+                journal?.let { j -> val c = dev.ultraxr.core.PointerInput.clicks; if (c > j.pointerSelections) j.pointerSelections = c }
             }
 
             val hands = Tracking.handJoints

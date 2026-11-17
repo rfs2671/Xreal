@@ -173,3 +173,25 @@ session record and log (about 85 s worn):
   95th percentile 7 ms, worst 16 ms.
 - Not reached: accepting Wolvic's terms (shown inside the glasses, needs a pinch on AGREE),
   entering XR dragging, any interaction.
+
+## Half-width 3D on this phone: where it stands
+
+Collected from every attempt so far (four on 17 November 2026, three earlier):
+
+- The glasses accept mode 8 and re-plug the video link. In that mode their DisplayPort receiver
+  advertises only the lowest link rate. Earlier kernel logs show the Pixel failing four-lane
+  training at that rate on some plugs and falling to 640x480.
+- On 17 November the link came back at 1920x1080@60 every time, and every time the glasses
+  reported mode 1 again 2.3 s later, without a link restart, and showed nothing afterwards.
+- No attempt on this phone is known to have produced a picture in the glasses in mode 8. The
+  earlier note that the link "ran for about 90 and 140 seconds" does not say whether anything was
+  seen in the glasses during that time, and one earlier attempt is recorded as black.
+
+What is not known: whether the glasses give up because the picture the Pixel sends at the low
+link rate is not one they can lock to, or because their firmware expects something else of a
+half-width source. Telling these apart needs either the phone's kernel log during an attempt
+(not readable without root) or a different source device. Neither a firmware write nor a kernel
+change is allowed, so nothing further can be tried on this pair of devices from software alone.
+
+Kept as it is: the attempt is off by default, is bounded when switched on, and a session that
+loses 3D drops to one picture at once.

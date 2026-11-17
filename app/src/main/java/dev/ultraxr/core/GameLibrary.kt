@@ -3,7 +3,9 @@ package dev.ultraxr.core
 import org.json.JSONArray
 
 /** One WebXR experience the launcher offers, with what is actually known about it. */
-data class WebGame(val name: String, val url: String, val needs: String, val state: State, val detail: String) {
+data class WebGame(val name: String, val url: String, val needs: String, val state: State, val detail: String,
+    /** Where the page's own start button is for the touchpad pointer (metres right and up of its centre), most likely first. */
+    val enter: List<List<Double>> = emptyList()) {
     enum class State {
         /** Played on the Pixel with the glasses by a person. Nothing has this yet. */
         VERIFIED,
@@ -24,7 +26,9 @@ object GameLibrary {
         for (i in 0 until a.length()) {
             val o = a.getJSONObject(i)
             val state = when (o.optString("state")) { "verified" -> WebGame.State.VERIFIED; "tested" -> WebGame.State.TESTED; "blocked" -> WebGame.State.BLOCKED; else -> WebGame.State.UNKNOWN }
-            if (o.optString("url").isNotEmpty()) out += WebGame(o.optString("name"), o.optString("url"), o.optString("needs"), state, o.optString("status"))
+            val enter = ArrayList<List<Double>>()
+            o.optJSONArray("enter")?.let { e -> for (k in 0 until e.length()) e.optJSONArray(k)?.let { p -> if (p.length() == 2) enter += listOf(p.getDouble(0), p.getDouble(1)) } }
+            if (o.optString("url").isNotEmpty()) out += WebGame(o.optString("name"), o.optString("url"), o.optString("needs"), state, o.optString("status"), enter)
         }
         return out
     }

@@ -26,6 +26,8 @@ class SettingsActivity : Activity() {
         root.add(toggle("3D display mode", "Switches the glasses to side-by-side 3D. Turn off if the glasses stay black: they then show the same picture to both eyes.", s.use3d) {
             s.use3d = it; Tracking.link?.applyDisplayMode(Tracking.wantedMode())
         }, topDp = 22)
+        root.add(toggle("Enter games automatically", "After a game's page has loaded, Ultra XR presses its start button for you, so the game opens straight into its session. Switch this on after you have accepted the browser's terms of service once: until then that screen is where the button will be.", s.autoEnter) { s.autoEnter = it }, topDp = 10)
+        root.add(toggle("Pace frames by the display (experimental)", "Times each frame by when the glasses really showed the last ones. Smoother on the test device; not yet measured on this phone. Takes effect at the next game.", s.paceByDisplay) { s.paceByDisplay = it }, topDp = 10)
         root.add(toggle("Try half-width 3D (experimental)", "Leave off on the Pixel 10: the glasses drop back to 2D after two seconds and then stay black until they are unplugged and plugged in again.", s.tryHalf3d) { s.tryHalf3d = it }, topDp = 10)
         root.add(toggle("Smoother display (90 Hz)", "Uses more battery. Falls back to 60 Hz if the phone does not offer it.", s.refresh90) {
             s.refresh90 = it; Tracking.link?.applyDisplayMode(Tracking.wantedMode())

@@ -27,6 +27,17 @@ class Settings(context: Context) {
      * two seconds after the switch and then show no picture at all until they are plugged in again (17 Nov 2026).
      */
     var tryHalf3d: Boolean get() = p.getBoolean("tryHalf3d", false); set(v) = p.edit().putBoolean("tryHalf3d", v).apply()
+    /**
+     * Press a game's own start button for the wearer after the page has loaded, so a game opens straight into its
+     * session. Off until the owner switches it on: the first time the browser runs it shows its terms of service
+     * where that button will be, and those are the owner's to accept, not the app's.
+     */
+    var autoEnter: Boolean get() = p.getBoolean("autoEnter", false); set(v) = p.edit().putBoolean("autoEnter", v).apply()
+    /**
+     * Frame pacing of the XR compositor by the present times the display reports, instead of by its own clock.
+     * On the emulator this took the compositor from 30 to 59 frames a second; on the Pixel it has not been measured.
+     */
+    var paceByDisplay: Boolean get() = p.getBoolean("paceByDisplay", false); set(v) = p.edit().putBoolean("paceByDisplay", v).apply()
     var xrInput: String get() = p.getString("xrInput", "auto") ?: "auto"; set(v) = p.edit().putString("xrInput", v).apply()
     var batterySaver: Boolean get() = p.getBoolean("saver", false); set(v) = p.edit().putBoolean("saver", v).apply()
     var firstRunDone: Boolean get() = p.getBoolean("firstRun", false); set(v) = p.edit().putBoolean("firstRun", v).apply()

@@ -1656,7 +1656,7 @@ index f4b024b78..7c57954c8 100644
 +	return XRT_SUCCESS;
 +}
 diff --git a/src/xrt/compositor/main/comp_window_android.c b/src/xrt/compositor/main/comp_window_android.c
-index 614ecb530..172b0ef6e 100644
+index 614ecb530..5e5ea24b3 100644
 --- a/src/xrt/compositor/main/comp_window_android.c
 +++ b/src/xrt/compositor/main/comp_window_android.c
 @@ -12,6 +12,8 @@
@@ -1677,7 +1677,7 @@ index 614ecb530..172b0ef6e 100644
  struct comp_target *
  comp_window_android_create(struct comp_compositor *c)
  {
-@@ -195,7 +199,15 @@ comp_window_android_create(struct comp_compositor *c)
+@@ -195,7 +199,20 @@ comp_window_android_create(struct comp_compositor *c)
  	// The display timing code hasn't been tested on Android and may be broken.
  	// Pocket XR: it is on a Galaxy Z Flip 7 (vkGetPastPresentationTimingGOOGLE returns one frozen actual present
  	// time), so the fake pacer stays, locked to the display by u_pc_fake_external_vblank.
@@ -1687,6 +1687,11 @@ index 614ecb530..172b0ef6e 100644
 +	// Android swapchain reports when past frames really reached the display (VK_GOOGLE_display_timing); with
 +	// debug.xrt.ULTRAXR_DISPLAY_TIMING=1 Monado's display-timing pacer uses that instead. Off until measured.
 +	bool by_display = debug_get_bool_option_ultraxr_display_timing();
++	// The app (same process) can ask for it too, from its settings: setenv before the runtime starts.
++	const char *from_app = getenv("ULTRAXR_DISPLAY_TIMING");
++	if (from_app != NULL && from_app[0] == '1') {
++		by_display = true;
++	}
 +	comp_target_swapchain_init_and_set_fnptrs(
 +	    &w->base, by_display ? COMP_TARGET_USE_DISPLAY_IF_AVAILABLE : COMP_TARGET_FORCE_FAKE_DISPLAY_TIMING);
 +	U_LOG_I("Ultra XR: compositor pacing by %s",

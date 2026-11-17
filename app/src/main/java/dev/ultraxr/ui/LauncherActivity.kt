@@ -68,6 +68,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
             if (i?.hasExtra("sim_wearer") == true) Tracking.simulateWearer = i.getBooleanExtra("sim_wearer", false)
             if (i?.getBooleanExtra("dump_egl", false) == true) dumpEglConfigs()
             if (i?.getBooleanExtra("test_site", false) == true) dev.ultraxr.xr.TestSiteServer.start(applicationContext)
+            if (i?.hasExtra("pace_by_display") == true) Tracking.settings.paceByDisplay = i.getBooleanExtra("pace_by_display", false)
+            if (i?.hasExtra("auto_enter") == true) Tracking.settings.autoEnter = i.getBooleanExtra("auto_enter", false)
             // "--es replay NAME [--es replay_tag TAG]": feed files/recordings/NAME through the trackers (glasses unplugged)
             // and write what they report to files/replay/. For measuring tracking changes on recorded real motion.
             i?.getStringExtra("replay")?.let { name ->
@@ -274,7 +276,10 @@ class LauncherActivity : Activity(), Tracking.Observer {
             row.isClickable = true; row.contentDescription = "Play ${g.name}"
             row.setOnClickListener {
                 library.edit().putString("recent", dev.ultraxr.core.GameLibrary.played(recent(), g.url).joinToString("\u0001")).apply()
-                play(g.name) { stereo -> XrRuntime.launchUrl(this, browser, g.url, stereo) }
+                play(g.name) { stereo ->
+                    XrRuntime.launchUrl(this, browser, g.url, stereo)
+                    if (Tracking.settings.autoEnter) dev.ultraxr.xr.XrHost.autoEnter(g.enter)
+                }
             }
             return row
         }

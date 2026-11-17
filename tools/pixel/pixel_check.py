@@ -63,6 +63,11 @@ def journal(dev):
             r.get("client", "?")[:28], r.get("display", "?")[:28], r.get("seconds", 0), 100 * r.get("position_tracked_fraction", 0), r.get("max_head_travel_m", 0),
             r.get("left_hand_frames", 0), r.get("right_hand_frames", 0), r.get("left_pinches", 0), r.get("right_pinches", 0), r.get("recenters", 0),
             r.get("mean_landmarks", 0), r.get("mean_stereo_matches", 0)))
+        extra = []
+        for side in ("left", "right"):
+            if side + "_min_gap_mm" in r: extra.append("%s hand: fingertips closest %d mm, frames under 20/30/50 mm %s" % (side, r[side + "_min_gap_mm"], r.get(side + "_frames_gap_under_20_30_50_mm", "?")))
+        if "touchpad_selections" in r: extra.append("touchpad selections %d" % r["touchpad_selections"])
+        if extra: print("    " + "; ".join(extra))
     rec = sh(dev, "ls -la " + FILES + "/recordings 2>/dev/null")
     if rec: print("tracking recordings on the phone:\n" + rec)
     return rows

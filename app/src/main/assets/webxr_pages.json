@@ -4,21 +4,63 @@
     "url": "https://threejs.org/examples/webxr_xr_dragging.html",
     "needs": "Hands: point and pinch to pick shapes up",
     "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
-    "state": "tested"
+    "state": "tested",
+    "enter": [
+      [
+        0.0,
+        -0.15
+      ],
+      [
+        0.0,
+        -0.1
+      ],
+      [
+        0.0,
+        -0.2
+      ]
+    ]
   },
   {
     "name": "Ball shooter (three.js)",
     "url": "https://threejs.org/examples/webxr_xr_ballshooter.html",
     "needs": "Hands: pinch to shoot balls that bounce",
     "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
-    "state": "tested"
+    "state": "tested",
+    "enter": [
+      [
+        0.0,
+        -0.15
+      ],
+      [
+        0.0,
+        -0.1
+      ],
+      [
+        0.0,
+        -0.2
+      ]
+    ]
   },
   {
     "name": "AR cones (three.js)",
     "url": "https://threejs.org/examples/webxr_ar_cones.html",
     "needs": "Hands: pinch to place cones in the room",
     "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
-    "state": "tested"
+    "state": "tested",
+    "enter": [
+      [
+        0.0,
+        -0.15
+      ],
+      [
+        0.0,
+        -0.1
+      ],
+      [
+        0.0,
+        -0.2
+      ]
+    ]
   },
   {
     "name": "Hand tracking showcase (A-Frame)",
@@ -39,6 +81,20 @@
     "url": "https://threejs.org/examples/webxr_vr_handinput_cubes.html",
     "needs": "Hands with finger joints, as a required feature",
     "status": "Emulator: VR session starts now (it requires hand tracking); both eyes, both hands with joints and pinches reached the page. The picture showed the pointing lines only; whether cubes appear at the fingertips was not seen. Not tried on the glasses.",
-    "state": "tested"
+    "state": "tested",
+    "enter": [
+      [
+        0.0,
+        -0.15
+      ],
+      [
+        0.0,
+        -0.1
+      ],
+      [
+        0.0,
+        -0.2
+      ]
+    ]
   }
 ]
