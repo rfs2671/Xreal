@@ -37,6 +37,10 @@ class SettingsActivity : Activity() {
         root.add(slider("World scale", "If virtual objects drift against the room when you turn your head, nudge this.", 80, 120, (s.fovScale * 100).toInt(), { "$it %" }) { s.fovScale = it / 100f }, topDp = 10)
         root.add(slider("Your height", "Sets where the floor grid sits.", 120, 200, (s.standingHeightM * 100).toInt(), { "$it cm" }) { s.standingHeightM = it / 100f }, topDp = 10)
 
+        val checkCard = card("Hardware check", "A one-minute check of the glasses' display, cameras, motion sensor and hand tracking, with a report.")
+        checkCard.add(Ui.button(this, "Run the check") { startActivity(android.content.Intent(this, CheckActivity::class.java)) }, topDp = 10)
+        root.add(checkCard, topDp = 10)
+
         // For tracking work without the glasses: one recording of real motion to replay offline.
         val recCard = card("Record tracking data", "Saves 60 seconds of raw camera and motion data (about 550 MB) in the app's folder. Look around, then walk a few steps and come back to exactly where you started.")
         recCard.add(Ui.button(this, "Record 60 seconds") {

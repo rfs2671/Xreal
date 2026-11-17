@@ -46,8 +46,12 @@ HOOK = r"""
     s.addEventListener('end', () => { S.ended = true; });
     let space = null; s.requestReferenceSpace('local').then(r => { space = r; }).catch(() => {});
     const realRaf = s.requestAnimationFrame.bind(s);
+    let last = 0;
     s.requestAnimationFrame = cb => realRaf((t, f) => {
       S.frames++;
+      // frame pacing: how far apart the page's frames are
+      if (last) { const dt = t - last; S.dtSum = (S.dtSum || 0) + dt; S.dtMax = Math.max(S.dtMax || 0, dt); if (dt > 25) S.over25 = (S.over25 || 0) + 1; if (dt > 50) S.over50 = (S.over50 || 0) + 1; }
+      last = t;
       try {
         if (space) {
           const p = f.getViewerPose(space);
@@ -146,6 +150,14 @@ def main():
         except BaseException as e: s = {}; row["result"] = "developer tools: " + repr(e)[:80]
         row.update({k: s.get(k) for k in ("asked", "mode", "error", "blend", "features", "frames", "views", "inputs", "hands", "joints", "select", "squeeze", "hookError")})
         if s.get("yawMin") is not None: row["yaw_range"] = round(s["yawMax"] - s["yawMin"], 3)
+        if s.get("frames", 0) > 1:      # pacing and memory: emulator figures, not the phone's
+            row["frame_ms_mean"] = round(s.get("dtSum", 0) / (s["frames"] - 1), 2); row["frame_ms_max"] = round(s.get("dtMax", 0), 1)
+            row["frames_over_25ms_pct"] = round(100.0 * s.get("over25", 0) / (s["frames"] - 1), 1); row["frames_over_50ms_pct"] = round(100.0 * s.get("over50", 0) / (s["frames"] - 1), 1)
+        for pkg, k in ((bpkg, "browser_pss_mb"), (PKG, "ultraxr_pss_mb")):
+            try:
+                m = [l for l in uia.sh("dumpsys meminfo " + pkg, timeout=60).splitlines() if "TOTAL PSS" in l or l.strip().startswith("TOTAL ")]
+                if m: row[k] = round(int(m[0].replace("TOTAL PSS:", "TOTAL").split()[1].replace(",", "")) / 1024.0)
+            except Exception: pass
         img = grab(out, "page-%d.png" % (n + 1))
         if img is not None and img.shape[1] == 1920:
             g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32); L = g[:, :960]; R = g[:, 960:]

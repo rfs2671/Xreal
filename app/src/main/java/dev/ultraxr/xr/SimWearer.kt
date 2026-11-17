@@ -43,15 +43,24 @@ object SimWearer {
             //   sim_aim  "yaw,pitch"   degrees the right hand points left and up of straight ahead
             //   sim_auto 0             stops the hands pinching by themselves
             //   sim_tap  <number>      each change makes the right hand pinch once, briefly
+            //   sim_pinch 1|2|3        the right (1), left (2) or both (3) hands pinch and hold until it is set back to 0
+            //   sim_hand_r / sim_hand_l "x,y,z"   metres the hand is moved right, up and back from its resting place.
+            //                          A browser points a hand's ray from the shoulder through the hand, so moving the
+            //                          hand is what steers the ray (turning it, as sim_aim does, hardly does).
             lookYaw = pair("sim_look", 0); lookPitch = pair("sim_look", 1)
             aimYaw = pair("sim_aim", 0); aimPitch = pair("sim_aim", 1)
             autoPinch = prop("sim_auto", "1") != "0"
+            holdMask = prop("sim_pinch", "0").toIntOrNull() ?: 0
+            moveRight = triple("sim_hand_r"); moveLeft = triple("sim_hand_l")
             val tap = prop("sim_tap", "")
             if (tap != lastTap) { if (lastTap != null && tap.isNotEmpty()) tapUntilNs = nowNs + 220_000_000L; lastTap = tap }
         }
         return moving
     }
     private var lookYaw = 0.0; private var lookPitch = 0.0; private var aimYaw = 0.0; private var aimPitch = 0.0
+    private var holdMask = 0
+    private var moveRight = doubleArrayOf(0.0, 0.0, 0.0); private var moveLeft = doubleArrayOf(0.0, 0.0, 0.0)
+    private fun triple(name: String): DoubleArray { val p = prop(name, "").split(","); return DoubleArray(3) { p.getOrNull(it)?.trim()?.toDoubleOrNull() ?: 0.0 } }
     private var autoPinch = true; private var lastTap: String? = null; private var tapUntilNs = 0L
     private fun prop(name: String, default: String): String = try {
         Class.forName("android.os.SystemProperties").getMethod("get", String::class.java, String::class.java).invoke(null, "debug.ultraxr.$name", default) as String
@@ -77,12 +86,20 @@ object SimWearer {
         if (!withHands) return
         val head = doubleArrayOf(px, py, 0.0)
         for (side in 0..1) {
-            val pinch = (autoPinch && pinching(side, t)) || (side == 1 && nowNs < tapUntilNs)
+            val pinch = (autoPinch && pinching(side, t)) || (side == 1 && nowNs < tapUntilNs) || (holdMask and (if (side == 1) 1 else 2)) != 0
+            val move = if (side == 1) moveRight else moveLeft
             // The hand's own direction: the right hand can be pointed by a test, the left points straight ahead.
             val hq = if (side == 1) Q.mul(q, Q.mul(Q.axisAngle(0.0, 1.0, 0.0, aimYaw), Q.axisAngle(1.0, 0.0, 0.0, aimPitch))) else q
             val sx = if (side == 0) -1.0 else 1.0
             // In the head's frame: x right, y up, -z forward. The wrist is below and in front of the eyes.
-            fun put(j: Int, x: Double, y: Double, z: Double, r: Float) {
+            // The right hand turns as a whole about its wrist when a test points it somewhere, so that the
+            // joints, and the pointing ray an application derives from them, really do point there.
+            val aimQ = if (side == 1) Q.mul(Q.axisAngle(0.0, 1.0, 0.0, aimYaw), Q.axisAngle(1.0, 0.0, 0.0, aimPitch)) else null
+            val wristX = (if (side == 0) -1.0 else 1.0) * 0.16; val wristY = -0.22; val wristZ = -0.38
+            fun put(j: Int, x0: Double, y0: Double, z0: Double, r: Float) {
+                var x = x0; var y = y0; var z = z0
+                if (aimQ != null) { val o = Q.rotate(aimQ, doubleArrayOf(x0 - wristX, y0 - wristY, z0 - wristZ)); x = wristX + o[0]; y = wristY + o[1]; z = wristZ + o[2] }
+                x += move[0]; y += move[1]; z += move[2]      // the whole hand carried somewhere else by a test
                 val p = Q.rotate(q, doubleArrayOf(x, y, z))
                 UltraXrFeed.putJoint(joints, j, (head[0] + p[0]).toFloat(), (head[1] + p[1]).toFloat(), (head[2] + p[2]).toFloat(),
                     hq[0].toFloat(), hq[1].toFloat(), hq[2].toFloat(), hq[3].toFloat(), r)   // joints carry the hand's own direction
@@ -113,7 +130,7 @@ object SimWearer {
             UltraXrFeed.hand(side, nowNs, joints, true)
             if (!controllers) continue
             // The same hand as a Touch-shaped controller: grip at the palm, trigger from the pinch.
-            val g = Q.rotate(q, doubleArrayOf(wx, wy + 0.005, wz - 0.05))
+            val g = Q.rotate(q, doubleArrayOf(wx + move[0], wy + 0.005 + move[1], wz - 0.05 + move[2]))
             UltraXrFeed.controller(side, nowNs, (head[0] + g[0]).toFloat(), (head[1] + g[1]).toFloat(), (head[2] + g[2]).toFloat(),
                 hq[0].toFloat(), hq[1].toFloat(), hq[2].toFloat(), hq[3].toFloat(),
                 buttons = if (pinch) UltraXrFeed.Button.TRIGGER_TOUCH else 0, trigger = if (pinch) 1f else 0f)

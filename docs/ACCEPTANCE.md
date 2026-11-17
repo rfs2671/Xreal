@@ -1,66 +1,55 @@
-# The one acceptance session
+# The five-minute physical test
 
-Everything below has only run on an emulator with simulated tracking, or not at all. This session
-is where it meets the Pixel and the glasses. About 25 minutes. Note the step numbers that fail and
-what you saw; nothing else is needed.
+Everything that can be checked without a person is checked by scripts (see "What is automatic"
+below). This is the part that needs your eyes and hands. One game, five steps, about five
+minutes. You answer three yes-or-no questions; the phone records the rest.
 
-Already on the phone: Ultra XR, the Ultra XR copy of the Wolvic browser, and the Khronos sample
-"hello_xr". The glasses' firmware and the phone's system are untouched.
+**Before:** phone unlocked and on Wi-Fi, glasses plugged straight into the phone, a lit room with
+things in it (tracking fails in the dark and facing a blank wall), two steps of clear floor.
 
-**Before starting:** phone charged and unlocked, glasses plugged straight into the phone, a lit room
-with things to look at (tracking fails in the dark and on blank walls), about 2 m of clear floor.
+1. **Start.** Open Ultra XR and tap **XR dragging** under WebXR games. A banner says it is
+   starting 3D; the picture blanks for a few seconds once or more; then the browser's window
+   appears in the glasses.
+2. **Enter.** Hold a hand up so a thin line shows where it points. Point at **START XR** and
+   touch thumb and index finger together briefly. If a card says "press any button to continue",
+   pinch once more. Coloured shapes now float in your room.
+   **Question 1: close one eye, then the other. Do the shapes shift against the room?** (yes = real 3D)
+3. **Move.** Take two steps to one side, then back.
+   **Question 2: do the shapes stay where they are in the room while you move?**
+4. **Grab.** Point at a shape, pinch and hold, move your hand, let go. Try the other hand.
+   **Question 3: did a shape come with your hand and stay where you let go?**
+5. **Recentre and leave.** Pinch with both hands and hold for two seconds: the scene jumps back in
+   front of you. Press Back on the phone, then unplug the glasses.
 
-## A. Display and 3D (5 minutes)
+That is all. Tell me the three answers (and anything that looked wrong). If the phone stays on
+Wi-Fi with wireless debugging on, the details are read from it directly:
 
-1. **2D still works.** Plug in the glasses. *Pass:* the phone's picture appears in the glasses as before.
-2. **Open Ultra XR.** *Pass:* the home scene appears in the glasses.
-3. **3D.** Tap **Spatial desktop**. Within half a minute the picture blanks once or more and the
-   phone's status line ends in "3D" or in "2D (3D failed: ...)". *Note which, and the reason if 2D.*
-   If 3D: close one eye, then the other. *Pass:* the clock shifts against the room between the eyes.
-   If depth looks inside out, tick "Swap left and right eye" in More and say so.
-4. **Never doubled.** At no point in this whole session should you see the picture as two copies
-   side by side for longer than the few seconds of a switch. *If you do, note where.*
+    python tools/pixel/pixel_check.py journal
 
-## B. The runtime with the sample app (3 minutes)
+which shows, for that session: whether the glasses got one view per eye or fell back to one
+picture, how much of the time position was tracked, how far the head moved, how many frames each
+hand was seen, how many pinches each hand made, and whether the recentre gesture fired.
 
-5. Back in Ultra XR's home, under **Your XR apps**, tap **hello_xr**. The banner says it is starting
-   3D; then the app opens. *Pass:* small cubes float in the room around you and stay put as you
-   turn your head. *Note* whether it started in 3D or said it was showing 2D.
-6. Hold a hand up in front of the glasses. *Pass:* a cube follows each hand. (If none appears, note
-   it and go on.)
-7. Press the phone's Home button, return to Ultra XR. *Pass:* the home scene is back in the glasses.
+## What is automatic
 
-## C. WebXR games in the browser (10 minutes)
+| Check | Where | Script |
+|---|---|---|
+| Both apps on the phone are exactly the built files (SHA-256), the phone's runtime broker hands out Ultra XR's runtime, screen timeout and stay-awake unchanged | Pixel, over adb | `tools/pixel/pixel_check.py install` or `verify` |
+| WebXR sessions: AR and VR offered, two eye views, additive blending, 6DoF pose, hands with joints, selects (20 checks) | emulator | `tools/ui-automation/webxr_test.py` |
+| Existing third-party pages start sessions and receive stereo, head motion and hands | emulator | `tools/ui-automation/webxr_pages.py` |
+| A simulated hand picks up and moves an object in a third-party page | emulator | `tools/ui-automation/webxr_interact.py` |
+| The OpenXR sample app renders one view per eye through the runtime (11 checks) | emulator | `tools/ui-automation/openxr_test.py` |
+| Desktop, stereo geometry, 3D switch rules, recentre gesture, game library (unit tests) | this machine | `gradlew testDebugUnitTest` |
 
-8. In Ultra XR's home, under **WebXR games**, tap **XR dragging**. The browser opens on that page.
-   *Pass:* in the glasses you see the browser's window with the three.js page.
-9. Point a hand at the page's **START XR** button (a thin line shows where you point) and pinch
-   thumb and index finger once, briefly. *Pass:* the window disappears and coloured shapes float
-   in your room, which you still see around them.
-10. Look around and take a step sideways. *Pass:* the shapes stay where they are in the room.
-    *Note* any swimming, jumping, or drift.
-11. Point at a shape, pinch and hold, move your hand, release. *Pass:* the shape comes with your
-    hand and stays where you let go. Try both hands.
-12. Go back (the phone's Back button) and open **Ball shooter** the same way; pinch to shoot.
-    *Pass:* balls fly from your hand and bounce. Then **AR cones**: each pinch places a cone.
-13. If a page shows no hands or does not react to pinches at all, note which, and whether the thin
-    pointing lines were visible in the browser's own window before entering.
+The emulator checks use simulated tracking. They show that the software path works, not that real
+tracking is accurate; only the five steps above can show that.
 
-## D. Tracking data for later work (3 minutes)
+## If something fails
 
-14. In Ultra XR: **Settings**, **Record 60 seconds**. Then: look around slowly for 15 seconds, walk
-    four steps forward, turn round, walk back, and stand exactly where you started until a minute
-    has passed. This recording is what lets tracking be improved afterwards without the glasses.
-
-## E. Recovery (4 minutes)
-
-15. During a WebXR session, unplug the glasses, wait five seconds, plug them back in. *Note* what
-    happens: whether the picture returns, and whether the game is still there.
-16. Close everything from the phone's recents and unplug. *Pass:* next time the glasses are plugged
-    in, the plain 2D picture works as it always did.
-
-## What to report
-
-Failed step numbers and what you saw, plus the two notes from steps 3 and 5 (3D or 2D). If the
-phone is still on the same Wi-Fi with wireless debugging on afterwards, the logs can be read from
-it directly.
+- **Stays in 2D** (the banner says 3D could not be started): the game still runs, as one picture
+  without depth. Note it; question 1 is then "no".
+- **No pointing line from the hands in the browser window:** hand tracking is not reaching the
+  browser. Note whether your hands were in view of the glasses' cameras and well lit.
+- **Shapes swim or jump when you move:** position tracking is not good enough yet. Run
+  **Settings, Record 60 seconds** once (look around, walk four steps and back): that recording is
+  what tracking is tuned on afterwards.

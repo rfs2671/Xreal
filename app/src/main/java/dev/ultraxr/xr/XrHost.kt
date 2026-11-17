@@ -35,6 +35,18 @@ object XrHost : OpenXrGlassesLayer.Host {
     @Volatile private var feeding = false
     private var holdsTracking = false
     @Volatile var applicationConnected = false; private set
+    @Volatile private var journal: dev.ultraxr.core.SessionJournal? = null
+
+    /** Appends the finished session's record to journal.jsonl in the app's external files folder (readable over adb). */
+    private fun closeJournal() {
+        val j = journal ?: return
+        journal = null
+        try {
+            val line = j.toJson(System.currentTimeMillis()).toString()
+            java.io.File(app.getExternalFilesDir(null), "journal.jsonl").appendText(line + 10.toChar())
+            Tracking.log("session record: $line")
+        } catch (e: Throwable) { Tracking.log("session record not written: $e") }
+    }
 
     /**
      * How hands are given to the running application. A browser gets the hand joints only: it turns a pinch into
@@ -166,6 +178,8 @@ object XrHost : OpenXrGlassesLayer.Host {
         applicationConnected = true
         lastEvent = "an OpenXR application connected (" + OpenXrGlassesLayer.clientPackage.ifEmpty { "unknown" } + (if (handsOnly) ", hands as joints only" else ", hands as joints and controllers") + ")" + if (onGlasses) " and owns the glasses" else " (drawing on the phone: no glasses window)"
         Tracking.log("OpenXR: $lastEvent")
+        journal = dev.ultraxr.core.SessionJournal(OpenXrGlassesLayer.clientPackage, if (!onGlasses) "phone screen" else if (stereoAtStart) "glasses, one view per eye" else "glasses, one picture (2D)",
+            if (handsOnly) "joints" else "joints and controllers", System.currentTimeMillis())
         Tracking.recenter()
         try {
             val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -179,6 +193,7 @@ object XrHost : OpenXrGlassesLayer.Host {
         applicationConnected = false
         feeding = false
         lastEvent = "the OpenXR application left"
+        closeJournal()
         Tracking.log("OpenXR: $lastEvent")
         try { wake?.release() } catch (_: Throwable) {}
         wake = null
@@ -194,6 +209,9 @@ object XrHost : OpenXrGlassesLayer.Host {
         var recentred = false
         val pressed = booleanArrayOf(false, false)
         val joints = FloatArray(UltraXrFeed.HAND_FLOATS)
+        val pinch = arrayOf(dev.ultraxr.core.PinchState(), dev.ultraxr.core.PinchState())
+        val recenter = dev.ultraxr.core.RecenterGesture()
+        var vioTickNs = 0L
         while (feeding) {
             try { Thread.sleep(3) } catch (_: InterruptedException) {}
             if (Tracking.simulateWearer) {   // test builds on an emulator: a made-up head and hands
@@ -216,6 +234,10 @@ object XrHost : OpenXrGlassesLayer.Host {
             UltraXrFeed.head(t, p[0].toFloat(), p[1].toFloat(), p[2].toFloat(), q[0].toFloat(), q[1].toFloat(), q[2].toFloat(), q[3].toFloat(),
                 (w[0] * k).toFloat(), (w[1] * k).toFloat(), (w[2] * k).toFloat(), v[0].toFloat(), v[1].toFloat(), v[2].toFloat(), s.mode == HeadTracker.Mode.SIX_DOF)
             if (!recentred) { recentred = UltraXrFeed.recenter() }
+            journal?.let { j ->
+                j.head(s.mode == HeadTracker.Mode.SIX_DOF, p)
+                if (t - vioTickNs > 1_000_000_000L) { vioTickNs = t; if (Tracking.vioLandmarks >= 0) { j.vioSamples++; j.stereoMatchesSum += Tracking.vioStereoMatches; j.landmarksSum += Tracking.vioLandmarks } }
+            }
 
             val hands = Tracking.handJoints
             val newest = hands.maxOfOrNull { it.timestampNs } ?: 0L
@@ -225,7 +247,11 @@ object XrHost : OpenXrGlassesLayer.Host {
             for (side in 0..1) {
                 val hand = hands.firstOrNull { it.isRight == (side == 1) && it.timestampNs == newest }
                 val poses = Tracking.handPoses26(side)
-                if (hand == null || poses == null) { UltraXrFeed.hand(side, newest, null, false); pressed[side] = false; continue }
+                if (hand == null || poses == null) { UltraXrFeed.hand(side, newest, null, false); pressed[side] = false; pinch[side].lost(); continue }
+                val tt = hand.joint(Hand.THUMB_TIP); val it2 = hand.joint(Hand.INDEX_TIP)
+                val gap = sqrt((tt[0] - it2[0]) * (tt[0] - it2[0]) + (tt[1] - it2[1]) * (tt[1] - it2[1]) + (tt[2] - it2[2]) * (tt[2] - it2[2])).toFloat()
+                val began = pinch[side].update(gap)
+                journal?.let { j -> j.handFrames[side]++; if (began) j.pinches[side]++ }
                 for (j in 0 until UltraXrFeed.Joint.COUNT) {
                     val o = j * 7
                     UltraXrFeed.putJoint(joints, j, poses[o], poses[o + 1], poses[o + 2], poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], if (j == 0) 0.02f else 0.008f)
@@ -233,6 +259,11 @@ object XrHost : OpenXrGlassesLayer.Host {
                 UltraXrFeed.hand(side, hand.timestampNs, joints, true)
                 val st = states.firstOrNull { it.isRight == (side == 1) } ?: continue
                 if (!handsOnly) feedController(side, hand, st, poses, pressed)
+            }
+            // Recentre from inside a game: pinch with both hands and hold for a second and a half.
+            if (recenter.update(newest, pinch[0].pinching, pinch[1].pinching)) {
+                Tracking.recenter(); recentred = false; journal?.recentred()
+                Tracking.log("OpenXR: recentred by the two-hand pinch")
             }
         }
     }

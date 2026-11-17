@@ -98,16 +98,46 @@ drawn as light over the room, black stays transparent, and a scene with a bright
 and will be glaring.
 
 "Ran" here means the session, the two eye views, the moving head pose, the hands and the pinches all
-reached the page. Nobody played these, and the simulated hands do not aim at anything, so whether
-a shape can actually be picked up is not shown.
+reached the page. Nobody played these.
+
+## An object actually picked up and moved (`tools/ui-automation/webxr_interact.py`, emulator)
+
+In three.js XR dragging, unmodified: the simulated left hand, moved 10 cm to the side so that its
+ray lay on a shape, pinched and held, was carried 20 cm, and let go. The shape went with the hand
+and stayed where it was released (49% of the left eye's picture changed and was still changed two
+seconds later; the other shapes did not move; the page counted the select). Checked by eye in the
+captures as well, after an earlier version of this test had mistaken Wolvic's "press any button to
+continue" card disappearing for a moved object.
+
+Two things this taught about real use:
+
+- **Wolvic points a hand's ray from the shoulder through the hand.** Where the hand is steers the
+  ray; turning the wrist hardly does. Aim by moving the hand.
+- **Wolvic shows a "press any button to continue" card when a session starts.** One pinch
+  dismisses it.
+
+It is a simulated hand: this shows the path from joints to a grabbed object works, not how well a
+real tracked hand aims.
 
 ## Not working
 
-- **Pages that require hand tracking** (rather than ask for it) are refused by this engine. The
-  Gecko engine may differ; it could not be run on the emulator at all (it crashes in graphics
-  setup under arm translation), so only the Chromium engine has been exercised.
-- **Hit testing and anchors.** Not implemented, and not asked for by the test: a session that
-  requests them makes Wolvic 1.4 end the page ("Environment integration is not supported").
+- **Pages that require hand tracking** (rather than ask for it) are refused. Cause, from the
+  browser's source: WebXR hand input has its own permission in Chromium, and Wolvic's permission
+  code (`wolvic_permission_manager.cc`, `ChromiumPermissionDelegate.java`) only knows the VR and AR
+  permissions and denies every other kind. A required feature that is denied ends the request; an
+  optional one is dropped, yet the joints are still delivered. The fix is small (treat a
+  hand-tracking request that comes with an XR session request like the XR request) but it means
+  changing the browser's permission handling inside its compiled code; that step was stopped by
+  this environment's safety check and has not been done. The Gecko engine may not have the
+  problem; it could not be run on the emulator (it crashes in graphics setup under arm
+  translation), so only the Chromium engine has been exercised.
+- **Hit testing** (placing objects on real surfaces). The browser's XR device does not offer the
+  feature at all, and nothing in Ultra XR detects surfaces. Games that place objects where the
+  hand points (three.js AR cones) work without it; games that need a detected floor or wall do not.
+- **Spatial anchors.** Not implemented and not advertised by Ultra XR. (Wolvic's device code lists
+  anchors as supported without anything behind it; pages that rely on it will not get working anchors.)
+- A session that asks for hit testing or anchors makes Wolvic 1.4 end the page ("Environment
+  integration is not supported"), so the test page does not ask for them.
 - **Bluetooth gamepads as XR input.** Android delivers gamepad events to the focused app, which
   is the browser, not Ultra XR. Pages can read a gamepad through the browser's Gamepad API; the
   runtime cannot turn one into an XR controller. A gamepad has no position and none is invented.
@@ -120,6 +150,22 @@ a shape can actually be picked up is not shown.
 - Real tracking through this path. The simulated wearer proves the plumbing, not the tracking.
 - Whether any game is actually playable. Third-party pages were run (see below), not played.
 - Frame timing and heat on the phone.
+
+## In a session
+
+- **Recentre:** pinch with both hands and hold for a second and a half (`RecenterGesture`, unit
+  tested; never tried with real hands).
+- **Position fallback:** position is passed on as tracked only while the estimator has enough
+  landmarks seen by both cameras (`PositionConfidence`); otherwise the last position is held and
+  rotation continues, so the scene turns correctly but does not follow steps. Measured tracking
+  quality is in native/vio/NOTES.md; nothing here improves it yet, because no long recording of
+  real motion exists to tune on (Settings, "Record 60 seconds", makes one).
+- **Session record:** each session appends a line to `journal.jsonl` on the phone (display mode,
+  share of time position was tracked, distance moved, frames each hand was seen, pinches,
+  recentres). `tools/pixel/pixel_check.py journal` reads it over adb.
+- **Reconnect:** if the glasses are unplugged during a session the picture cannot be handed back
+  to the running session (the runtime takes its surface once, at start). The session has to be
+  left and started again. Not tested on hardware.
 
 ## Tools
 

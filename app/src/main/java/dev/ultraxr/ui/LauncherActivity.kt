@@ -34,6 +34,10 @@ class LauncherActivity : Activity(), Tracking.Observer {
     private lateinit var bannerText: TextView
     private lateinit var bannerButton: TextView
     private lateinit var webList: LinearLayout
+    private lateinit var recentList: LinearLayout
+    private lateinit var favList: LinearLayout
+    private lateinit var recentTitle: TextView
+    private lateinit var favTitle: TextView
     private lateinit var appsList: LinearLayout
     private lateinit var bestText: TextView
     private val home = HomeScene()
@@ -112,28 +116,41 @@ class LauncherActivity : Activity(), Tracking.Observer {
         banner.add(bannerText); banner.add(bannerButton, topDp = 12)
         root.add(banner, topDp = 18)
 
-        // Featured game.
-        val hero = Ui.column(this, 22).apply { background = Ui.gradient(0xFF10283F.toInt(), 0xFF2B1650.toInt(), 28f, this@LauncherActivity) }
-        hero.add(Ui.text(this, "FEATURED", 11f, Ui.ACCENT, bold = true).apply { letterSpacing = 0.18f })
-        hero.add(Ui.text(this, "Lumen", 30f, bold = true), topDp = 8)
-        hero.add(Ui.text(this, "Glowing orbs hang in your room. Reach out and burst them, pinch to throw them through rings, and step aside when a comet comes for you.", 14f, 0xFFC9D6E6.toInt()).apply { setLineSpacing(0f, 1.25f) }, topDp = 8)
-        bestText = Ui.text(this, "", 13f, Ui.MUTED)
-        hero.add(bestText, topDp = 10)
-        hero.add(Ui.button(this, "Play", primary = true) { startActivity(Intent(this, PlayActivity::class.java)) }, topDp = 16)
-        hero.add(Ui.button(this, "Spatial desktop") { startActivity(Intent(this, DesktopActivity::class.java)) }, topDp = 10)
-        root.add(hero, topDp = 18)
-
-        root.add(Ui.text(this, "WebXR games", 18f, bold = true), topDp = 28)
+        // Games come first: recently played, favourites, then everything.
+        recentTitle = Ui.text(this, "Recently played", 18f, bold = true); recentList = Ui.column(this)
+        root.add(recentTitle, topDp = 26); root.add(recentList, topDp = 10)
+        favTitle = Ui.text(this, "Favourites", 18f, bold = true); favList = Ui.column(this)
+        root.add(favTitle, topDp = 26); root.add(favList, topDp = 10)
+        root.add(Ui.text(this, "WebXR games", 18f, bold = true), topDp = 26)
         webList = Ui.column(this)
         root.add(webList, topDp = 10)
 
-        root.add(Ui.text(this, "Your XR apps", 18f, bold = true), topDp = 28)
+        // How to play with hands: the same in every game.
+        val hands = Ui.column(this, 18).apply { background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity) }
+        hands.add(Ui.text(this, "Playing with your hands", 16f, bold = true))
+        for ((what, how) in listOf("Point" to "Hold a hand up: a thin line runs out through it. Move the hand to aim; turning the wrist does little.",
+            "Select" to "Touch thumb and index finger together, briefly.",
+            "Grab" to "Pinch and hold, move your hand, let go.",
+            "Recentre" to "Pinch with both hands and hold for a second and a half.",
+            "Leave a game" to "Press Back on the phone.")) {
+            val r = Ui.row(this)
+            r.add(Ui.text(this, what, 14f, Ui.ACCENT, bold = true), Ui.dp(this, 96))
+            r.add(Ui.text(this, how, 14f, 0xFFC9D6E6.toInt()).apply { setLineSpacing(0f, 1.2f) }, 0, weight = 1f)
+            hands.add(r, topDp = 10)
+        }
+        root.add(hands, topDp = 26)
+
+        root.add(Ui.text(this, "Also on this phone", 18f, bold = true), topDp = 28)
         appsList = Ui.column(this)
         root.add(appsList, topDp = 10)
+        bestText = Ui.text(this, "", 13f, Ui.MUTED)
+        val more = Ui.row(this)
+        more.add(Ui.button(this, "Lumen") { startActivity(Intent(this, PlayActivity::class.java)) }, 0, weight = 1f)
+        more.add(Ui.button(this, "Spatial desktop") { startActivity(Intent(this, DesktopActivity::class.java)) }, 0, weight = 1f, startDp = 10)
+        root.add(more, topDp = 10)
 
         val actions = Ui.row(this)
-        actions.add(Ui.button(this, "Recenter") { Tracking.recenter(); home.reanchor() }, 0, weight = 1f)
-        actions.add(Ui.button(this, "Check") { startActivity(Intent(this, CheckActivity::class.java)) }, 0, weight = 1f, startDp = 10)
+        actions.add(Ui.button(this, "Recentre") { Tracking.recenter(); home.reanchor() }, 0, weight = 1f)
         actions.add(Ui.button(this, "Settings") { startActivity(Intent(this, SettingsActivity::class.java)) }, 0, weight = 1f, startDp = 10)
         root.add(actions, topDp = 28)
         setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); isFillViewport = true; addView(root) })
@@ -178,35 +195,54 @@ class LauncherActivity : Activity(), Tracking.Observer {
         bannerText.text = msg; bannerButton.text = action; bannerAction = run; banner.visibility = View.VISIBLE
     }
 
-    /** The WebXR pages this build knows about, with what was actually observed for each (assets/webxr_pages.json). */
+    private val library by lazy { getSharedPreferences("library", MODE_PRIVATE) }
+    private fun recent(): List<String> = (library.getString("recent", "") ?: "").split('\u0001').filter { it.isNotEmpty() }
+    private fun favourites(): Set<String> = library.getStringSet("favourites", emptySet()) ?: emptySet()
+
+    /** The WebXR games, with recently played and favourites above them. Each card says what is actually known about it. */
     private fun refreshWeb() {
-        webList.removeAllViews()
+        webList.removeAllViews(); recentList.removeAllViews(); favList.removeAllViews()
         fun note(t: String) = Ui.text(this, t, 14f, Ui.MUTED).apply {
             background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity); val p = Ui.dp(this@LauncherActivity, 18); setPadding(p, p, p, p); setLineSpacing(0f, 1.2f)
         }
         val browser = XrRuntime.browser(this)
-        if (browser == null) {
-            webList.add(note("WebXR games run in the Wolvic browser on Ultra XR's runtime. Install the Ultra XR copy of Wolvic (tools/wolvic in the project) and the games appear here."))
-            return
-        }
-        val pages = try { org.json.JSONArray(assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { org.json.JSONArray() }
-        for (k in 0 until pages.length()) {
-            val o = pages.getJSONObject(k)
+        val games = try { dev.ultraxr.core.GameLibrary.parse(assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { emptyList() }
+        val favs = favourites(); val rec = recent()
+        recentTitle.visibility = View.GONE; favTitle.visibility = View.GONE
+        if (browser == null) { webList.add(note("The WebXR browser is not installed on this phone, so games cannot start.")); return }
+
+        fun card(g: dev.ultraxr.core.WebGame): View {
             val row = Ui.row(this)
             row.background = Ui.pressable(this, Ui.rounded(Ui.SURFACE, 20f, this))
-            val p = Ui.dp(this, 14); row.setPadding(p, p, p, p)
+            val p = Ui.dp(this, 16); row.setPadding(p, p, Ui.dp(this, 8), p)
             val col = Ui.column(this)
-            col.add(Ui.text(this, o.optString("name"), 16f, bold = true))
-            col.add(Ui.text(this, o.optString("needs") + " · " + o.optString("status"), 12f, Ui.MUTED).apply { setLineSpacing(0f, 1.2f) }, topDp = 4)
+            col.add(Ui.text(this, g.name, 17f, bold = true))
+            col.add(Ui.text(this, g.needs, 13f, 0xFFC9D6E6.toInt()).apply { setLineSpacing(0f, 1.2f) }, topDp = 5)
+            val chip = Ui.chip(this)
+            Ui.setChip(chip, dev.ultraxr.core.GameLibrary.label(g.state), when (g.state) {
+                dev.ultraxr.core.WebGame.State.VERIFIED -> Ui.GOOD; dev.ultraxr.core.WebGame.State.TESTED -> Ui.WARN
+                dev.ultraxr.core.WebGame.State.BLOCKED -> Ui.BAD; else -> Ui.MUTED })
+            col.add(chip, ViewGroup.LayoutParams.WRAP_CONTENT, topDp = 10)
             row.add(col, 0, weight = 1f)
-            row.add(Ui.text(this, "Open", 14f, Ui.ACCENT, bold = true).apply { gravity = Gravity.END }, ViewGroup.LayoutParams.WRAP_CONTENT)
-            row.isClickable = true
-            val url = o.optString("url"); val name = o.optString("name")
-            row.setOnClickListener { play(name) { stereo -> XrRuntime.launchUrl(this, browser, url, stereo) } }
-            webList.add(row, topDp = 8)
+            val star = Ui.text(this, if (g.url in favs) "\u2605" else "\u2606", 24f, if (g.url in favs) Ui.WARN else Ui.MUTED).apply {
+                gravity = Gravity.CENTER; minWidth = Ui.dp(this@LauncherActivity, 52); minHeight = Ui.dp(this@LauncherActivity, 52)
+                contentDescription = if (g.url in favs) "Remove ${g.name} from favourites" else "Add ${g.name} to favourites"
+                isClickable = true
+                setOnClickListener { library.edit().putStringSet("favourites", dev.ultraxr.core.GameLibrary.toggleFavourite(favourites(), g.url)).apply(); refreshWeb() }
+            }
+            row.add(star, ViewGroup.LayoutParams.WRAP_CONTENT)
+            row.isClickable = true; row.contentDescription = "Play ${g.name}"
+            row.setOnClickListener {
+                library.edit().putString("recent", dev.ultraxr.core.GameLibrary.played(recent(), g.url).joinToString("\u0001")).apply()
+                play(g.name) { stereo -> XrRuntime.launchUrl(this, browser, g.url, stereo) }
+            }
+            return row
         }
-        val open = Ui.button(this, "Open the browser") { play(browser.loadLabel(packageManager).toString()) { stereo -> XrRuntime.launch(this, browser, stereo) } }
-        webList.add(open, topDp = 10)
+        val byUrl = games.associateBy { it.url }
+        rec.mapNotNull { byUrl[it] }.let { list -> if (list.isNotEmpty()) { recentTitle.visibility = View.VISIBLE; for (g in list) recentList.add(card(g), topDp = 8) } }
+        games.filter { it.url in favs }.let { list -> if (list.isNotEmpty()) { favTitle.visibility = View.VISIBLE; for (g in list) favList.add(card(g), topDp = 8) } }
+        for (g in dev.ultraxr.core.GameLibrary.ordered(games)) webList.add(card(g), topDp = 8)
+        webList.add(Ui.button(this, "Browse the web in XR") { play(browser.loadLabel(packageManager).toString()) { stereo -> XrRuntime.launch(this, browser, stereo) } }, topDp = 10)
     }
 
     private fun refreshApps() {
@@ -214,7 +250,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         appsList.removeAllViews()
         val apps = XrRuntime.installedApps(this).filter { !it.activityInfo.packageName.startsWith("com.igalia.wolvic") }   // the browser has its own section
         if (apps.isEmpty()) {
-            appsList.add(Ui.text(this, "Android OpenXR games you install will show up here and start with one tap.", 14f, Ui.MUTED).apply {
+            appsList.add(Ui.text(this, "Other XR apps you install appear here.", 14f, Ui.MUTED).apply {
                 background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity); val p = Ui.dp(this@LauncherActivity, 18); setPadding(p, p, p, p); setLineSpacing(0f, 1.2f)
             })
             return

@@ -3,36 +3,42 @@
     "name": "XR dragging (three.js)",
     "url": "https://threejs.org/examples/webxr_xr_dragging.html",
     "needs": "Hands: point and pinch to pick shapes up",
-    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses."
+    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
+    "state": "tested"
   },
   {
     "name": "Ball shooter (three.js)",
     "url": "https://threejs.org/examples/webxr_xr_ballshooter.html",
     "needs": "Hands: pinch to shoot balls that bounce",
-    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses."
+    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
+    "state": "tested"
   },
   {
     "name": "AR cones (three.js)",
     "url": "https://threejs.org/examples/webxr_ar_cones.html",
     "needs": "Hands: pinch to place cones in the room",
-    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses."
+    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
+    "state": "tested"
   },
   {
     "name": "Hand tracking showcase (A-Frame)",
     "url": "https://aframe.io/aframe/examples/showcase/hand-tracking/",
     "needs": "Hands with finger joints: touch and pinch things",
-    "status": "Emulator: VR session, both eyes, head motion, both hands with joints and pinches reached the page. Its bright background will hide the room. Not tried on the glasses."
+    "status": "Emulator: VR session, both eyes, head motion, both hands with joints and pinches reached the page. Its bright background will hide the room. Not tried on the glasses.",
+    "state": "tested"
   },
   {
     "name": "Moon Rider (rhythm game)",
     "url": "https://moonrider.xyz/",
     "needs": "Made for two hand controllers; hands arrive as pointers with pinch",
-    "status": "Emulator: session starts with both eyes, head motion and both hands. Whether it can be played with hands instead of controllers is unknown."
+    "status": "Emulator: session starts with both eyes, head motion and both hands. Whether it can be played with hands instead of controllers is unknown.",
+    "state": "tested"
   },
   {
     "name": "Hand cubes (three.js)",
     "url": "https://threejs.org/examples/webxr_vr_handinput_cubes.html",
     "needs": "Hands with finger joints, as a required feature",
-    "status": "Does not start: this browser engine refuses sessions that require hand tracking, although it delivers hand joints to pages that only ask for them."
+    "status": "Does not start: this browser engine refuses sessions that require hand tracking, although it delivers hand joints to pages that only ask for them.",
+    "state": "blocked"
   }
 ]
