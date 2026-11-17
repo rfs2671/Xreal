@@ -205,7 +205,30 @@ object Tracking : GlassesLink.Listener {
         var calib = ""
         try {
             val reference = app.assets.open("calibration/basalt_calib.json").bufferedReader().readText()
-            val config = app.assets.open("calibration/basalt_vio_config.json").bufferedReader().readText()
+            var config = app.assets.open("calibration/basalt_vio_config.json").bufferedReader().readText()
+            // Estimator settings under measurement: "config.name=value" lines in files/vio_options.txt replace the
+            // shipped values, so a replay of a recording can compare settings over adb without a new build.
+            try {
+                val lines = File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()
+                val changed = ArrayList<String>()
+                if (lines.isNotEmpty()) {
+                    val root = JSONObject(config); val v0 = root.getJSONObject("value0")
+                    for (line in lines) {
+                        val k = line.substringBefore('=').trim(); val v = line.substringAfter('=', "").trim()
+                        if (k.startsWith("#") || v.isEmpty() || !v0.has(k)) continue
+                        val old = v0.get(k)
+                        when (old) {
+                            is Boolean -> v0.put(k, v == "true" || v == "1")
+                            is Int, is Long -> v.toLongOrNull()?.let { v0.put(k, it) }
+                            is Number -> v.toDoubleOrNull()?.let { v0.put(k, it) }
+                            else -> v0.put(k, v)
+                        }
+                        changed += "$k: $old -> ${v0.get(k)}"
+                    }
+                    config = root.toString()
+                }
+                if (changed.isNotEmpty()) log("6DoF settings changed by vio_options.txt: " + changed.joinToString("; "))
+            } catch (e: Exception) { log("vio_options.txt ignored: $e") }
             calib = reference
             calibrationSource = "reference unit (XR Gate ZBBM5DZFMP): the glasses' own calibration has not been read yet"
             calibrationIsFactory = false
@@ -240,6 +263,9 @@ object Tracking : GlassesLink.Listener {
             }
         } catch (e: Throwable) { vioError = e.toString(); log("6DoF init failed: $e") }
         if (settings.handTracking) try {
+            handOptions = dev.ultraxr.core.HandOptions.parse(try { File(app.getExternalFilesDir(null), "hand_options.txt").takeIf { it.isFile }?.readText() } catch (_: Exception) { null })
+            handOptions.qualityFilter?.let { try { android.system.Os.setenv("MERCURY_XR_QUALITY_FILTER", if (it) "1" else "0", true) } catch (_: Throwable) {} }
+            log("hand options: $handOptions")
             val dir = File(app.filesDir, "hand-models").apply { mkdirs() }
             for (name in app.assets.list("hand-models").orEmpty()) {
                 val out = File(dir, name)
@@ -326,6 +352,7 @@ object Tracking : GlassesLink.Listener {
         val every = 1 + throttle + if (settings.batterySaver) 1 else 0
         if (handsHandle != 0L && pairIndex % every == 0L) synchronized(handLock) {
             System.arraycopy(left, 0, handLeft, 0, left.size); System.arraycopy(right, 0, handRight, 0, right.size)
+            if (handOptions.stretch) { dev.ultraxr.core.HandImage.stretch(handLeft); dev.ultraxr.core.HandImage.stretch(handRight) }
             handT = tNs; handPending = true; handLock.notifyAll()
         }
     }
@@ -354,7 +381,7 @@ object Tracking : GlassesLink.Listener {
             try { Thread.sleep(5) } catch (_: InterruptedException) {}
             val v = vio
             val now = System.nanoTime()
-            if (v != 0L && link?.state == GlassesLink.State.STREAMING) {
+            if (v != 0L && (link?.state == GlassesLink.State.STREAMING || link?.replaying == true)) {
                 val seq = Native.vioGetState(v, out)
                 // The estimator restarted (by itself or on request): its world frame is new.
                 if (out[20] != lastResetCount) { if (lastResetCount >= 0) head.onVioEpochReset(); lastResetCount = out[20] }
@@ -367,6 +394,7 @@ object Tracking : GlassesLink.Listener {
                     vioFeatures = out[14].toInt(); vioFramesIn = out[15].toLong(); vioDropped = out[16].toLong(); vioStates = out[17].toLong(); vioProcessMs = out[18]
                     trace.onState(out)
                     vioStereoMatches = out[22].toInt(); vioLandmarks = out[23].toInt()
+                    replayLog?.vio(link?.replaySeconds ?: 0.0, out, positionConfidence.trusted)
                     val wasTrusted = positionConfidence.trusted
                     val trusted = positionConfidence.update(now, vioLandmarks, vioStereoMatches)
                     if (trusted != wasTrusted) log(if (trusted) "6DoF position trusted ($vioLandmarks landmarks, $vioStereoMatches seen by both cameras)"
@@ -386,7 +414,23 @@ object Tracking : GlassesLink.Listener {
         }
     }
 
+    /** Hand tracking settings under measurement (files/hand_options.txt). */
+    @Volatile var handOptions = dev.ultraxr.core.HandOptions(); private set
+
+    /** Set while a recording is replayed: every position state and every hand result is written to CSV files. */
+    @Volatile var replayLog: ReplayLog? = null
+
+    /** Replays [file] through the trackers and writes what they report next to it in [outDir]. */
+    fun replay(file: File, outDir: File, tag: String, onDone: (String) -> Unit) {
+        val l = link ?: run { onDone("tracking has not been started"); return }
+        val rl = try { ReplayLog(outDir, tag) } catch (e: Exception) { onDone("cannot write the replay log: $e"); return }
+        replayLog = rl
+        positionConfidence.reset()
+        l.replay(file) { note -> replayLog = null; rl.close(note); onDone(note) }
+    }
+
     private fun resetVio(v: Long) {
+        replayLog?.note(link?.replaySeconds ?: 0.0, "reset: " + supervisor.lastReason)
         log("6DoF reset: ${supervisor.lastReason}")
         positionConfidence.reset()
         trace.dump(appContext, supervisor.lastReason)?.let { log("6DoF trace: $it") }
@@ -412,6 +456,7 @@ object Tracking : GlassesLink.Listener {
             val mask = try { Native.handsProcess(h, t, l, r, 480, 640, out, out26) } catch (e: Throwable) { handsError = e.toString(); -1 }
             handsProcessMs = (System.nanoTime() - t0) / 1e6
             handsFrames++
+            replayLog?.hands(link?.replaySeconds ?: 0.0, mask, out, handsProcessMs)
             if (mask < 0) continue
             val body = head.bodyInApp(t)
             val found = ArrayList<Hand>(2); val states = ArrayList<HandState>(2)

@@ -46,6 +46,13 @@ class SessionJournal(val client: String, val display: String, val handsAs: Strin
     var headSamples = 0L; var positionTracked = 0L
     val handFrames = longArrayOf(0, 0); val pinches = intArrayOf(0, 0)
     var recenters = 0
+    /** Thumb-tip to index-tip distance while each hand was tracked: the smallest seen, and how often it was under 2, 3 and 5 cm. */
+    val minGapM = floatArrayOf(Float.MAX_VALUE, Float.MAX_VALUE)
+    val gapUnder = arrayOf(longArrayOf(0, 0, 0), longArrayOf(0, 0, 0))
+    fun gap(side: Int, m: Float) {
+        if (m < minGapM[side]) minGapM[side] = m
+        if (m < 0.02f) gapUnder[side][0]++; if (m < 0.03f) gapUnder[side][1]++; if (m < 0.05f) gapUnder[side][2]++
+    }
     var stereoMatchesSum = 0L; var landmarksSum = 0L; var vioSamples = 0L
     var maxHeadTravelM = 0.0
     private var origin: DoubleArray? = null
@@ -70,6 +77,10 @@ class SessionJournal(val client: String, val display: String, val handsAs: Strin
         put("left_hand_frames", handFrames[0]); put("right_hand_frames", handFrames[1])
         put("left_pinches", pinches[0]); put("right_pinches", pinches[1])
         put("recenters", recenters)
+        for ((side, name) in listOf(0 to "left", 1 to "right")) if (handFrames[side] > 0) {
+            put(name + "_min_gap_mm", Math.round(minGapM[side] * 1000.0))
+            put(name + "_frames_gap_under_20_30_50_mm", "" + gapUnder[side][0] + "/" + gapUnder[side][1] + "/" + gapUnder[side][2])
+        }
         put("mean_stereo_matches", if (vioSamples > 0) stereoMatchesSum.toDouble() / vioSamples else 0.0)
         put("mean_landmarks", if (vioSamples > 0) landmarksSum.toDouble() / vioSamples else 0.0)
     }

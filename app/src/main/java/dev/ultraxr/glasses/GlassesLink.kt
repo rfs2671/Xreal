@@ -422,6 +422,49 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         }
     }
 
+    // ---- replaying a recording (no glasses needed)
+    @Volatile var replaying = false; private set
+    @Volatile var replaySeconds = 0.0; private set
+
+    /**
+     * Feeds a recording made by [record] through the same decoding, pairing and clock mapping as live data, at the
+     * speed it was recorded, with its times moved to now. The trackers cannot tell it from the glasses. Used to
+     * measure tracking changes on the same real motion, without the glasses and without the wearer.
+     */
+    fun replay(file: File, onDone: (String) -> Unit) {
+        if (replaying) { onDone("a replay is already running"); return }
+        if (state == State.STREAMING) { onDone("the glasses are connected: unplug them to replay a recording"); return }
+        replaying = true; replaySeconds = 0.0
+        thread(name = "replay") {
+            var frames = 0; var reports = 0; var note = ""
+            try {
+                java.io.DataInputStream(java.io.BufferedInputStream(java.io.FileInputStream(file), 1 shl 20)).use { inp ->
+                    val head = ByteArray(7); inp.readFully(head)
+                    if (String(head, Charsets.ISO_8859_1) != "UXREC1" + 10.toChar()) throw java.io.IOException("not a recording")
+                    pipeline.reset(); listener.onStreamRestart()
+                    var shift = 0L; var first = 0L
+                    var buf = ByteArray(512)
+                    while (replaying) {
+                        val type = inp.read(); if (type < 0) break
+                        val t = inp.readLong(); val len = inp.readInt()
+                        if ((type != 1 && type != 2) || len < 0 || len > 4_000_000) throw java.io.IOException("damaged record")
+                        if (first == 0L) { first = t; shift = System.nanoTime() - t }
+                        val due = t + shift
+                        val wait = due - System.nanoTime()
+                        if (wait > 0) Thread.sleep(wait / 1_000_000, (wait % 1_000_000).toInt())
+                        replaySeconds = (t - first) / 1e9
+                        if (type == 1) { val frame = ByteArray(len); inp.readFully(frame); pipeline.onCameraFrame(frame, due); frames++ }
+                        else { if (buf.size < len) buf = ByteArray(len); inp.readFully(buf, 0, len); pipeline.onImuReport(buf, len, due); reports++ }
+                    }
+                }
+                note = "replayed " + dev.ultraxr.core.Fmt.f(replaySeconds, 1) + " s: $frames camera frames, $reports motion reports"
+            } catch (e: Throwable) { note = "replay stopped: $e" }
+            replaying = false
+            listener.onLog(note); onDone(note)
+        }
+    }
+    fun stopReplay() { replaying = false }
+
     // ---- recording for offline tracking work
     private var rec: java.io.DataOutputStream? = null
     private var recUntilNs = 0L

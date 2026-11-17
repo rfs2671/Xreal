@@ -34,6 +34,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
     private lateinit var bannerText: TextView
     private lateinit var bannerButton: TextView
     private lateinit var webList: LinearLayout
+    private lateinit var pointerText: TextView
+    private lateinit var pointerButton: View
     private lateinit var recentList: LinearLayout
     private lateinit var favList: LinearLayout
     private lateinit var recentTitle: TextView
@@ -66,6 +68,19 @@ class LauncherActivity : Activity(), Tracking.Observer {
             if (i?.hasExtra("sim_wearer") == true) Tracking.simulateWearer = i.getBooleanExtra("sim_wearer", false)
             if (i?.getBooleanExtra("dump_egl", false) == true) dumpEglConfigs()
             if (i?.getBooleanExtra("test_site", false) == true) dev.ultraxr.xr.TestSiteServer.start(applicationContext)
+            // "--es replay NAME [--es replay_tag TAG]": feed files/recordings/NAME through the trackers (glasses unplugged)
+            // and write what they report to files/replay/. For measuring tracking changes on recorded real motion.
+            i?.getStringExtra("replay")?.let { name ->
+                val tag = i.getStringExtra("replay_tag") ?: "run"
+                setShowWhenLocked(true); setTurnScreenOn(true); window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                Thread {
+                    Thread.sleep(4000)       // the trackers are created on a worker thread when the app starts
+                    Tracking.replay(java.io.File(getExternalFilesDir("recordings"), name), getExternalFilesDir("replay")!!, tag) { note ->
+                        Tracking.log("replay finished: $note")
+                        runOnUiThread { window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+                    }
+                }.start()
+            }
             // "--ei record_seconds N": record raw tracking data for N seconds as soon as the glasses stream (one live test, no button).
             val recSeconds = i?.getIntExtra("record_seconds", 0) ?: 0
             if (recSeconds > 0) Thread {
@@ -90,6 +105,10 @@ class LauncherActivity : Activity(), Tracking.Observer {
         if (TrackingService.running) TrackingService.stop(this)
         if (!dev.ultraxr.xr.XrHost.applicationConnected) { dev.ultraxr.xr.XrHost.closeShell(); if (!startingGame) Tracking.stereoWant("game", false) }
         Tracking.addObserver(this)
+        val padOn = dev.ultraxr.xr.PointerService.enabled(this)
+        pointerText.text = if (padOn) "On. In a game the phone's screen is a touchpad: drag to move the pointer, tap to select, two fingers or volume-down to grab and carry, volume-up to recentre. It works whether or not your hands are tracked."
+            else "Off. Switched on, the phone's screen becomes a touchpad in games, so you can point, select and grab without hand tracking. Android asks you to allow it once under Accessibility, Ultra XR touchpad."
+        pointerButton.visibility = if (padOn) View.GONE else View.VISIBLE
         stage?.start()
         home.reanchor()
         refreshApps()
@@ -151,6 +170,15 @@ class LauncherActivity : Activity(), Tracking.Observer {
             hands.add(r, topDp = 10)
         }
         root.add(hands, topDp = 26)
+
+        // Playing without hand tracking: the phone as a touchpad (an accessibility service the owner switches on once).
+        val padCard = Ui.column(this, 18).apply { background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity) }
+        padCard.add(Ui.text(this, "Phone as a touchpad", 16f, bold = true))
+        pointerText = Ui.text(this, "", 14f, 0xFFC9D6E6.toInt()).apply { setLineSpacing(0f, 1.2f) }
+        padCard.add(pointerText, topDp = 8)
+        pointerButton = Ui.button(this, "Switch it on in Android settings") { try { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {} }
+        padCard.add(pointerButton, topDp = 10)
+        root.add(padCard, topDp = 12)
 
         root.add(Ui.text(this, "Also on this phone", 18f, bold = true), topDp = 28)
         appsList = Ui.column(this)

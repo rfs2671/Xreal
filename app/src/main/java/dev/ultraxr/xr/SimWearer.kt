@@ -52,6 +52,10 @@ object SimWearer {
             autoPinch = prop("sim_auto", "1") != "0"
             holdMask = prop("sim_pinch", "0").toIntOrNull() ?: 0
             moveRight = triple("sim_hand_r"); moveLeft = triple("sim_hand_l")
+            // ptr_hold 1|0: the touchpad pointer's "press and keep pressed", standing in for the volume-down key.
+            // (Android does not pass injected key presses to an accessibility service, so a test cannot press the real key.)
+            val ph = prop("ptr_hold", "0") == "1"
+            if (ph != pointerHeld) { pointerHeld = ph; dev.ultraxr.core.PointerInput.hold(nowNs, 1, ph) }
             val tap = prop("sim_tap", "")
             if (tap != lastTap) { if (lastTap != null && tap.isNotEmpty()) tapUntilNs = nowNs + 220_000_000L; lastTap = tap }
         }
@@ -61,6 +65,7 @@ object SimWearer {
     private var holdMask = 0
     private var moveRight = doubleArrayOf(0.0, 0.0, 0.0); private var moveLeft = doubleArrayOf(0.0, 0.0, 0.0)
     private fun triple(name: String): DoubleArray { val p = prop(name, "").split(","); return DoubleArray(3) { p.getOrNull(it)?.trim()?.toDoubleOrNull() ?: 0.0 } }
+    private var pointerHeld = false
     private var autoPinch = true; private var lastTap: String? = null; private var tapUntilNs = 0L
     private fun prop(name: String, default: String): String = try {
         Class.forName("android.os.SystemProperties").getMethod("get", String::class.java, String::class.java).invoke(null, "debug.ultraxr.$name", default) as String
@@ -85,16 +90,29 @@ object SimWearer {
             0f, yawRate.toFloat(), 0f, vx.toFloat(), vy.toFloat(), 0f, true)
         if (!withHands) return
         val head = doubleArrayOf(px, py, 0.0)
+        val pointer = dev.ultraxr.core.PointerInput.active(nowNs)
         for (side in 0..1) {
+            // The touchpad pointer, when it is in use, is the right hand.
+            if (side == 1 && pointer) { feedHand(1, nowNs, head, q, dev.ultraxr.core.PointerInput.offset(), 0.0, 0.0, dev.ultraxr.core.PointerInput.pressed(nowNs), controllers); continue }
             val pinch = (autoPinch && pinching(side, t)) || (side == 1 && nowNs < tapUntilNs) || (holdMask and (if (side == 1) 1 else 2)) != 0
-            val move = if (side == 1) moveRight else moveLeft
-            // The hand's own direction: the right hand can be pointed by a test, the left points straight ahead.
-            val hq = if (side == 1) Q.mul(q, Q.mul(Q.axisAngle(0.0, 1.0, 0.0, aimYaw), Q.axisAngle(1.0, 0.0, 0.0, aimPitch))) else q
+            feedHand(side, nowNs, head, q, if (side == 1) moveRight else moveLeft, if (side == 1) aimYaw else 0.0, if (side == 1) aimPitch else 0.0, pinch, controllers)
+        }
+    }
+
+    /**
+     * Feeds one open hand in front of a head at [head] turned by [q]: carried [move] metres (right, up, back) from
+     * its resting place, turned about its wrist by [aimYaw] and [aimPitch], pinching or not. Also used for the
+     * touchpad pointer with a real head pose, so a pointer works when no hand is tracked.
+     */
+    fun feedHand(side: Int, nowNs: Long, head: DoubleArray, q: DoubleArray, move: DoubleArray, aimYaw: Double, aimPitch: Double, pinch: Boolean, controllers: Boolean) {
+        run {
+            val turn = Q.mul(Q.axisAngle(0.0, 1.0, 0.0, aimYaw), Q.axisAngle(1.0, 0.0, 0.0, aimPitch))
+            val hq = Q.mul(q, turn)
+            val aimQ: DoubleArray? = if (aimYaw != 0.0 || aimPitch != 0.0) turn else null
             val sx = if (side == 0) -1.0 else 1.0
             // In the head's frame: x right, y up, -z forward. The wrist is below and in front of the eyes.
             // The right hand turns as a whole about its wrist when a test points it somewhere, so that the
             // joints, and the pointing ray an application derives from them, really do point there.
-            val aimQ = if (side == 1) Q.mul(Q.axisAngle(0.0, 1.0, 0.0, aimYaw), Q.axisAngle(1.0, 0.0, 0.0, aimPitch)) else null
             val wristX = (if (side == 0) -1.0 else 1.0) * 0.16; val wristY = -0.22; val wristZ = -0.38
             fun put(j: Int, x0: Double, y0: Double, z0: Double, r: Float) {
                 var x = x0; var y = y0; var z = z0
@@ -128,7 +146,7 @@ object SimWearer {
                 }
             }
             UltraXrFeed.hand(side, nowNs, joints, true)
-            if (!controllers) continue
+            if (!controllers) return
             // The same hand as a Touch-shaped controller: grip at the palm, trigger from the pinch.
             val g = Q.rotate(q, doubleArrayOf(wx + move[0], wy + 0.005 + move[1], wz - 0.05 + move[2]))
             UltraXrFeed.controller(side, nowNs, (head[0] + g[0]).toFloat(), (head[1] + g[1]).toFloat(), (head[2] + g[2]).toFloat(),

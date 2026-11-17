@@ -223,17 +223,24 @@ object XrHost : OpenXrGlassesLayer.Host {
 
     // ------------------------------------------------------------ feed
 
+    @Volatile private var recentreRequested = false
+    /** Recentre the running session (the touchpad's volume-up key). */
+    fun recentreNow() { recentreRequested = true }
+
     private fun feedLoop() {
         var lastHandNs = 0L
+        var pointerFedNs = 0L; var pointerSaid = false
         var recentred = false
         val pressed = booleanArrayOf(false, false)
         val joints = FloatArray(UltraXrFeed.HAND_FLOATS)
-        val pinch = arrayOf(dev.ultraxr.core.PinchState(), dev.ultraxr.core.PinchState())
+        val ho = Tracking.handOptions
+        val pinch = arrayOf(dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM), dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM))
         val recenter = dev.ultraxr.core.RecenterGesture()
         var vioTickNs = 0L
         while (feeding) {
             try { Thread.sleep(3) } catch (_: InterruptedException) {}
             dropToOneViewIfStereoLost()
+            if (recentreRequested) { recentreRequested = false; Tracking.recenter(); recentred = false; journal?.recentred(); Tracking.log("OpenXR: recentred from the touchpad") }
             if (Tracking.simulateWearer) {   // test builds on an emulator: a made-up head and hands
                 val now = System.nanoTime()
                 val hands = now - lastHandNs > 33_000_000L
@@ -259,22 +266,38 @@ object XrHost : OpenXrGlassesLayer.Host {
                 if (t - vioTickNs > 1_000_000_000L) { vioTickNs = t; if (Tracking.vioLandmarks >= 0) { j.vioSamples++; j.stereoMatchesSum += Tracking.vioStereoMatches; j.landmarksSum += Tracking.vioLandmarks } }
             }
 
+            // The touchpad pointer stands in for the right hand while it is in use, tracked hand or not.
+            val nowNs = System.nanoTime()
+            val pointer = dev.ultraxr.core.PointerInput.active(nowNs)
+            if (pointer && nowNs - pointerFedNs > 16_000_000L) {
+                pointerFedNs = nowNs
+                SimWearer.feedHand(1, t, p, q, dev.ultraxr.core.PointerInput.offset(), 0.0, 0.0, dev.ultraxr.core.PointerInput.pressed(nowNs), controllers = false)
+                if (!pointerSaid) { pointerSaid = true; Tracking.log("OpenXR: the touchpad pointer is the right hand") }
+            }
+
             val hands = Tracking.handJoints
             val newest = hands.maxOfOrNull { it.timestampNs } ?: 0L
             if (newest == lastHandNs) continue
             lastHandNs = newest
             val states = Tracking.hands
             for (side in 0..1) {
+                if (side == 1 && pointer) continue
                 val hand = hands.firstOrNull { it.isRight == (side == 1) && it.timestampNs == newest }
                 val poses = Tracking.handPoses26(side)
                 if (hand == null || poses == null) { UltraXrFeed.hand(side, newest, null, false); pressed[side] = false; pinch[side].lost(); continue }
                 val tt = hand.joint(Hand.THUMB_TIP); val it2 = hand.joint(Hand.INDEX_TIP)
                 val gap = sqrt((tt[0] - it2[0]) * (tt[0] - it2[0]) + (tt[1] - it2[1]) * (tt[1] - it2[1]) + (tt[2] - it2[2]) * (tt[2] - it2[2])).toFloat()
                 val began = pinch[side].update(gap)
-                journal?.let { j -> j.handFrames[side]++; if (began) j.pinches[side]++ }
+                journal?.let { j -> j.handFrames[side]++; if (began) j.pinches[side]++; j.gap(side, gap) }
+                // While our own (measured) rule says "pinching", the application is given fingertips that touch: a
+                // browser decides a pinch by its own, tighter distance, which a tracked hand may never reach.
+                val snap = ho.snap && pinch[side].pinching
+                val ti = UltraXrFeed.Joint.THUMB_METACARPAL + 3; val ii = UltraXrFeed.Joint.INDEX_METACARPAL + 4
+                val mx = (poses[ti * 7] + poses[ii * 7]) / 2; val my = (poses[ti * 7 + 1] + poses[ii * 7 + 1]) / 2; val mz = (poses[ti * 7 + 2] + poses[ii * 7 + 2]) / 2
                 for (j in 0 until UltraXrFeed.Joint.COUNT) {
                     val o = j * 7
-                    UltraXrFeed.putJoint(joints, j, poses[o], poses[o + 1], poses[o + 2], poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], if (j == 0) 0.02f else 0.008f)
+                    if (snap && (j == ti || j == ii)) UltraXrFeed.putJoint(joints, j, mx, my, mz, poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], 0.008f)
+                    else UltraXrFeed.putJoint(joints, j, poses[o], poses[o + 1], poses[o + 2], poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], if (j == 0) 0.02f else 0.008f)
                 }
                 UltraXrFeed.hand(side, hand.timestampNs, joints, true)
                 val st = states.firstOrNull { it.isRight == (side == 1) } ?: continue

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ultra XR</string>
+    <string name="pointer_service_summary">Use the phone as a touchpad in XR games</string>
+    <string name="pointer_service_description">While an XR game is running, Ultra XR shows a touchpad on the phone and listens to the volume keys, so the game can be played without hand tracking: drag to move the pointer, tap to select. It does not read the screen or anything you type, and does nothing when no XR game is running.</string>
 </resources>
