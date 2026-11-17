@@ -1,0 +1,107 @@
+diff --git a/include/basalt/optical_flow/frame_to_frame_optical_flow.h b/include/basalt/optical_flow/frame_to_frame_optical_flow.h
+index d16e708..4652cf4 100644
+--- a/include/basalt/optical_flow/frame_to_frame_optical_flow.h
++++ b/include/basalt/optical_flow/frame_to_frame_optical_flow.h
+@@ -35,6 +35,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ #pragma once
+ 
++#include <atomic>
+ #include <thread>
+ 
+ #include <sophus/se2.hpp>
+@@ -55,6 +56,15 @@ namespace basalt {
+ /// against the previous frame, not the initial frame where a track was created.
+ /// While it might cause more drift of the patch location, it leads to longer
+ /// tracks in practice.
++/// Assumed depth (metres) used to start the left->right search of a new point at the pixel
++/// where the calibration says a point at that depth appears in the other camera. 0 disables it
++/// (upstream behaviour: start at the same pixel, which only works for near-parallel cameras
++/// with small disparity).
++inline std::atomic<float>& stereoGuessDepth() {
++  static std::atomic<float> g_stereo_guess_depth{0.0f};
++  return g_stereo_guess_depth;
++}
++
+ template <typename Scalar, template <typename> typename Pattern>
+ class FrameToFrameOpticalFlow : public OpticalFlowBase {
+  public:
+@@ -183,7 +193,9 @@ class FrameToFrameOpticalFlow : public OpticalFlowBase {
+                    const Eigen::aligned_map<KeypointId, Eigen::AffineCompact2f>&
+                        transform_map_1,
+                    Eigen::aligned_map<KeypointId, Eigen::AffineCompact2f>&
+-                       transform_map_2) const {
++                       transform_map_2,
++                   const Eigen::aligned_map<KeypointId, Eigen::Vector2f>* guess_2 =
++                       nullptr) const {
+     size_t num_points = transform_map_1.size();
+ 
+     std::vector<KeypointId> ids;
+@@ -210,11 +222,22 @@ class FrameToFrameOpticalFlow : public OpticalFlowBase {
+ 
+         const Eigen::AffineCompact2f& transform_1 = init_vec[r];
+         Eigen::AffineCompact2f transform_2 = transform_1;
++        bool guessed = false;
++        if (guess_2) {
++          auto git = guess_2->find(id);
++          if (git != guess_2->end()) {
++            transform_2.translation() = git->second;
++            guessed = true;
++          }
++        }
+ 
+         bool valid = trackPoint(pyr_1, pyr_2, transform_1, transform_2);
+ 
+         if (valid) {
+           Eigen::AffineCompact2f transform_1_recovered = transform_2;
++          // The backward check must also start near the answer: without this it starts at the
++          // pixel of the second image, i.e. the full stereo offset away.
++          if (guessed) transform_1_recovered.translation() = transform_1.translation();
+ 
+           valid = trackPoint(pyr_2, pyr_1, transform_2, transform_1_recovered);
+ 
+@@ -335,7 +358,43 @@ class FrameToFrameOpticalFlow : public OpticalFlowBase {
+     }
+ 
+     if (calib.intrinsics.size() > 1) {
+-      trackPoints(pyramid->at(0), pyramid->at(1), new_poses0, new_poses1);
++      const float depth = stereoGuessDepth().load();
++      if (depth > 0 && !new_poses0.empty()) {
++        // The cameras may be far from parallel (the XREAL Air 2 Ultra's are 9.7 degrees apart on a
++        // 137 mm baseline), so the same point can be 40 to 100 pixels apart in the two images,
++        // out of reach of a search that starts at the same pixel. Try a few depths in turn: start
++        // each search where the calibration puts a point at that depth, and keep the first match.
++        const Sophus::SE3<Scalar> T_1_0 = calib.T_i_c[1].inverse() * calib.T_i_c[0];
++        const auto& img1 = pyramid->at(1).lvl(0);
++        const float depths[] = {depth, depth * 0.5f, depth * 2.0f, depth * 0.28f, 100.0f};
++        Eigen::aligned_map<KeypointId, Eigen::AffineCompact2f> remaining = new_poses0;
++        for (const float d : depths) {
++          if (remaining.empty()) break;
++          Eigen::aligned_map<KeypointId, Eigen::Vector2f> guess1;
++          Eigen::aligned_map<KeypointId, Eigen::AffineCompact2f> candidates, found;
++          for (const auto& kv : remaining) {
++            Eigen::Matrix<Scalar, 4, 1> ray;
++            const Eigen::Matrix<Scalar, 2, 1> px = kv.second.translation().template cast<Scalar>();
++            if (!calib.intrinsics[0].unproject(px, ray)) continue;
++            Eigen::Matrix<Scalar, 4, 1> p1;
++            p1.template head<3>() = T_1_0 * (ray.template head<3>().normalized() * Scalar(d));
++            p1[3] = Scalar(1);
++            Eigen::Matrix<Scalar, 2, 1> proj;
++            if (!calib.intrinsics[1].project(p1, proj)) continue;
++            if (!img1.InBounds(proj.template cast<float>().eval(), 8)) continue;
++            guess1[kv.first] = proj.template cast<float>();
++            candidates[kv.first] = kv.second;
++          }
++          if (candidates.empty()) continue;
++          trackPoints(pyramid->at(0), pyramid->at(1), candidates, found, &guess1);
++          for (const auto& kv : found) {
++            new_poses1.emplace(kv);
++            remaining.erase(kv.first);
++          }
++        }
++      } else {
++        trackPoints(pyramid->at(0), pyramid->at(1), new_poses0, new_poses1);
++      }
+ 
+       for (const auto& kv : new_poses1) {
+         transforms->observations.at(1).emplace(kv);

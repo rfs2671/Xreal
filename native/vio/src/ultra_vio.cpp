@@ -37,9 +37,11 @@
 #include <basalt/calibration/calibration.hpp>
 #include <basalt/imu/imu_types.h>
 #include <basalt/io/dataset_io.h>
+#include <basalt/optical_flow/frame_to_frame_optical_flow.h>
 #include <basalt/optical_flow/optical_flow.h>
 #include <basalt/serialization/headers_serialization.h>
 #include <basalt/utils/vio_config.h>
+#include <basalt/vi_estimator/ba_base.h>
 #include <basalt/vi_estimator/vio_estimator.h>
 
 #ifdef __ANDROID__
@@ -177,6 +179,7 @@ struct Session {
   basalt::VioEstimatorBase::Ptr vio;
   StateQueue out_state_queue;
   FlowQueue flow_out;  // optical flow -> relay -> vio->vision_data_queue
+  long diag_frames = 0;  // relay thread only
   std::unique_ptr<InputFeeder<decltype(basalt::VioEstimatorBase::imu_data_queue), ImuPtr>> imu_feeder;
   std::thread relay_thread;
   std::thread state_thread;
@@ -311,6 +314,15 @@ void uvio::start_session() {
         auto it = sp->inflight.find(res->t_ns);
         if (it != sp->inflight.end() && !res->observations.empty())
           it->second.num_features = static_cast<int>(res->observations[0].size());
+      }
+      // Diagnostic (every 150 frames): how many points are seen by each camera (a point in
+      // cam1 is a stereo match) and how many 3D landmarks the estimator currently holds.
+      if (res && !res->observations.empty() && (++sp->diag_frames % 150) == 0) {
+        const size_t c0 = res->observations[0].size();
+        const size_t c1 = res->observations.size() > 1 ? res->observations[1].size() : 0;
+        long lms = -1;
+        if (auto* ba = dynamic_cast<basalt::BundleAdjustmentBase<float>*>(sp->vio.get())) lms = static_cast<long>(ba->lmdb.numLandmarks());
+        uvio_log(kInfo, "flow: cam0 %zu points, cam1 %zu (stereo matches), landmarks %ld", c0, c1, lms);
       }
       while (!sp->vio->vision_data_queue.try_push(res)) {
         if (sp->vio->finished.load() || (sp->tearing_down.load() && !sp->started.load())) break;
@@ -862,6 +874,8 @@ UVIO_API int uvio_set_option(uvio_t* h, const char* key, double value) {
       h->imu_wait_us = static_cast<int64_t>(value * 1e6);
     } else if (k == "max_pending" && value >= 1 && value <= 8) {
       h->max_pending = static_cast<int>(value);
+    } else if (k == "stereo_guess_depth" && value >= 0) {
+      basalt::stereoGuessDepth().store(static_cast<float>(value));
     } else if (k == "startup_imu_gate") {
       h->startup_imu_gate = value != 0;
     } else if (k == "gravity_magnitude" && value > 0) {

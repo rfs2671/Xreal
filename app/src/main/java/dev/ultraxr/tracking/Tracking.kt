@@ -196,6 +196,11 @@ object Tracking : GlassesLink.Listener {
                 // A phone's USB stack can hold IMU reports back for longer than a PC's: do not restart
                 // the estimator for gaps it can integrate across.
                 Native.vioSetOption(h, "max_imu_gap_s", 0.2)
+                // Where the left-to-right search of a new point starts (see STEREO_GUESS_DEPTH_M).
+                // A number in files/stereo_guess_depth.txt overrides it, for A/B tests over adb.
+                val guess = try { java.io.File(appContext?.getExternalFilesDir(null), "stereo_guess_depth.txt").readText().trim().toDouble() } catch (_: Exception) { STEREO_GUESS_DEPTH_M }
+                val guessOk = Native.vioSetOption(h, "stereo_guess_depth", guess)
+                log("6DoF stereo search start depth: $guess m" + if (guessOk) "" else " (not supported by this native library)")
                 vioError = ""
                 vio = h; log("6DoF ready: ${Native.vioVersion()}")
                 if (oldVio != 0L) head.onVioEpochReset()
@@ -415,6 +420,13 @@ object Tracking : GlassesLink.Listener {
     }
 
     private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
+    /**
+     * Depth at which a new point is assumed to lie when it is first looked for in the other camera.
+     * The Air 2 Ultra's cameras are angled 9.7 degrees apart on a 137 mm baseline, so a point sits
+     * 40 to 75 pixels apart in the two images; the estimator's own search starts at the same pixel
+     * and reaches about 30. 0 keeps that upstream behaviour.
+     */
+    private const val STEREO_GUESS_DEPTH_M = 1.7
     private val HALF_TURN_X = doubleArrayOf(1.0, 0.0, 0.0, 0.0)
     private val poses26 = arrayOfNulls<FloatArray>(2)
 

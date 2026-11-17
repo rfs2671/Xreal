@@ -210,3 +210,29 @@ Consequences for the app:
 * The "IMU does not cover the frame", "IMU gap > 50 ms" and "VIO thread stopped" restart paths are implemented but not exercised by the test; the image-gap, clock-restart and explicit reset paths are.
 * The frame accounting assumes `optical_flow_skip_frames = 1`.
 * Real-time scenarios depend on host load: on a busy machine frames get dropped and numbers move slightly. The final run had 0 drops.
+
+## Stereo search start (patch 0002, 2026-11-16)
+
+Measured on the owner's Air 2 Ultra and Pixel 10 Pro XL with the glasses lying still:
+
+* Upstream Basalt looks for a new left-camera point in the right camera starting at the
+  **same pixel**. The Ultra's cameras are 9.7 degrees apart on a 137.3 mm baseline (factory
+  calibration); in a decoded capture the same features were a median of 77 px apart
+  (51 to 83 px). The wrapper's diagnostic line (`flow: cam0 N points, cam1 M (stereo
+  matches), landmarks L`, every 150 frames) showed **cam1 0** in every sample: the estimator
+  ran monocular. Lying still, its position ran away at 0.15 to 0.3 m/s^2 and the app's
+  6 m/s check reset it every 45 to 160 s (three runs). `optical_flow_levels = 4` did not help.
+* Patch 0002 starts the search where the calibration puts a point at an assumed depth and
+  tries depth, depth/2, depth x 2, depth x 0.28 and 100 m in turn, keeping the first match
+  that passes the forward-backward check. The switch is `uvio_set_option("stereo_guess_depth",
+  metres)`; 0 keeps upstream behaviour. The app sets 1.7.
+* With it: 0 to 21 stereo matches (median 2 while lying still), no reset in 241 s, and
+  3 cm of position change over the last 170 s lying still (one run). A single-depth 2 m guess
+  gave 1 to 4 matches and was stable only while at least 3 existed (one run).
+* Not yet measured: accuracy while moving, loop closure, scale.
+
+The library in `app/src/main/jniLibs` was rebuilt on Windows with NDK 27.1.12297006 (the
+script's 27.2 is not required): `fetch_deps.sh`, apply patches, then the cmake call from
+`build_android.sh` with `-DCMAKE_CXX_FLAGS=-I<repo>/app/src/main/cpp/include`, OpenCV headers
+and `libopencv_java4.so` from the `org.opencv:opencv:4.12.0` AAR, `llvm-strip --strip-unneeded`.
+Checked: 16 KB LOAD alignment, same NEEDED list and the same eight exported symbols as before.
