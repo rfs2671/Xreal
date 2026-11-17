@@ -57,6 +57,24 @@ A physical replug with the glasses back in mode 1 recovers 2D.
 A half-SBS renderer was built and tested in this session and then removed again, because the
 mode cannot be shown on this phone.
 
+### Why 3840x1080@60 is rejected: what is and is not known
+
+- Known from the kernel log: on an HBR x 4-lane link (8.64 Gbit/s of payload, enough for
+  360 MHz at 24 bit per pixel) the driver picks 148.5 MHz and drops 222.75 MHz and 297 MHz.
+  So the limit is not the link's raw capacity at 8 bpc. On RBR x 2 lanes it drops 148.5 MHz
+  and picks 25.175 MHz.
+- Not known: the rule the driver applies. The Pixel 10 DisplayPort driver (`dwc_dptx`) was
+  not found in the public Android kernel repositories searched on 2026-11-16
+  (`kernel/google-modules/display` has only gs101-family branches), so the reason behind
+  `DROP` could not be read from source.
+- Consequence for workarounds: any 3840x1080 timing the glasses accept (their side-by-side
+  EDID advertises 50 Hz as the lowest vertical rate) needs well over 148.5 MHz; a
+  reduced-blanking 3840x1080@60 is still about 267 MHz. No timing between the picked and the
+  dropped values has been tried, an ordinary app cannot add display modes, and the glasses'
+  EDID cannot be changed without firmware. No legitimate app-side workaround is known.
+- Untested ideas, listed only so they are not lost: a different phone-side driver build;
+  a USB graphics (non-DisplayPort) adapter. Neither has any evidence behind it here.
+
 ## 6DoF
 
 - With the display working, the hardware check passed position tracking once (5 s, 0.81 m).

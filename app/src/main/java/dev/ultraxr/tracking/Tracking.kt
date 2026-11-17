@@ -273,6 +273,7 @@ object Tracking : GlassesLink.Listener {
 
     override fun onImu(tNs: Long, gyro: FloatArray, accel: FloatArray) {
         head.onImu(tNs, gyro, accel)
+        trace.onImu(gyro, accel)
         val v = vio
         if (v != 0L) Native.vioPushImu(v, tNs, gyro[0], gyro[1], gyro[2], accel[0], accel[1], accel[2])
     }
@@ -300,6 +301,9 @@ object Tracking : GlassesLink.Listener {
 
     // ------------------------------------------------------------ worker loops
 
+    /** The estimator's last seconds before each reset, and a periodic drift line, for diagnosis. */
+    val trace = VioTrace { log(it) }
+
     private fun vioLoop() {
         val out = DoubleArray(22)
         var lastSeq = 0L
@@ -321,6 +325,7 @@ object Tracking : GlassesLink.Listener {
                     val p = doubleArrayOf(out[1], out[2], out[3]); val q = doubleArrayOf(out[4], out[5], out[6], out[7])
                     val vel = doubleArrayOf(out[8], out[9], out[10])
                     vioFeatures = out[14].toInt(); vioFramesIn = out[15].toLong(); vioDropped = out[16].toLong(); vioStates = out[17].toLong(); vioProcessMs = out[18]
+                    trace.onState(out)
                     if (supervisor.onState(now, out[0].toLong(), true, p, vel, vioFeatures)) resetVio(v)
                     else head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13]))
                 } else if (supervisor.onState(now, 0, false, ZERO, ZERO, -1)) resetVio(v)
@@ -335,6 +340,7 @@ object Tracking : GlassesLink.Listener {
 
     private fun resetVio(v: Long) {
         log("6DoF reset: ${supervisor.lastReason}")
+        trace.dump(appContext, supervisor.lastReason)?.let { log("6DoF trace: $it") }
         Native.vioReset(v)
         head.onVioEpochReset()
     }

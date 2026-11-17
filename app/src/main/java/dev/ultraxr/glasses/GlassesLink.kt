@@ -302,7 +302,14 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             if (link.claimed) {
                 mcuLink = link
                 val m = McuClient(link)
-                m.onOther = { cmd, payload -> stats.event(cmd, payload) }
+                m.onOther = { cmd, payload ->
+                    stats.event(cmd, payload)
+                    // Wear sensor and panel messages are the only evidence of the panels switching on: keep them in the app log.
+                    when (cmd) {
+                        McuProtocol.EVT_DISPLAY_TOGGLED, McuProtocol.EVT_PANEL_POWER -> listener.onLog("glasses say: " + McuProtocol.eventName(cmd) + " = " + (payload.firstOrNull()?.toInt() ?: -1))
+                        McuProtocol.EVT_TEXT_LOG -> String(payload, Charsets.ISO_8859_1).filter { it.code in 0x20..0x7E }.let { if (it.isNotBlank()) listener.onLog("glasses log: $it") }
+                    }
+                }
                 mcu = m
                 val mode = m.getDisplayMode()
                 stats.mcuOk = mode != null
