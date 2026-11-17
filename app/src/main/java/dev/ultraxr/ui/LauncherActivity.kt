@@ -304,6 +304,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
         val link = Tracking.link
         val glasses = link?.state == GlassesLink.State.STREAMING
         if (!glasses || Tracking.halfStereoActive || dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(this)) { stage?.stop(); launch(true); return }
+        // Half-width 3D is not attempted unless switched on in Settings: on this phone the attempt leaves the glasses black.
+        if (!Tracking.settings.tryHalf3d) { stage?.stop(); launch(false); return }
         startingGame = true
         link!!.stereo.reset()
         Tracking.stereoWant("game", true)

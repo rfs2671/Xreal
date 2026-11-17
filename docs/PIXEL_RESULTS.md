@@ -143,3 +143,18 @@ Changed because of this run:
 - The glasses' mode changes are written to the log with their numbers.
 
 None of these changes has been run on the glasses.
+
+### Second and third look, same day
+
+- With the stricter check the app made its three attempts. Each time: mode read 1 -> 8, link back
+  at 1920x1080@60, and 2.3 s later mode read 8 -> 1 with no link restart. Four attempts, four
+  identical results. Half-width 3D does not hold on this phone.
+- After that fallback the glasses stay black although they report 2D, log `Open OLED 2D`, and
+  Android composites a correct picture to them (captured over adb three times: Wolvic's licence
+  panel, its start-up world). They showed a picture before the first attempt. So the fallback
+  leaves the video link without a picture; writing mode 1 again does not restart it. Unplugging
+  and plugging in again is expected to restore 2D; not yet confirmed.
+- Single-view rendering works on the phone: one picture, not two halves.
+- Change: half-width 3D is no longer attempted unless "Try half-width 3D (experimental)" is
+  switched on in Settings (off by default; covers games and the desktop). A game now starts
+  directly in 2D.

@@ -178,7 +178,7 @@ object Tracking : GlassesLink.Listener {
     private val stereoWanters = HashSet<String>()
     @Synchronized fun stereoWant(who: String, on: Boolean) {
         if (on) stereoWanters.add(who) else stereoWanters.remove(who)
-        link?.stereo?.want(stereoWanters.isNotEmpty())
+        link?.stereo?.want(stereoWanters.isNotEmpty() && settings.tryHalf3d)
     }
     /** True while the glasses are showing half-width 3D (or a test build pretends they are). */
     @Volatile var forceHalfStereo = false

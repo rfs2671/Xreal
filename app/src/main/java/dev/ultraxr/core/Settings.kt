@@ -22,6 +22,11 @@ class Settings(context: Context) {
     var fovScale: Float get() = p.getFloat("fovScale", 1f); set(v) = p.edit().putFloat("fovScale", v).apply()
     var standingHeightM: Float get() = p.getFloat("height", 1.6f); set(v) = p.edit().putFloat("height", v).apply()
     /** How hands reach OpenXR applications: "auto" (by application), "hands" (joints only) or "controllers" (joints and Touch-shaped controllers). */
+    /**
+     * Whether to try the glasses' half-width 3D mode. Off by default: on the Pixel 10 the glasses fall back to 2D
+     * two seconds after the switch and then show no picture at all until they are plugged in again (17 Nov 2026).
+     */
+    var tryHalf3d: Boolean get() = p.getBoolean("tryHalf3d", false); set(v) = p.edit().putBoolean("tryHalf3d", v).apply()
     var xrInput: String get() = p.getString("xrInput", "auto") ?: "auto"; set(v) = p.edit().putString("xrInput", v).apply()
     var batterySaver: Boolean get() = p.getBoolean("saver", false); set(v) = p.edit().putBoolean("saver", v).apply()
     var firstRunDone: Boolean get() = p.getBoolean("firstRun", false); set(v) = p.edit().putBoolean("firstRun", v).apply()
