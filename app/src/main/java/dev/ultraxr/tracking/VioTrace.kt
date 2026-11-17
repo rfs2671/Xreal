@@ -43,8 +43,8 @@ class VioTrace(private val log: (String) -> Unit) {
         if (speed > maxSpeed) maxSpeed = speed
         if (t - lastSummaryNs >= SUMMARY_NS) {
             lastSummaryNs = t
-            log(String.format(Locale.US, "6DoF status: %.0f s since start, %.3f m from start, path %.2f m, speed now %.2f max %.2f m/s, %d features, gyro bias %.4f %.4f %.4f, |accel| %.3f |gyro| %.3f",
-                (t - epochStartNs) * 1e-9, dist(epochStartP!!, p), pathM, speed, maxSpeed, out[14].toInt(), out[11], out[12], out[13], row[16], row[17]))
+            log(String.format(Locale.US, "6DoF status: %.0f s since start, pos %.3f %.3f %.3f, %.3f m from start, path %.2f m, speed now %.2f max %.2f m/s, %d features, gyro bias %.4f %.4f %.4f, |accel| %.3f |gyro| %.3f",
+                (t - epochStartNs) * 1e-9, p[0], p[1], p[2], dist(epochStartP!!, p), pathM, speed, maxSpeed, out[14].toInt(), out[11], out[12], out[13], row[16], row[17]))
         }
     }
 
@@ -76,7 +76,7 @@ class VioTrace(private val log: (String) -> Unit) {
 
     companion object {
         const val KEEP = 600                  // 20 s at 30 states a second
-        const val SUMMARY_NS = 10_000_000_000L
+        const val SUMMARY_NS = 5_000_000_000L
         const val MAX_FILES = 200
     }
 }

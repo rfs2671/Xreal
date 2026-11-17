@@ -236,3 +236,17 @@ script's 27.2 is not required): `fetch_deps.sh`, apply patches, then the cmake c
 `build_android.sh` with `-DCMAKE_CXX_FLAGS=-I<repo>/app/src/main/cpp/include`, OpenCV headers
 and `libopencv_java4.so` from the `org.opencv:opencv:4.12.0` AAR, `llvm-strip --strip-unneeded`.
 Checked: 16 KB LOAD alignment, same NEEDED list and the same eight exported symbols as before.
+
+### Later the same evening (not conclusions)
+
+* Second still run with patch 0002: 279 s without a reset, 0.20 m of slow position change.
+* Walking (one uncontrolled loop, about 7.4 m of path at up to 0.64 m/s): no reset and no
+  run-away, but the estimate ended 1.8 m from the epoch's start. Whether the wearer was back on
+  the starting spot was not established, so this is not a loop-closure figure. Stereo matches
+  stayed low (median 2), so metric scale is weakly observed; this is the open problem.
+* Picking the glasses up produced `IMU does not cover stereo frame ...; restarting estimator`,
+  and the restart then waited 56 s for the one second of stillness the startup gate needs.
+* A per-frame retry of stereo matching for already tracked points was tried and reverted
+  without a valid result: the phone's foreground app was not Ultra XR during those runs, and
+  with Ultra XR in the background the tracker drops most frames and the tracking mode flaps
+  (also seen with the committed library). Tests must run with Ultra XR in the foreground.
