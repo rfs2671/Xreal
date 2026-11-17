@@ -49,6 +49,19 @@ def records(path):
             kind, t, n = struct.unpack(">BqI", h)
             yield kind, t, f.read(n)
 
+def records_imu_only(path):
+    """Like records(), but camera frames are skipped over instead of read (they are most of the file)."""
+    with open(path, "rb") as f:
+        if f.readline() != b"UXREC1\n": raise SystemExit("not a recording")
+        while True:
+            h = f.read(13)
+            if len(h) < 13: return
+            kind, t, n = struct.unpack(">BqI", h)
+            if kind == 2:
+                data = f.read(n)
+                if len(data) >= 42 and data[0] == 1 and data[1] == 2: yield kind, t, data
+            else: f.seek(n, 1)
+
 def pct(v, p): return float(np.percentile(v, p)) if len(v) else float("nan")
 
 def main():

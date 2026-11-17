@@ -21,9 +21,13 @@ import numpy as np
 import uia
 import webxr_pages as wp
 
-def layer_name():
+def layer_name(hint=None):
+    """The layer the compositor presents to: Ultra XR's window on the glasses, or, with no glasses, the
+    application's own surface on the phone ([hint] is part of that application's name)."""
     out = uia.sh("dumpsys SurfaceFlinger --list")
     names = [l.strip() for l in out.splitlines() if "Ultra XR OpenXR application" in l and "SurfaceView" in l]
+    if not names and hint: names = [l.strip() for l in out.splitlines() if hint in l and "SurfaceView" in l]
+    names = [re.sub(r"^RequestedLayerState\{(.*?)( parentId=.*)?\}?$", r"\1", n) for n in names]
     blast = [n for n in names if "BLAST" in n]
     return (blast or names or [None])[0]
 
@@ -39,10 +43,10 @@ def latency(name):
             if 0 < v < (1 << 62): t.append(v)
     return period, t
 
-def measure(seconds):
+def measure(seconds, layer_hint=None):
     name = None
     for _ in range(20):
-        name = layer_name()
+        name = layer_name(layer_hint)
         if name: break
         time.sleep(2)
     if not name: return {"error": "the compositor's layer was not found"}
