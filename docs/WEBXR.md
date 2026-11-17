@@ -91,7 +91,7 @@ then reads what the page's session was given.
 | A-Frame hand tracking showcase | `immersive-vr` (hand tracking asked for as optional), 1739 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 12 selects |
 | Moon Rider (a rhythm game, moonrider.xyz) | `immersive-ar`, additive, 1754 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 12 selects. The game is made for two controllers; not played |
 | A-Frame Anime UI | `immersive-vr`, 1639 frames, two views, head yaw 0.5 rad, two hands, 12 selects |
-| three.js hand input cubes | Refused: the page *requires* `hand-tracking`, and this engine does not grant that feature (it still delivers joints to pages that ask for it as optional) |
+| three.js hand input cubes | Starts since the permission change below (it *requires* `hand-tracking`): VR session, 2 views, 2 hands, 25 joints, 12 selects, 1792 frames. The captured picture shows the two pointing lines only, no cubes |
 
 VR pages report the blend mode `additive` too, which is right for see-through glasses: a VR scene is
 drawn as light over the room, black stays transparent, and a scene with a bright sky hides the room
@@ -144,17 +144,25 @@ frame interval about 20 ms on average, 8 to 9 % of frames longer than 25 ms; the
 138 to 143 MB, Ultra XR 56 to 59 MB. These say the path has no gross stall. They are not
 predictions for the Pixel, which has to be measured with the glasses on.
 
+## Pages that require hand tracking
+
+They used to be refused. Cause, from the browser's source: WebXR hand input has its own
+permission in Chromium; Wolvic's engine maps every permission it has no name for to
+"not supported", and `ChromiumPermissionDelegate.requestContentPermission` denies those outright.
+A required feature that is denied ends the session request.
+
+`tools/wolvic/patch_wolvic.py` now changes that method (nine bytecode units in one dex file, in
+place) so that "not supported" is handled as the XR permission: the answer is whatever the site's
+XR permission is. Side effect, stated plainly: any other permission Wolvic has no name for now
+also follows the site's XR permission instead of always being denied.
+
+Emulator: three.js hand input cubes, which lists `hand-tracking` as required, now starts a
+session and receives both hands with joints. The same change is in the copy installed on the
+Pixel (verified by SHA-256); it has not been run there.
+
 ## Not working
 
-- **Pages that require hand tracking** (rather than ask for it) are refused. Cause, from the
-  browser's source: WebXR hand input has its own permission in Chromium, and Wolvic's permission
-  code (`wolvic_permission_manager.cc`, `ChromiumPermissionDelegate.java`) only knows the VR and AR
-  permissions and denies every other kind. A required feature that is denied ends the request; an
-  optional one is dropped, yet the joints are still delivered. The fix is small (treat a
-  hand-tracking request that comes with an XR session request like the XR request) but it means
-  changing the browser's permission handling inside its compiled code; that step was stopped by
-  this environment's safety check and has not been done. The Gecko engine may not have the
-  problem; it could not be run on the emulator (it crashes in graphics setup under arm
+- **The Gecko engine** could not be run on the emulator (it crashes in graphics setup under arm
   translation), so only the Chromium engine has been exercised.
 - **Hit testing** (placing objects on real surfaces). The browser's XR device does not offer the
   feature at all, and nothing in Ultra XR detects surfaces. Games that place objects where the

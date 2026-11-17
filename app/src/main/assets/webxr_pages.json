@@ -38,7 +38,7 @@
     "name": "Hand cubes (three.js)",
     "url": "https://threejs.org/examples/webxr_vr_handinput_cubes.html",
     "needs": "Hands with finger joints, as a required feature",
-    "status": "Does not start: this browser engine refuses sessions that require hand tracking, although it delivers hand joints to pages that only ask for them.",
-    "state": "blocked"
+    "status": "Emulator: VR session starts now (it requires hand tracking); both eyes, both hands with joints and pinches reached the page. The picture showed the pointing lines only; whether cubes appear at the fingertips was not seen. Not tried on the glasses.",
+    "state": "tested"
   }
 ]

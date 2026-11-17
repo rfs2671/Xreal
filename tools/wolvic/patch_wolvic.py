@@ -24,6 +24,15 @@ not been run on a phone. Wolvic is MPL-2.0; its source is at https://github.com/
 The emulator variant also accepts a graphics configuration with a depth buffer, because the Android
 emulator offers no other; a real phone needs no such change and the phone variant does not have it.
 
+Second change, both variants: pages that list "hand-tracking" as a required WebXR feature (not an
+optional one) were refused. Chromium asks the browser for a hand tracking permission; Wolvic's
+engine maps every permission it has no name for to NOT_SUPPORTED, and its Java side
+(ChromiumPermissionDelegate.requestContentPermission) denies those outright. The change makes that
+method treat NOT_SUPPORTED as the XR permission instead: the answer is whatever the user's XR
+permission for that site is. Cost, stated plainly: any other permission Wolvic has no name for now
+also follows the site's XR permission instead of being always denied. It is a few bytes of bytecode
+in a dex file (found with baksmali, patched in place, dex checksum and signature recomputed).
+
 A proper source build is the better long-term route, but Wolvic's engines need their own patched
 builds of GeckoView or Chromium, which this Windows machine cannot produce.
 """
@@ -62,6 +71,27 @@ def patch_emulator(data):
         if len(ms) != 1: raise SystemExit("graphics configuration check not found: nothing changed")
         data[ms[0].end() - 1] = want
 
+XR_PERMISSION = 3   # PermissionManagerBridge.ContentPermissionType.XR; NOT_SUPPORTED is 9
+
+def patch_dex(d, kind):
+    """In requestContentPermission: 'if (type == NOT_SUPPORTED) return DENY' becomes 'if (type == NOT_SUPPORTED) type = XR'. True if found."""
+    any4 = b"[\x00-\xff]{2}"
+    def inv(reg): return re.escape(bytes([0x71, 0x10])) + any4 + re.escape(bytes([reg, 0]))
+    if kind == "phone":   # const/16 v1,9; if-ne v3,v1; const/4 v3,1; valueOf(v3); move-result v3; fromValue(v3); move-result v3; return-object v3
+        pat = re.escape(bytes([0x13, 1, 9, 0, 0x33, 0x13])) + any4 + b"(" + re.escape(bytes([0x12, 0x13])) + inv(3) + re.escape(bytes([0x0C, 3])) + inv(3) + re.escape(bytes([0x0C, 3, 0x11, 3])) + b")"
+        new = bytes([0x12, 0x30 | 3])            # const/4 v3, 3
+    else:                 # const/16 v3,9; const/4 v4,1; if-ne v0,v3; valueOf(v4); move-result v0; fromValue(v0); move-result v0; goto
+        pat = re.escape(bytes([0x13, 3, 9, 0, 0x12, 0x14, 0x33, 0x30])) + any4 + b"(" + inv(4) + re.escape(bytes([0x0C, 0])) + inv(0) + re.escape(bytes([0x0C, 0, 0x28])) + b"[\x00-\xff])"
+        new = bytes([0x12, 0x30 | 0])            # const/4 v0, 3
+    ms = list(re.finditer(pat, bytes(d), re.S))
+    if len(ms) != 1: return len(ms)
+    a, b = ms[0].span(1)
+    d[a:b] = new + bytes(b - a - len(new))      # the rest becomes no-ops, falling through to the normal path
+    d[12:32] = hashlib.sha1(bytes(d[32:])).digest()
+    import zlib
+    struct.pack_into("<I", d, 8, zlib.adler32(bytes(d[12:])) & 0xFFFFFFFF)
+    return 1
+
 def main():
     a = sys.argv[1:]
     ks = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "app", "debug.keystore"); tools = None
@@ -74,12 +104,19 @@ def main():
     if got != sha: raise SystemExit("%s is not the v1.4-chromium release file this tool was written for\n  expected %s\n  got      %s" % (src, sha, got))
     z = zipfile.ZipFile(src); data = bytearray(z.read(lib))
     (patch_phone if kind == "phone" else patch_emulator)(data)
+    dexes = {}
+    for item in z.infolist():
+        if re.fullmatch(r"classes\d*\.dex", item.filename):
+            dd = bytearray(z.read(item.filename)); n = patch_dex(dd, kind)
+            if n == 1: dexes[item.filename] = bytes(dd)
+            elif n > 1: raise SystemExit("the permission check was found more than once in %s: nothing changed" % item.filename)
+    if len(dexes) != 1: raise SystemExit("the permission check was found in %d dex files, expected 1: nothing changed" % len(dexes))
     tmp = out + ".unsigned"
     o = zipfile.ZipFile(tmp, "w")
     for item in z.infolist():
         if item.filename.startswith("META-INF/") and item.filename.endswith((".RSA", ".SF", ".MF", ".DSA", ".EC")): continue
         zi = zipfile.ZipInfo(item.filename, date_time=item.date_time); zi.compress_type = item.compress_type; zi.external_attr = item.external_attr
-        o.writestr(zi, bytes(data) if item.filename == lib else z.read(item.filename))
+        o.writestr(zi, bytes(data) if item.filename == lib else dexes.get(item.filename) or z.read(item.filename))
     o.close()
     if tools is None:
         sdk = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME") or "C:/Android"
