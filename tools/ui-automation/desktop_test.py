@@ -186,6 +186,33 @@ def main():
     check("the restored windows reload their pages", all(w["title"] for w in s), str([w["title"] for w in s]))
     uia.shot(os.path.join(out, "09-restored.png"))
 
+    # 10b. glasses attach and detach (an emulator's extra display stands in for the glasses)
+    if uia.SERIAL.startswith("emulator"):
+        titles = sorted(w["title"] for w in state())
+        uia.tap("Gather"); time.sleep(0.5)
+        uia.adb("emu", "multidisplay", "add", "1", "1920", "1080", "240", "0"); time.sleep(5)
+        t = uia.texts()
+        check("when a display is attached the desktop moves onto it", any("Showing on the glasses" in x for x in t), "")
+        uia.tap("Gather"); time.sleep(1.0)      # centre the windows for the new view
+        shots = os.path.join(out, "glasses"); os.makedirs(shots, exist_ok=True)
+        for f in os.listdir(shots): os.remove(os.path.join(shots, f))
+        uia.adb("emu", "screenrecord", "screenshot", "--display", "1", shots.replace(os.sep, "/")); time.sleep(1.5)
+        lit = 0.0; size = None
+        try:
+            import numpy as np, cv2
+            img = cv2.imread(os.path.join(shots, sorted(os.listdir(shots))[-1])); size = img.shape[1], img.shape[0]
+            lit = float((img.max(axis=2) > 40).mean())
+        except Exception as e: size = str(e)
+        check("the picture on the attached display is 1920x1080 and shows the windows", size == (1920, 1080) and lit > 0.15, "%s, %.0f%% lit" % (size, lit * 100))
+        check("windows keep their pages across the switch", sorted(w["title"] for w in state()) == titles, "")
+        uia.adb("emu", "multidisplay", "del", "1"); time.sleep(4)
+        t = uia.texts()
+        check("when it is detached the desktop returns to the phone preview", any("Preview (no glasses)" in x for x in t), "")
+        check("and the windows are still there", sorted(w["title"] for w in state()) == titles, "")
+        uia.adb("emu", "multidisplay", "add", "1", "1920", "1080", "240", "0"); time.sleep(5)
+        check("re-attaching shows it on the display again", any("Showing on the glasses" in x for x in uia.texts()), "")
+        uia.adb("emu", "multidisplay", "del", "1"); time.sleep(3)
+
     # 11. closing
     n0 = len(state()); uia.tap("Close"); s = wait(lambda s: len(s) == n0 - 1, 8)
     check("Close removes the focused window", len(s) == n0 - 1, "")

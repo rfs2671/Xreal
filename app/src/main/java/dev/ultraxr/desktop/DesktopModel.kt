@@ -25,9 +25,9 @@ class DesktopWindow(
     var url: String,
     var yaw: Double = 0.0,
     var pitch: Double = 0.0,
-    var distance: Double = 1.8,
+    var distance: Double = DEFAULT_DISTANCE,
     /** Width of the content area in metres; height follows from [aspect]. */
-    var width: Double = 1.4,
+    var width: Double = DEFAULT_WIDTH,
     var aspect: Double = 16.0 / 9.0,
     var follow: Boolean = false,
     var minimized: Boolean = false,
@@ -39,7 +39,7 @@ class DesktopWindow(
     val barHeight: Double get() = (width * BAR_FRACTION).coerceIn(0.05, 0.11)
 
     /** Size and placement actually shown: a maximized window is large, centred and close. */
-    fun shownWidth(): Double = if (maximized) MAX_WIDTH else width
+    fun shownWidth(): Double = if (maximized) MAXIMIZED_WIDTH else width
     fun shownHeight(): Double = shownWidth() / aspect
     fun shownDistance(): Double = if (maximized) MAX_DISTANCE else distance
     fun shownYaw(): Double = if (maximized) 0.0 else yaw
@@ -54,6 +54,11 @@ class DesktopWindow(
         const val BAR_FRACTION = 0.05
         const val MIN_WIDTH = 0.4
         const val MAX_WIDTH = 3.2
+        // The glasses show about 43 x 25 degrees. A new window takes roughly three quarters of that
+        // width; a maximized one fills it, leaving a margin for its title bar.
+        const val DEFAULT_WIDTH = 1.15
+        const val DEFAULT_DISTANCE = 2.0
+        const val MAXIMIZED_WIDTH = 1.55
         const val MAX_DISTANCE = 2.2
         const val MIN_DISTANCE = 0.6
         const val FAR_DISTANCE = 6.0
@@ -61,8 +66,8 @@ class DesktopWindow(
 
         fun fromJson(o: JSONObject): DesktopWindow = DesktopWindow(
             o.getInt("id"), o.optString("title", "Window"), o.optString("url", "about:blank"),
-            o.optDouble("yaw", 0.0), o.optDouble("pitch", 0.0), o.optDouble("distance", 1.8).coerceIn(MIN_DISTANCE, FAR_DISTANCE),
-            o.optDouble("width", 1.4).coerceIn(MIN_WIDTH, MAX_WIDTH), o.optDouble("aspect", 16.0 / 9.0).coerceIn(0.4, 3.0),
+            o.optDouble("yaw", 0.0), o.optDouble("pitch", 0.0), o.optDouble("distance", DEFAULT_DISTANCE).coerceIn(MIN_DISTANCE, FAR_DISTANCE),
+            o.optDouble("width", DEFAULT_WIDTH).coerceIn(MIN_WIDTH, MAX_WIDTH), o.optDouble("aspect", 16.0 / 9.0).coerceIn(0.4, 3.0),
             o.optBoolean("follow", false), o.optBoolean("minimized", false), o.optBoolean("maximized", false), o.optString("kind", "web"))
     }
 }
@@ -241,7 +246,7 @@ class Desktop {
     companion object {
         const val MAX_WINDOWS = 6
         /** Yaw offsets in degrees for the first, second, ... open window. */
-        val SLOTS = doubleArrayOf(0.0, -48.0, 48.0, -96.0, 96.0, 0.0)
+        val SLOTS = doubleArrayOf(0.0, -40.0, 40.0, -80.0, 80.0, 0.0)
         /** Title-bar buttons occupy the right end of the bar; fractions of the bar's width. */
         const val BUTTON_FRACTION = 0.07
         fun barButtonAt(u: Double): BarButton? {

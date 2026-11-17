@@ -166,6 +166,8 @@ basalt::ManagedImage<uint16_t>::Ptr make_basalt_image(const uint8_t* src, int w,
 struct InFlight {
   Clock::time_point fed;
   int num_features = -1;
+  int num_stereo = -1;
+  int num_landmarks = -1;
 };
 
 // One estimator "epoch": optical flow + VIO + helper threads. Created and
@@ -312,8 +314,12 @@ void uvio::start_session() {
       if (res) {
         std::lock_guard<std::mutex> lock(sp->inflight_mtx);
         auto it = sp->inflight.find(res->t_ns);
-        if (it != sp->inflight.end() && !res->observations.empty())
+        if (it != sp->inflight.end() && !res->observations.empty()) {
           it->second.num_features = static_cast<int>(res->observations[0].size());
+          it->second.num_stereo = res->observations.size() > 1 ? static_cast<int>(res->observations[1].size()) : 0;
+          if (auto* ba = dynamic_cast<basalt::BundleAdjustmentBase<float>*>(sp->vio.get()))
+            it->second.num_landmarks = static_cast<int>(ba->lmdb.numLandmarks());
+        }
       }
       // Diagnostic (every 150 frames): how many points are seen by each camera (a point in
       // cam1 is a stereo match) and how many 3D landmarks the estimator currently holds.
@@ -376,6 +382,8 @@ void uvio::start_session() {
       st.q[3] = q.w();
       st.valid = 1;
       st.num_features = found ? info.num_features : -1;
+      st.stereo_matches = found ? info.num_stereo : -1;
+      st.landmarks = found ? info.num_landmarks : -1;
       if (found) st.last_process_ms = std::chrono::duration<double, std::milli>(Clock::now() - info.fed).count();
       states_out.fetch_add(1);
     }
@@ -413,6 +421,8 @@ void uvio::stop_session() {
     std::lock_guard<std::mutex> lock(st_mtx);
     st.valid = 0;
     st.num_features = -1;
+    st.stereo_matches = -1;
+    st.landmarks = -1;
     reset_count.fetch_add(1);
   }
 }
@@ -709,6 +719,8 @@ UVIO_API uvio_t* uvio_create(const char* calib_json, const char* config_json, ch
       return nullptr;
     }
     h->st.num_features = -1;
+    h->st.stereo_matches = -1;
+    h->st.landmarks = -1;
     uvio_log(kInfo, "%s: %dx%d stereo, cam_time_offset_ns=%lld, imu_update_rate=%.1f", uvio_version(), h->width,
              h->height, (long long)c.cam_time_offset_ns, c.imu_update_rate);
     uvio* raw = h.get();

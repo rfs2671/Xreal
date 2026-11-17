@@ -72,7 +72,7 @@ class DesktopTest {
         val d = Desktop(); val a = d.add("A", "u")!!; val b = d.add("B", "u")!!
         val width = a.width
         d.toggleMaximize(a.id)
-        assertEquals(DesktopWindow.MAX_WIDTH, a.shownWidth(), 1e-9); assertEquals(width, a.width, 1e-9)
+        assertEquals(DesktopWindow.MAXIMIZED_WIDTH, a.shownWidth(), 1e-9); assertEquals(width, a.width, 1e-9)
         d.resize(a.id, 2.0); d.move(a.id, 1.0, 0.0)
         assertEquals("a maximized window is not resized or moved", width, a.width, 1e-9)
         d.toggleMaximize(a.id); assertEquals(width, a.shownWidth(), 1e-9)
@@ -151,6 +151,14 @@ class DesktopTest {
         val p = doubleArrayOf(m[0] * 0.5 + m[4] * 0.5 + m[12], m[1] * 0.5 + m[5] * 0.5 + m[13], m[2] * 0.5 + m[6] * 0.5 + m[14])
         val h = Geometry.planeHit(origin, p, c, yaw, pitch)!!
         assertEquals(0.8, h[0], 1e-5); assertEquals(0.45, h[1], 1e-5); assertEquals(1.0, h[2], 1e-5)
+    }
+
+    @Test fun newAndMaximizedWindowsFitInsideTheGlassesFieldOfView() {
+        // display half-angles from the factory calibration: tan 0.3875 horizontally, 0.2191 vertically
+        val w = DesktopWindow(1, "A", "u")
+        assertTrue(w.width / 2 / w.distance < 0.3875 * 0.8); assertTrue((w.height / 2 + w.barHeight) / w.distance < 0.2191)
+        w.maximized = true
+        assertTrue(w.shownWidth() / 2 / w.shownDistance() < 0.3875); assertTrue((w.shownHeight() / 2 + w.shownBarHeight()) / w.shownDistance() < 0.2191 * 1.12)
     }
 
     @Test fun typedTextBecomesAUrlOrASearch() {

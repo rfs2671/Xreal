@@ -48,6 +48,10 @@ object Tracking : GlassesLink.Listener {
     @Volatile var vioDropped = 0L; private set
     @Volatile var vioFramesIn = 0L; private set
     @Volatile var vioAutoResets = 0L; private set
+    /** Points of the last frame matched in both cameras, and 3D landmarks held; -1 if not reported. */
+    @Volatile var vioStereoMatches = -1; private set
+    @Volatile var vioLandmarks = -1; private set
+    val positionConfidence = dev.ultraxr.core.PositionConfidence()
     private var vioThread: Thread? = null
     @Volatile private var running = false
 
@@ -324,7 +328,7 @@ object Tracking : GlassesLink.Listener {
     val trace = VioTrace { log(it) }
 
     private fun vioLoop() {
-        val out = DoubleArray(22)
+        val out = DoubleArray(24).also { it[22] = -1.0; it[23] = -1.0 }   // 22, 23: stereo matches, landmarks (-1 = not reported)
         var lastSeq = 0L
         var lastResetCount = -1.0
         var lastMode = HeadTracker.Mode.NONE
@@ -345,8 +349,16 @@ object Tracking : GlassesLink.Listener {
                     val vel = doubleArrayOf(out[8], out[9], out[10])
                     vioFeatures = out[14].toInt(); vioFramesIn = out[15].toLong(); vioDropped = out[16].toLong(); vioStates = out[17].toLong(); vioProcessMs = out[18]
                     trace.onState(out)
+                    vioStereoMatches = out[22].toInt(); vioLandmarks = out[23].toInt()
+                    val wasTrusted = positionConfidence.trusted
+                    val trusted = positionConfidence.update(now, vioLandmarks, vioStereoMatches)
+                    if (trusted != wasTrusted) log(if (trusted) "6DoF position trusted ($vioLandmarks landmarks, $vioStereoMatches seen by both cameras)"
+                        else "6DoF position not trusted ($vioLandmarks landmarks, $vioStereoMatches seen by both cameras): rotation only")
                     if (supervisor.onState(now, out[0].toLong(), true, p, vel, vioFeatures)) resetVio(v)
-                    else head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13]))
+                    else if (trusted) head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13]))
+                    // Not trusted: the head keeps its last position and turns from the IMU. When trust
+                    // returns the estimator's world is re-aligned to where the head was held.
+                    else if (wasTrusted) head.onVioEpochReset()
                 } else if (supervisor.onState(now, 0, false, ZERO, ZERO, -1)) resetVio(v)
             }
             if (++tick % 100 == 0) {
@@ -359,6 +371,7 @@ object Tracking : GlassesLink.Listener {
 
     private fun resetVio(v: Long) {
         log("6DoF reset: ${supervisor.lastReason}")
+        positionConfidence.reset()
         trace.dump(appContext, supervisor.lastReason)?.let { log("6DoF trace: $it") }
         Native.vioReset(v)
         head.onVioEpochReset()

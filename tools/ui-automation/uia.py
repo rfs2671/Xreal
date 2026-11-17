@@ -15,7 +15,9 @@ def sh(cmd, timeout=60): return adb("shell", cmd, timeout=timeout)
 
 def dump():
     for _ in range(4):
-        sh("rm -f /data/local/tmp/ui.xml; uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1")
+        # --windows: all windows on all displays, so a window on an extra display (the stand-in for
+        # the glasses) does not hide the phone screen from the dump
+        sh("rm -f /data/local/tmp/ui.xml; uiautomator dump --windows /data/local/tmp/ui.xml >/dev/null 2>&1 || uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1")
         x = sh("cat /data/local/tmp/ui.xml 2>/dev/null")
         if "<node" in x: return x
         time.sleep(0.7)

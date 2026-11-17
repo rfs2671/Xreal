@@ -72,7 +72,9 @@ typedef struct {
                            gap, IMU discontinuity, estimator stopped) */
   int64_t imu_in;       /* IMU samples accepted */
   int64_t imu_dropped;  /* IMU samples rejected (non-increasing timestamp or
-                           buffer overflow) */
+                           buffer overflow) */
+  int32_t stereo_matches; /* points of the last frame also matched in cam1, -1 if unknown */
+  int32_t landmarks;      /* 3D landmarks the estimator held at that frame, -1 if unknown */
 } uvio_state;
 
 /* Latest state (non-blocking). Returns 1 if a state is available. The counter
