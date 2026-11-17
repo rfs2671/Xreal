@@ -16,6 +16,12 @@ object DisplayDiagnostics {
         return dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull() ?: dm.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY && it.isValid }
     }
 
+    /** The glasses' display: the external one that is not one of the desktop's own off-screen window displays. */
+    fun glasses(c: Context): Display? = manager(c).getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull { it.name?.startsWith("ultraxr-window-") != true }
+
+    /** Its current size in pixels, {0, 0} when there is none. */
+    fun glassesSize(c: Context): IntArray = glasses(c)?.mode?.let { intArrayOf(it.physicalWidth, it.physicalHeight) } ?: intArrayOf(0, 0)
+
     /** True when an external display is currently in a mode at least three times wider than tall. */
     fun sideBySidePresent(c: Context): Boolean = external(c)?.mode?.let { it.physicalWidth >= it.physicalHeight * 3 } ?: false
 

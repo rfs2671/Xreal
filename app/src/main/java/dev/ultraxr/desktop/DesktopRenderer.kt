@@ -41,8 +41,11 @@ object Ink {
 
 /**
  * Draws the spatial desktop: each window is a rounded rectangle textured with its page, with a
- * title bar above it, placed in the world and seen from the head pose. One view (the glasses show
- * the same picture to both eyes on this phone). Black is transparent on the glasses.
+ * title bar above it, placed in the world and seen from the head pose. Black is transparent on the
+ * glasses. In 2D one view fills the picture (both eyes see the same). With [stereo] the scene is
+ * drawn twice, from each eye, into the left and right halves of the picture: the glasses' half-width
+ * 3D mode stretches each half over one eye, so each half is rendered with that eye's full field of
+ * view and the squeeze is undone by the glasses.
  */
 class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: Int, surface: Surface?) -> Unit) : GLSurfaceView.Renderer {
     @Volatile var frame = RenderFrame(emptyList(), doubleArrayOf(0.0, 0.0, 0.0), null, 0, 0.0, false, 1f)
@@ -57,6 +60,12 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     /** Preview only: look direction when there is no head tracking (for use without glasses). */
     @Volatile var previewYaw = 0.0
     @Volatile var previewPitch = 0.0
+    /** Draw left and right eye views side by side (glasses in half-width 3D). Ignored by the preview. */
+    @Volatile var stereo = false
+    /** Left half to the right eye and the reverse, in case a unit shows the halves the other way round. */
+    @Volatile var swapEyes = false
+    /** Distance between the wearer's eyes, metres. */
+    @Volatile var ipdM = 0.064
 
     private class Tex(val oes: Int, val st: SurfaceTexture, val surface: Surface) { @Volatile var dirty = false; val m = FloatArray(16).also { Matrix.setIdentityM(it, 0) }; var bar = 0; var barVersion = -1L; var hasFrame = false }
     private val tex = HashMap<Int, Tex>()
@@ -67,6 +76,8 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     private val uniforms = HashMap<Int, IntArray>(); private var boundProgram = 0
     private val proj = FloatArray(16); private val view = FloatArray(16); private val vp = FloatArray(16); private val model = FloatArray(16); private val mvp = FloatArray(16)
     private val headM = FloatArray(16); private val ident = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+    private val projHead = FloatArray(16); private val shiftM = FloatArray(16); private val eyeP = DoubleArray(3)
+    private var stereoNoted = -1
     private var lastNs = 0L; private var fpsWindowStart = 0L; private var fpsFrames = 0
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -127,14 +138,33 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         val tracked = head.mode != dev.ultraxr.core.HeadTracker.Mode.NONE
         val q = if (tracked) head.pose.q else Q.mul(Q.axisAngle(0.0, 1.0, 0.0, previewYaw), Q.axisAngle(1.0, 0.0, 0.0, previewPitch))
         val p = if (tracked && f.usePosition) head.pose.p else f.anchor
-        Q.toMatrix(q, p, headM); Matrix.invertM(view, 0, headM, 0)
         val tanV = if (preview) 0.62 else Tracking.displayTanV; val tanH = if (preview) tanV * width / height.coerceAtLeast(1) else Tracking.displayTanH
-        Matrix.frustumM(proj, 0, (-tanH * NEAR).toFloat(), (tanH * NEAR).toFloat(), (-tanV * NEAR).toFloat(), (tanV * NEAR).toFloat(), NEAR.toFloat(), 80f)
-        Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
+        val two = stereo && !preview
+        if (stereoNoted != (if (two) 1 else 0)) { stereoNoted = if (two) 1 else 0; Tracking.noteGraphics(if (two) "desktop drawing two eye views side by side, eye distance " + Math.round(ipdM * 1000) + " mm" + (if (swapEyes) ", eyes swapped" else "") else "desktop drawing one view") }
 
         GLES30.glEnable(GLES30.GL_BLEND); GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         GLES30.glDisable(GLES30.GL_DEPTH_TEST); GLES30.glBindVertexArray(vao); boundProgram = 0
 
+        val right = Q.rotate(q, doubleArrayOf(1.0, 0.0, 0.0))
+        for (half in 0 until (if (two) 2 else 1)) {
+            val off = if (two) Stereo.eyeOffset(half, ipdM, swapEyes) else 0.0
+            val shift = if (two) Stereo.shift(off) else 0.0
+            if (two) GLES30.glViewport(half * (width / 2), 0, width / 2, height)
+            eyeP[0] = p[0] + right[0] * off; eyeP[1] = p[1] + right[1] * off; eyeP[2] = p[2] + right[2] * off
+            Q.toMatrix(q, eyeP, headM); Matrix.invertM(view, 0, headM, 0)
+            Matrix.frustumM(proj, 0, ((shift - tanH) * NEAR).toFloat(), ((shift + tanH) * NEAR).toFloat(), (-tanV * NEAR).toFloat(), (tanV * NEAR).toFloat(), NEAR.toFloat(), 80f)
+            Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
+            // Things fixed to the head (a fullscreen window) are placed relative to the head's centre.
+            Matrix.setIdentityM(shiftM, 0); Matrix.translateM(shiftM, 0, (-off).toFloat(), 0f, 0f)
+            Matrix.multiplyMM(projHead, 0, proj, 0, shiftM, 0)
+            drawScene(f, q)
+        }
+        GLES30.glDisable(GLES30.GL_BLEND)
+        avgCpuMs = avgCpuMs * 0.95 + (System.nanoTime() - now) / 1e6 * 0.05
+    }
+
+    /** Everything in the scene, once, with the current [vp] (world) and [projHead] (head-fixed) matrices. */
+    private fun drawScene(f: RenderFrame, q: DoubleArray) {
         if (f.showRail) {
             // The rail: short straight pieces around the user. The piece(s) under the focused window are lit.
             val seg = 2 * Math.PI / Rail.SEGMENTS; val len = 2 * Rail.RADIUS * Math.tan(seg / 2) * 0.92
@@ -164,7 +194,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         // Far windows first, so nearer ones cover them; the focused window last among equals.
         for (w in f.windows.sortedWith(compareByDescending<RenderWindow> { it.distance }.thenBy { it.focused })) {
             val t = tex[w.id] ?: continue
-            val matrix = if (w.headLocked) proj else vp
+            val matrix = if (w.headLocked) projHead else vp
             val c = if (w.headLocked) doubleArrayOf(0.0, 0.0, -w.distance) else Geometry.centre(f.anchor, w.yaw, w.pitch, w.distance)
             val yaw = if (w.headLocked) 0.0 else w.yaw; val pitch = if (w.headLocked) 0.0 else w.pitch
             val shade = if (w.focused) 1f else f.dim
@@ -195,8 +225,6 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
             Geometry.modelMatrix(Geometry.centre(f.anchor, f.dwellYaw, f.dwellPitch, f.dwellDistance * 0.985), f.dwellYaw, f.dwellPitch, size, size, model)
             draw(progFlat, 0, 0, vp, ident, size, size, size / 2, Ink.AMBER[0], Ink.AMBER[1], Ink.AMBER[2], 1f, (0.92 - 0.9 * f.dwellProgress).toFloat().coerceIn(0.02f, 0.92f))
         }
-        GLES30.glDisable(GLES30.GL_BLEND)
-        avgCpuMs = avgCpuMs * 0.95 + (System.nanoTime() - now) / 1e6 * 0.05
     }
 
     /** [c] moved by [x] to the window's right and [y] up, in the window's own plane. */

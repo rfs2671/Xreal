@@ -55,6 +55,12 @@ class DesktopSession(private val activity: Activity) {
     /** Resting the gaze on a dock app or a title-bar button presses it: no phone and no hands needed. */
     var lookToPress: Boolean get() = prefs.getBoolean("lookToPress", true); set(v) { prefs.edit().putBoolean("lookToPress", v).apply() }
 
+    /** Real depth: the glasses' half-width 3D mode, when the link to them holds. Falls back to 2D by itself. */
+    var depth3d: Boolean get() = prefs.getBoolean("depth3d", true); set(v) { prefs.edit().putBoolean("depth3d", v).apply() }
+    var swapEyes: Boolean get() = prefs.getBoolean("swapEyes", false); set(v) { prefs.edit().putBoolean("swapEyes", v).apply() }
+    /** Test builds: draw two eye views on the attached display without glasses, to check the picture. */
+    var forceStereo = false
+
     private val regular: Typeface = try { Typeface.createFromAsset(activity.assets, "fonts/AtkinsonHyperlegible-Regular.ttf") } catch (_: Exception) { Typeface.SANS_SERIF }
     private val bold: Typeface = try { Typeface.createFromAsset(activity.assets, "fonts/AtkinsonHyperlegible-Bold.ttf") } catch (_: Exception) { Typeface.DEFAULT_BOLD }
     private val dwell = Dwell()
@@ -215,6 +221,7 @@ class DesktopSession(private val activity: Activity) {
         publish(nowNs, anchor, positionOk, head)
     }
     private var lastUiRevision = -1L
+    private var stereoNote = ""
     private var lastPerfNs = 0L
 
     private fun hands(nowNs: Long, head: HeadTracker.State, origin: DoubleArray, anchor: DoubleArray, tracked: Boolean) {
@@ -287,12 +294,22 @@ class DesktopSession(private val activity: Activity) {
             dock = if (full < 0) dockBitmap else null, dockVersion = 1, dockYaw = desktop.followAnchor.yaw,
             railYaw = if (f != null) desktop.worldYaw(f) else Double.NaN, railHalf = if (f != null) Math.atan(f.shownWidth() / 2 / f.shownDistance()) else 0.0, showRail = full < 0,
             dwellYaw = ringYaw, dwellPitch = ringPitch, dwellDistance = ringDistance, dwellProgress = ringProgress)
-        for (r in renderers) r.frame = frame
-        statusLine = when (head.mode) {
+        val sw = Tracking.link?.stereo
+        val three = forceStereo || sw?.state == dev.ultraxr.glasses.StereoSwitch.State.ACTIVE
+        val swap = swapEyes; val ipd = Tracking.settings.ipdMm / 1000.0
+        for (r in renderers) { r.stereo = three; r.swapEyes = swap; r.ipdM = ipd; r.frame = frame }
+        stereoNote = when {
+            three -> " · 3D"
+            !depth3d || sw == null -> ""
+            sw.state == dev.ultraxr.glasses.StereoSwitch.State.STARTING || sw.state == dev.ultraxr.glasses.StereoSwitch.State.RESTING -> " · starting 3D (try ${sw.attempts} of 3)"
+            sw.state == dev.ultraxr.glasses.StereoSwitch.State.GAVE_UP -> " · 2D (3D failed: ${sw.lastReason})"
+            else -> ""
+        }
+        statusLine = (when (head.mode) {
             HeadTracker.Mode.NONE -> "No glasses: preview"
             HeadTracker.Mode.ORIENTATION_ONLY -> "Rotation tracking"
             HeadTracker.Mode.SIX_DOF -> if (positionOk) "Position tracking" else "Rotation tracking"
-        }
+        }) + stereoNote
     }
 
     // ---- textures drawn with the 2D canvas. Everything is light on a transparent ground: on the

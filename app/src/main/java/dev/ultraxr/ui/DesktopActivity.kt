@@ -90,12 +90,18 @@ class DesktopActivity : Activity() {
         session = DesktopSession(this)
         session.onChanged = { refreshChips() }
         session.onLookPress = { tick(heavy = false) }
+        if (intent.getBooleanExtra(EXTRA_STEREO_PREVIEW, false) && applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) session.forceStereo = true
         build()
         session.start()
         refreshChips()
     }
 
     override fun onDestroy() { session.stop(); Tracking.release(); super.onDestroy() }
+
+    // 3D is only asked for while the desktop is on screen: anything else Android shows on the
+    // glasses (its own mirror of the phone) is a flat picture and needs them in 2D.
+    override fun onStart() { super.onStart(); Tracking.link?.stereo?.want(session.depth3d) }
+    override fun onStop() { Tracking.link?.stereo?.want(false); super.onStop() }
 
     override fun onResume() {
         super.onResume()
@@ -275,6 +281,10 @@ class DesktopActivity : Activity() {
         box("Dim windows that are not focused", session.dimUnfocused) { session.dimUnfocused = it }
         box("Dark pages (easier on see-through glasses; applies to new windows)", session.darkPages) { session.darkPages = it }
         box("Use position tracking (experimental; off = rotation only)", session.usePosition) { session.usePosition = it }
+        box("3D depth (each eye gets half the sharpness across; returns to 2D by itself if the link fails)", session.depth3d) {
+            session.depth3d = it; Tracking.link?.stereo?.let { s -> s.reset(); s.want(it) }
+        }
+        box("Swap left and right eye (if depth looks inside out)", session.swapEyes) { session.swapEyes = it }
         col.add(small("Recenter view") { session.recenter() }, topDp = 12)
         col.add(small("Close all windows") { session.resetLayout() }, topDp = 6)
         AlertDialog.Builder(this).setTitle("Desktop settings").setView(col).setPositiveButton("Done", null).show()
@@ -408,5 +418,5 @@ class DesktopActivity : Activity() {
         private fun span(e: MotionEvent) = hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
     }
 
-    companion object { const val EXTRA_AUTOMATION = "automation" }
+    companion object { const val EXTRA_AUTOMATION = "automation"; const val EXTRA_STEREO_PREVIEW = "stereo_preview" }
 }

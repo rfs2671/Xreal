@@ -3,9 +3,33 @@
 Floating web windows in the glasses, controlled from the phone. Open it from the launcher
 ("Spatial desktop").
 
-**What it is not:** it is not stereoscopic. On the Pixel 10 Pro XL the glasses only accept a
-1920x1080@60 picture shown to both eyes (see PIXEL_RESULTS.md), so windows are placed in space
-around you and stay there as you turn your head, but there is no binocular depth.
+## 3D depth
+
+The desktop asks the glasses for their half-width 3D mode: the phone still sends a 1920x1080
+picture, the glasses show its left half to the left eye and its right half to the right eye, and
+the app draws the scene once for each eye. Windows then have real depth. The cost is sharpness:
+each eye gets 960 pixels across instead of 1920, so small text is softer than in 2D.
+
+The glasses' full-resolution 3D mode (3840x1080) is not available on the Pixel 10 Pro XL: its
+display driver drops that mode (see PIXEL_RESULTS.md and tools/kernel-experiments/README.md).
+
+The link to the glasses does not always come up in half-width 3D (measured on this phone: two of
+four attempts fell back to 640x480). So the switch is bounded:
+
+- it starts only from a 2D picture that is showing, and only while the desktop is open
+- at most three attempts; after each failure the glasses go back to 2D first
+- after the third failure they stay in 2D, and the status line says why; nothing is retried until
+  you untick and tick "3D depth" in More, or unplug the glasses and plug them in again
+- leaving the desktop, or closing the app, returns the glasses to 2D
+
+Each attempt blanks the picture for a few seconds. Turn "3D depth" off in More to stay in 2D.
+"Swap left and right eye" is there in case depth looks inside out. Eye distance is the one set in
+the app's Settings (default 64 mm).
+
+How the two views are made: each eye is half the eye distance to the side of the head's centre,
+with its full field of view rendered into its half of the picture (the glasses stretch it back).
+The glasses' optics focus at about 4 m, so the views are converged there: a window 2 m away is
+seen 19 pixels apart between the halves at 64 mm (`Stereo` in DesktopModel.kt).
 
 ## How it is designed, and why
 
@@ -77,8 +101,9 @@ foreground service (a notification says so) and stops when the glasses are unplu
 
 ## What has been verified, and how
 
-Automated, on an Android 14 emulator (`tools/ui-automation/desktop_test.py`, 32 checks) and by
-unit tests (`DesktopTest`, `PositionConfidenceTest`):
+Automated, on an Android 14 emulator (`tools/ui-automation/desktop_test.py`, 39 checks, and
+`stereo_test.py`, 10 checks) and by unit tests (83, among them `DesktopTest`, `RailTest`,
+`PositionConfidenceTest`, `StereoTest`):
 
 - opening pages, clicking through the touchpad, scrolling, typing, video playback in a window
 - three windows side by side, focus by chip, minimize/restore, maximize, fullscreen,
@@ -90,9 +115,20 @@ unit tests (`DesktopTest`, `PositionConfidenceTest`):
 - pocket mode (black screen, tap clicks, Back twice leaves), keys typed into a window,
   a white page shown dark on the attached display, the rail and dock geometry (unit tests)
 - Xbox Cloud Gaming's catalogue and YouTube load in a window (not signed in, nothing streamed)
+- the two-eye picture, drawn on the emulator's stand-in display with a test switch: both halves
+  drawn, each a whole view centred in its half and squeezed to half width, the clock, a window and
+  a fullscreen window offset between the halves by 19 pixels (19.3 predicted), 60 frames a second
+- the rules of the 3D switch (unit tests): nothing sent until a 2D picture shows, success only
+  after the link restarted, three attempts at most, back to 2D on every failure, no retry after
+  giving up, back to 2D when the desktop is left
 
 Not verified, because it needs the glasses, a head, hands or an account:
 
+- **3D on the glasses at all with this build.** The saved kernel logs show the half-width mode
+  displayed a 1920x1080 picture twice on this phone, and that the picture was split per eye was
+  seen once by eye; the new switch and the two-eye rendering have never run on the glasses.
+  Unknown: how often the link comes up, whether the left half really is the left eye, whether
+  depth is comfortable, how readable text is at half width
 - what the windows look like in the glasses, their size and sharpness, readability of text
 - head tracking of the windows, gaze focus, follow-head behaviour while actually turning
 - hand pointing and pinching; look-to-press with a real head (its timing is unit-tested)
@@ -109,11 +145,16 @@ Known limits: Android's WebView has no WebXR, so immersive WebXR pages do not ru
 WebGL pages do. Pages cannot open the phone's keyboard; use the Type box. DRM-protected video
 may refuse to play or play at low quality.
 
-## The acceptance test (about twelve minutes, glasses plugged into the Pixel)
+## The acceptance test (about fifteen minutes, glasses plugged into the Pixel)
 
 1. **Open.** Start Ultra XR, tap Spatial desktop. In the glasses you should see a clock and a
-   thin line below it, nothing else. Tap YouTube, then Browser on the phone. *Pass:* two windows, the second to the
-   right of the first, text readable.
+   thin line below it, nothing else. Within about half a minute the picture blanks once or more
+   and the phone's status line ends in "3D" or in "2D (3D failed: ...)". Tap YouTube, then Browser
+   on the phone. *Pass:* two windows, the second to the right of the first, text readable; and
+   either real depth (close one eye, then the other: the windows shift against the room) or a
+   steady 2D picture with the reason shown. *Note which.* If depth looks inside out or
+   uncomfortable, tick "Swap left and right eye" in More and say so. If the picture is double or
+   stretched and stays that way, untick "3D depth" and report it.
 2. **Head.** Turn your head left and right. *Pass:* the windows stay where they are in the room
    and do not swim or jump. Look at each for a moment: its outline lights up.
 3. **Touchpad.** With YouTube focused, slide to move the pointer, tap a video. Scroll with two

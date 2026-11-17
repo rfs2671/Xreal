@@ -1,0 +1,59 @@
+diff --git a/dwc_dptx/dptx.c b/dwc_dptx/dptx.c
+index 1c46ff4..c4788d1 100644
+--- a/dwc_dptx/dptx.c
++++ b/dwc_dptx/dptx.c
+@@ -505,6 +505,8 @@ static void dptx_bridge_atomic_enable(struct drm_bridge *br, struct drm_bridge_s
+ 	struct drm_crtc *crtc = drm_atomic_get_new_crtc_for_encoder(old_s, br->encoder);
+ 	struct drm_crtc_state *crtc_s = drm_atomic_get_new_crtc_state(old_s, crtc);
+ 	struct drm_display_mode *adj_m = &crtc_s->adjusted_mode;
++	u64 pll_rate;
++	u64 pix_div;
+ 
+ 	mutex_lock(&dptx->mutex);
+ 
+@@ -535,21 +537,34 @@ static void dptx_bridge_atomic_enable(struct drm_bridge *br, struct drm_bridge_s
+ 	 * Support for 1/2 of pixel clock rate must be present in CPM and DT.
+ 	 * dptx_bridge_mode_valid() ensures that non-supported modes are filtered out.
+ 	 */
+-	clk_set_rate(dptx->pixel_clks[0].clk, dptx->current_mode.clock * 1000 / 2);
++	pll_rate = (u64)dptx->current_mode.clock * 1000 / 2;
++	pix_div = 2;
++	/*
++	 * EXPERIMENTAL: 148.5 MHz (half of a 297 MHz pixel clock) is not among the PLL_DP rates
++	 * CPM and the device tree offer, but 297 MHz is (it serves 3840x2160@60). Run the PLL at
++	 * the full pixel clock and divide by 4 instead of 2: the HSIO_N and DPU pixel clocks then
++	 * get the same 1/4 of the pixel clock as usual. Untested on hardware. Wrong if anything
++	 * consumes PLL_DP undivided.
++	 */
++	if (dptx->current_mode.clock == 297000) {
++		pll_rate = 297000000;
++		pix_div = 4;
++	}
++	clk_set_rate(dptx->pixel_clks[0].clk, pll_rate);
+ 	dptx_dbg_bridge(dptx, "%s: %s rate = %lu\n", __func__, dptx->pixel_clks[0].id,
+ 			clk_get_rate(dptx->pixel_clks[0].clk));
+ 
+ 	/*
+ 	 * Adjust HSIO_N DP0 pixel clock to use divisor 2 to get 1/4 of pixel clock rate
+ 	 */
+-	clk_set_rate(dptx->pixel_clks[1].clk, 2);
++	clk_set_rate(dptx->pixel_clks[1].clk, pix_div);
+ 	dptx_dbg_bridge(dptx, "%s: %s rate = %lu\n", __func__, dptx->pixel_clks[1].id,
+ 			clk_get_rate(dptx->pixel_clks[1].clk));
+ 
+ 	/*
+ 	 * Adjust DPU DP0 pixel clock to use divisor 2 to get 1/4 of pixel clock rate
+ 	 */
+-	clk_set_rate(dptx->pixel_clks[3].clk, 2);
++	clk_set_rate(dptx->pixel_clks[3].clk, pix_div);
+ 	dptx_dbg_bridge(dptx, "%s: %s rate = %lu\n", __func__, dptx->pixel_clks[3].id,
+ 			clk_get_rate(dptx->pixel_clks[3].clk));
+ 
+@@ -632,6 +647,7 @@ struct dptx_allowed_mode {
+ static struct dptx_allowed_mode dptx_allowed_modes[] = {
+ 	{3840, 2160, 594000},  /* CEA-861 */
+ 	{3840, 2160, 533250},  /* CVT-RB */
++	{3840, 1080, 297000},  /* EXPERIMENTAL: XREAL side-by-side 3D (EDID detailed timing) */
+ 	{2560, 1600, 348500},  /* DMT 0x4D */
+ 	{2560, 1440, 241500},  /* CVT-RB */
+ 	{1920, 1200, 193250},  /* DMT 0x45 */

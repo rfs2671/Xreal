@@ -56,7 +56,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
     /** "am start ... --ez desktop true [--ez automation true]" opens the desktop directly (used by UI automation). */
     private fun openDesktopIfAsked(i: Intent?) {
         if (i?.getBooleanExtra("desktop", false) != true) return
-        startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_AUTOMATION, i.getBooleanExtra(DesktopActivity.EXTRA_AUTOMATION, false)))
+        startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_AUTOMATION, i.getBooleanExtra(DesktopActivity.EXTRA_AUTOMATION, false))
+            .putExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, i.getBooleanExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, false)))
     }
 
     override fun onResume() {

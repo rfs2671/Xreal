@@ -130,7 +130,8 @@ object Tracking : GlassesLink.Listener {
             handsThread = thread(name = "hands", isDaemon = true) { handsLoop() }
         }
         if (users > 1) return
-        link?.let { it.wantedDisplayMode = wantedMode(); it.sideBySideDisplayPresent = { dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(app) || dev.ultraxr.glasses.DisplayDiagnostics.sideBySideOffered(app) }; it.start() }
+        link?.let { it.wantedDisplayMode = wantedMode(); it.sideBySideDisplayPresent = { dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(app) || dev.ultraxr.glasses.DisplayDiagnostics.sideBySideOffered(app) }
+            it.externalDisplaySize = { dev.ultraxr.glasses.DisplayDiagnostics.glassesSize(app) }; it.start() }
     }
 
     @Synchronized fun release() {

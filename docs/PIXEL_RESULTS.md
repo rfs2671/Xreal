@@ -90,3 +90,22 @@ mode cannot be shown on this phone.
 - `tools/ultra-diag/win_display_timing.ps1`: prints the video timing Windows sends (read-only).
 - Kernel DisplayPort lines on the Pixel are only readable through `adb bugreport`
   (section `KERNEL LOG (dmesg)`, driver `dwc_dptx`); the ring buffer holds about five minutes.
+
+## Why 3D modes are dropped, from the driver source (2026-11-17)
+
+Read from the Pixel 10 display driver (`dwc_dptx`, Android 16 source; the phone's Android 17
+kernel log shows the same decisions). Details and an untested patch: tools/kernel-experiments/README.md.
+
+- The driver keeps a mode only if it fits the link, is exactly 60 Hz, and is one of eleven
+  listed sizes and clocks. 3840x1080 (full 3D) is not listed; 1920x1080 at 90 and 120 Hz fail the
+  60 Hz rule.
+- Separately, the clock table has no 148.5 MHz entry, the PLL rate a 297 MHz pixel clock needs.
+  Lifting the list alone would not give a picture.
+- Half-width 3D (mode 8) is an ordinary 1920x1080@60 picture and passes. In that mode the
+  glasses advertise only the lowest link rate (DPCD `12 06`); four lanes then carry it, but in the
+  saved log four-lane training succeeded twice and failed twice (falling to two lanes, where
+  1920x1080 no longer fits and the phone shows 640x480). When it succeeded the picture ran for
+  about 90 and 140 seconds until the mode was changed by hand.
+- The app's old guard put the glasses back in 2D after 8 s whenever no 3840-wide display
+  appeared, which also ended half-width 3D. The desktop now runs half-width 3D through
+  `StereoSwitch` instead (three attempts, then 2D).

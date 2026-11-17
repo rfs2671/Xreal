@@ -122,6 +122,10 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
     private var pollTick = 0
     /** Supplied by the owner: is an external display currently in a side-by-side mode? */
     @Volatile var sideBySideDisplayPresent: (() -> Boolean)? = null
+    /** Supplied by the owner: the glasses' display size as Android reports it now, {0, 0} when there is none. */
+    @Volatile var externalDisplaySize: (() -> IntArray)? = null
+    /** Half-width 3D: asked for by the desktop, tried a bounded number of times, then left in 2D. */
+    val stereo = StereoSwitch()
     private var failures = 0
 
     private var watchImu = 0L
@@ -142,7 +146,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
                     handler.post { if (granted) { permissionAsked = null; connectIfPossible() } else { permissionDenied = true; setState(State.NEED_PERMISSION, "USB access was not granted") } }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> handler.post { failures = 0; permissionAsked = null; permissionDenied = false; connectIfPossible() }
-                UsbManager.ACTION_USB_DEVICE_DETACHED -> handler.post { if (findDevice() == null) { teardown(); setState(State.NO_GLASSES, "") } }
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> handler.post { if (findDevice() == null) { teardown(); stereo.unplugged(); if (wantedDisplayMode == McuProtocol.MODE_HALF_SBS) wantedDisplayMode = McuProtocol.MODE_2D_60; setState(State.NO_GLASSES, "") } }
             }
         }
     }
@@ -163,7 +167,21 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
         handler.removeCallbacksAndMessages(null)
         // Same handler as connect, so a later start() cannot overtake this teardown.
-        handler.post { teardown(); setState(State.NO_GLASSES, "") }
+        handler.post { leaveHalfWidth3d(); teardown(); setState(State.NO_GLASSES, "") }
+    }
+
+    /**
+     * Before letting go of the glasses: if they are in half-width 3D, put them back in 2D, because
+     * whatever Android shows on them next (its mirror of the phone) is a flat picture.
+     */
+    private fun leaveHalfWidth3d() {
+        stereo.unplugged()
+        if (wantedDisplayMode == McuProtocol.MODE_HALF_SBS) wantedDisplayMode = McuProtocol.MODE_2D_60
+        val m = mcu ?: return
+        if (stats.displayMode != McuProtocol.MODE_HALF_SBS) return
+        val ok = try { m.setDisplayMode(McuProtocol.MODE_2D_60) } catch (_: Throwable) { false }
+        stats.displayMode = McuProtocol.MODE_2D_60
+        stats.note("leaving: glasses put back in 2D " + if (ok) "accepted" else "REJECTED or no answer")
     }
 
     /** Try again after a failure (also called when the app gains camera permission). */
@@ -481,8 +499,24 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
             val now = m.getDisplayMode()
             if (now != null && now != stats.displayMode) { stats.note("glasses changed mode by themselves: " + McuProtocol.modeName(stats.displayMode) + " -> " + McuProtocol.modeName(now)); stats.displayMode = now }
         }
+        // Half-width 3D is run by the stereo switch, which also puts the glasses back in 2D when it fails.
+        val size = try { externalDisplaySize?.invoke() } catch (_: Throwable) { null }
+        if (size != null && state == State.STREAMING) {
+            val before = stereo.state
+            val action = stereo.step(stats.displayMode.takeIf { it >= 0 }?.let { it == McuProtocol.MODE_HALF_SBS }, size[0], size[1])
+            if (action != null) {
+                val target = if (action == StereoSwitch.Action.SET_3D) McuProtocol.MODE_HALF_SBS else McuProtocol.MODE_2D_60
+                val ok = m.setDisplayMode(target)
+                stats.displayMode = m.getDisplayMode() ?: stats.displayMode
+                wantedDisplayMode = target
+                sbsWaitSeconds = 0
+                stats.note("3D attempt ${stereo.attempts}: set " + McuProtocol.modeName(target) + " " + (if (ok) "accepted" else "REJECTED") + (if (stereo.lastReason.isNotEmpty()) " (" + stereo.lastReason + ")" else ""))
+            }
+            if (stereo.state != before) listener.onLog("3D: ${before.name} -> ${stereo.state.name}, attempt ${stereo.attempts}, display ${size[0]}x${size[1]}" + (if (stereo.lastReason.isNotEmpty()) ", " + stereo.lastReason else ""))
+        }
         val mode = stats.displayMode
-        val threeD = mode == McuProtocol.MODE_SBS_60 || mode == McuProtocol.MODE_SBS_90 || mode == McuProtocol.MODE_HALF_SBS
+        val managed = stereo.state != StereoSwitch.State.OFF && stereo.state != StereoSwitch.State.GAVE_UP
+        val threeD = mode == McuProtocol.MODE_SBS_60 || mode == McuProtocol.MODE_SBS_90 || (mode == McuProtocol.MODE_HALF_SBS && !managed)
         val present = try { sideBySideDisplayPresent?.invoke() } catch (_: Throwable) { null } ?: return
         if (!threeD || present) { sbsWaitSeconds = 0; return }
         if (++sbsWaitSeconds < SBS_GRACE_SECONDS) return

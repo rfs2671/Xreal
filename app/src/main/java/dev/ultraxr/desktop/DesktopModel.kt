@@ -314,6 +314,26 @@ class Dwell(private val holdNs: Long = 900_000_000L, private val armNs: Long = 2
  * All of it stays inside the central part of the glasses' 43 x 25 degree view when looked at,
  * because the edges of the optics are the least sharp.
  */
+/**
+ * Two-eye geometry for the glasses' 3D mode. Each eye sits half the eye distance to the side of the
+ * head's centre. The glasses' optics show both panels converged at [CONVERGENCE_M] (where a flat 2D
+ * picture appears), so each eye's view is turned towards the nose by [shift]: something at that
+ * distance lands on the same pixel in both eyes, nearer things are seen crossed, farther uncrossed.
+ */
+object Stereo {
+    /** Distance at which the glasses show a flat picture (the value Pocket XR's driver uses for XREAL glasses). */
+    const val CONVERGENCE_M = 4.0
+
+    /** Sideways position of the eye drawn into the left ([half] 0) or right ([half] 1) half of the picture, metres. */
+    fun eyeOffset(half: Int, ipdM: Double, swap: Boolean): Double = if ((half == 0) != swap) -ipdM / 2 else ipdM / 2
+
+    /** How far that eye's view centre is turned, as a tangent (positive = to the wearer's right). */
+    fun shift(eyeOffset: Double): Double = -eyeOffset / CONVERGENCE_M
+
+    /** Where a point [x] to the right and [depth] ahead of the head's centre lands in that eye's picture, -1..1. */
+    fun pictureX(x: Double, depth: Double, eyeOffset: Double, tanH: Double): Double = ((x - eyeOffset) / depth - shift(eyeOffset)) / tanH
+}
+
 object Rail {
     val PITCH = Math.toRadians(-11.0)
     const val RADIUS = 2.0
