@@ -158,3 +158,18 @@ None of these changes has been run on the glasses.
 - Change: half-width 3D is no longer attempted unless "Try half-width 3D (experimental)" is
   switched on in Settings (off by default; covers games and the desktop). A game now starts
   directly in 2D.
+
+### First picture seen in the glasses from a WebXR browser session
+
+After unplugging and plugging the glasses in again, with 3D attempts off, the owner confirmed he
+saw the picture: Wolvic's terms of service panel, in 2D (one picture for both eyes). From the
+session record and log (about 85 s worn):
+
+- 6DoF: position trusted while worn; a capture taken after he had moved shows the panel off to
+  one side, i.e. it stayed in the room rather than following the head. Not confirmed by him.
+- Hands: the right hand was tracked for 269 frames (about 9 s); the left for none. No pinch was
+  registered. Whether he pinched is not known.
+- Frame pacing: 3172 of roughly 5040 compositor frames were flagged late, median 3.9 ms,
+  95th percentile 7 ms, worst 16 ms.
+- Not reached: accepting Wolvic's terms (shown inside the glasses, needs a pinch on AGREE),
+  entering XR dragging, any interaction.
