@@ -109,3 +109,37 @@ kernel log shows the same decisions). Details and an untested patch: tools/kerne
 - The app's old guard put the glasses back in 2D after 8 s whenever no 3840-wide display
   appeared, which also ended half-width 3D. The desktop now runs half-width 3D through
   `StereoSwitch` instead (three attempts, then 2D).
+
+## First live WebXR run on the glasses, 17 November 2026
+
+One short run by the owner: Ultra XR, XR dragging, Wolvic. He reported "glasses go black". From
+the phone's log, a capture of what the phone sent to the glasses, and the session record:
+
+- The 3D command was accepted on the first attempt. The link dropped and came back at
+  1920x1080@60 after 3.4 s (no narrow link this time). The glasses reported half-width 3D for
+  about 3 s, then logged `Open OLED 2D` and reported mode 1 again, with no link restart. The
+  app sent no mode command at that moment. So on this run the glasses did not keep 3D once
+  their screen came on. Whether they ever show half-width 3D from this phone is not established.
+- The app had already started the browser with one view per eye. With the glasses in 2D that
+  put both eye pictures in front of both eyes, squashed: the state that must never happen.
+  The picture was also Wolvic's dark start-up world, which is close to invisible on see-through
+  glasses in a lit room. The browser window was not in the one capture taken (taken after the
+  glasses were put down, so that says nothing about where it was while worn).
+- The runtime, compositor and browser worked on the phone: Monado on the phone's GPU, Wolvic's
+  OpenXR session reached FOCUSED, the phone composited two eye views to the glasses display.
+- 6DoF while worn (first 100 s): position trusted, 0.13 m from the start point, 20 to 90
+  landmarks. The session record's 65 m "maximum travel" comes from after the glasses were put
+  down and is not a wearing result.
+- Hands: 0 frames in which a hand was tracked in 240 s. Not known whether hands were held up.
+- Frame pacing: about 1000 "missed frame" warnings in the first minute, median 1.5 ms late.
+- The phone locked once during the run (16 s in), which switched the glasses' screen off for 3 s.
+- A 240 s raw tracking recording (2.7 GB) is on the phone.
+
+Changed because of this run:
+
+- `StereoSwitch`: 3D only counts after the glasses have held it for 6 s with a full picture.
+  Falling back to 2D during that time is a failed attempt (retried, three in all, then 2D).
+- `XrHost`: if the glasses leave 3D during a session the runtime switches to one view at once.
+- The glasses' mode changes are written to the log with their numbers.
+
+None of these changes has been run on the glasses.

@@ -66,6 +66,18 @@ class LauncherActivity : Activity(), Tracking.Observer {
             if (i?.hasExtra("sim_wearer") == true) Tracking.simulateWearer = i.getBooleanExtra("sim_wearer", false)
             if (i?.getBooleanExtra("dump_egl", false) == true) dumpEglConfigs()
             if (i?.getBooleanExtra("test_site", false) == true) dev.ultraxr.xr.TestSiteServer.start(applicationContext)
+            // "--ei record_seconds N": record raw tracking data for N seconds as soon as the glasses stream (one live test, no button).
+            val recSeconds = i?.getIntExtra("record_seconds", 0) ?: 0
+            if (recSeconds > 0) Thread {
+                for (n in 0 until 900) {
+                    val l = Tracking.link
+                    if (l != null && l.state == dev.ultraxr.glasses.GlassesLink.State.STREAMING) {
+                        if (!l.recording) l.record(java.io.File(getExternalFilesDir("recordings"), "live-" + System.currentTimeMillis() + ".uxrec"), recSeconds)
+                        break
+                    }
+                    Thread.sleep(1000)
+                }
+            }.start()
         }
         if (i?.getBooleanExtra("desktop", false) != true) return
         startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_AUTOMATION, i.getBooleanExtra(DesktopActivity.EXTRA_AUTOMATION, false))

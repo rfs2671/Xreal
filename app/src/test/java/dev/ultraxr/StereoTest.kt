@@ -57,7 +57,8 @@ class StereoTest {
         // the old picture is still reported for a moment, with the glasses already in 3D
         assertTrue(s.run(3, true, 1920, 1080).isEmpty()); assertEquals(State.STARTING, s.state)
         s.run(1, true, 0, 0)
-        assertTrue(s.run(2, true, 1920, 1080).isEmpty())
+        assertTrue(s.run(StereoSwitch.HOLD_SECONDS - 1, true, 1920, 1080).isEmpty()); assertEquals("not yet: the glasses' screen is not on yet", State.STARTING, s.state)
+        assertTrue(s.run(1, true, 1920, 1080).isEmpty())
         assertEquals(State.ACTIVE, s.state); assertEquals(1, s.attempts); assertEquals(1, s.commands)
         assertTrue("and stays so", s.run(600, true, 1920, 1080).isEmpty())
         assertEquals(State.ACTIVE, s.state)
@@ -84,7 +85,7 @@ class StereoTest {
 
     @Test fun givingUpIsNotUndoneByLeavingAndReopeningTheDesktop() {
         val s = StereoSwitch(1); s.want(true); s.run(2, false, 1920, 1080)
-        assertEquals(listOf(Action.SET_2D), s.run(13, true, 0, 0)); assertEquals(State.GAVE_UP, s.state)
+        assertEquals(listOf(Action.SET_2D), s.run(StereoSwitch.START_TIMEOUT_SECONDS + 1, true, 0, 0)); assertEquals(State.GAVE_UP, s.state)
         s.want(false); s.run(2, false, 1920, 1080); s.want(true)
         assertTrue(s.run(60, false, 1920, 1080).isEmpty()); assertEquals(State.GAVE_UP, s.state)
         s.reset()                                            // the user ticked the box again
@@ -101,7 +102,7 @@ class StereoTest {
     }
 
     @Test fun losingThePictureWhileActiveGoesBackTo2d() {
-        val s = StereoSwitch(); s.want(true); s.run(2, false, 1920, 1080); s.run(1, true, 0, 0); s.run(2, true, 1920, 1080)
+        val s = StereoSwitch(); s.want(true); s.run(2, false, 1920, 1080); s.run(1, true, 0, 0); s.run(StereoSwitch.HOLD_SECONDS, true, 1920, 1080)
         assertEquals(State.ACTIVE, s.state)
         assertTrue("a short blink is ignored", s.run(2, true, 0, 0).isEmpty()); s.run(1, true, 1920, 1080)
         assertEquals(listOf(Action.SET_2D), s.run(StereoSwitch.LOST_SECONDS, true, 0, 0))
@@ -109,7 +110,7 @@ class StereoTest {
     }
 
     @Test fun leavingTheDesktopReturnsTheGlassesTo2dOnce() {
-        val s = StereoSwitch(); s.want(true); s.run(2, false, 1920, 1080); s.run(1, true, 0, 0); s.run(2, true, 1920, 1080)
+        val s = StereoSwitch(); s.want(true); s.run(2, false, 1920, 1080); s.run(1, true, 0, 0); s.run(StereoSwitch.HOLD_SECONDS, true, 1920, 1080)
         s.want(false)
         assertEquals(listOf(Action.SET_2D), s.run(5, true, 1920, 1080))
         assertEquals(State.OFF, s.state)
@@ -117,13 +118,22 @@ class StereoTest {
     }
 
     @Test fun theGlassesLeaving3dThemselvesIsAccepted() {
-        val s = StereoSwitch(); s.want(true); s.run(2, false, 1920, 1080); s.run(1, true, 0, 0); s.run(2, true, 1920, 1080)
+        val s = StereoSwitch(); s.want(true); s.run(2, false, 1920, 1080); s.run(1, true, 0, 0); s.run(StereoSwitch.HOLD_SECONDS, true, 1920, 1080)
         assertNull(s.step(false, 1920, 1080)); assertEquals(State.GAVE_UP, s.state)
         assertTrue(s.run(60, false, 1920, 1080).isEmpty())
     }
 
+    @Test fun glassesThatFallBackTo2dWhenTheirScreenComesOnAreAFailedAttempt() {
+        // The Pixel, 17 November 2026: 3D accepted, link back at 1920x1080, three seconds later the glasses report 2D.
+        val s = StereoSwitch(); s.want(true); s.run(2, false, 1920, 1080)
+        s.run(3, true, 0, 0); assertTrue(s.run(3, true, 1920, 1080).isEmpty())
+        assertEquals(listOf(Action.SET_2D), s.run(1, false, 1920, 1080))
+        assertEquals(State.RESTING, s.state); assertTrue(s.lastReason.contains("2D"))
+        // never ACTIVE in between, so no game was started with two eye pictures
+    }
+
     @Test fun unpluggingStartsOver() {
-        val s = StereoSwitch(1); s.want(true); s.run(2, false, 1920, 1080); s.run(13, true, 0, 0)
+        val s = StereoSwitch(1); s.want(true); s.run(2, false, 1920, 1080); s.run(StereoSwitch.START_TIMEOUT_SECONDS + 1, true, 0, 0)
         assertEquals(State.GAVE_UP, s.state)
         s.unplugged(); assertEquals(State.OFF, s.state)
         assertEquals(listOf(Action.SET_3D), s.run(3, false, 1920, 1080))

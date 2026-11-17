@@ -29,6 +29,7 @@ class StereoSwitch(private val maxAttempts: Int = 3) {
     private var good = 0
     private var bad = 0
     private var sawDrop = false
+    private var sawThreeD = false
 
     /** The desktop wants 3D ([on]) or plain 2D. Takes effect at the next [step]. */
     @Synchronized fun want(on: Boolean) { wanted = on }
@@ -57,9 +58,13 @@ class StereoSwitch(private val maxAttempts: Int = 3) {
                 if (width == 0) sawDrop = true
                 good = if (full && halfSbs == true) good + 1 else 0
                 bad = if (small) bad + 1 else 0
+                // Seen on the Pixel: the glasses take the 3D mode, the link comes back, and when their screen
+                // switches on a few seconds later they are in 2D again. That is a failed attempt, not 3D.
+                if (full && halfSbs == true) sawThreeD = true
+                if (sawThreeD && full && halfSbs == false && (sawDrop || seconds >= LINGER_SECONDS)) return fail("the glasses went back to 2D by themselves")
                 // The old 2D picture can still be reported for a moment after the command: wait for
                 // the link to drop first (or long enough that it would have).
-                if (good >= STABLE_SECONDS && (sawDrop || seconds >= LINGER_SECONDS)) { state = State.ACTIVE; bad = 0; lastReason = ""; return null }
+                if (good >= HOLD_SECONDS && (sawDrop || seconds >= LINGER_SECONDS)) { state = State.ACTIVE; bad = 0; lastReason = ""; return null }
                 if (bad >= STABLE_SECONDS) return fail("the link came up too narrow for a full picture")
                 if (seconds >= START_TIMEOUT_SECONDS) return fail(if (halfSbs == true) "no picture in 3D" else "the glasses did not switch to 3D")
             }
@@ -85,7 +90,7 @@ class StereoSwitch(private val maxAttempts: Int = 3) {
     private fun begin(): Action? {
         // Already in 2D here, so giving up needs no command.
         if (attempts >= maxAttempts) { state = State.GAVE_UP; if (lastReason.isEmpty()) lastReason = "3D was already tried $maxAttempts times"; return null }
-        attempts++; state = State.STARTING; seconds = 0; good = 0; bad = 0; sawDrop = false
+        attempts++; state = State.STARTING; seconds = 0; good = 0; bad = 0; sawDrop = false; sawThreeD = false
         return send(Action.SET_3D)
     }
 
@@ -101,8 +106,10 @@ class StereoSwitch(private val maxAttempts: Int = 3) {
         const val FULL_WIDTH = 1920
         const val FULL_HEIGHT = 1080
         const val STABLE_SECONDS = 2
+        /** How long the glasses must hold 3D with a full picture before it counts (their screen comes on about 3 s after the link). */
+        const val HOLD_SECONDS = 6
         const val LINGER_SECONDS = 5
-        const val START_TIMEOUT_SECONDS = 12
+        const val START_TIMEOUT_SECONDS = 16
         const val REST_SECONDS = 4
         const val REST_TIMEOUT_SECONDS = 20
         const val LOST_SECONDS = 4

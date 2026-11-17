@@ -62,6 +62,24 @@ object XrHost : OpenXrGlassesLayer.Host {
     private val BROWSERS = listOf("com.igalia.wolvic")
     /** Whether the glasses were in a 3D mode when the runtime was configured for the running application. */
     @Volatile var stereoAtStart = false; private set
+    /** The session is drawing one view per eye for the glasses' half-width 3D mode. */
+    @Volatile private var halfStereoRunning = false
+    private var stereoCheckNs = 0L
+
+    /**
+     * The glasses can drop out of 3D during a session (seen on the Pixel one second after it started). In 2D they
+     * show the whole picture to both eyes, so two eye views side by side must stop at once: one view, no depth.
+     */
+    private fun dropToOneViewIfStereoLost() {
+        val now = System.nanoTime()
+        if (!halfStereoRunning || now - stereoCheckNs < 300_000_000L) return
+        stereoCheckNs = now
+        if (Tracking.halfStereoActive) return
+        halfStereoRunning = false; stereoAtStart = false
+        UltraXrFeed.configureSingleView(true); UltraXrFeed.configureEyes(0f, 0f)
+        lastEvent = "the glasses left 3D during the session: now one picture for both eyes, no depth"
+        Tracking.log("OpenXR: $lastEvent")
+    }
     @Volatile var lastEvent = "no OpenXR application has connected yet"; private set
 
     fun init(context: Context) {
@@ -154,6 +172,7 @@ object XrHost : OpenXrGlassesLayer.Host {
             // 960x1080 with that eye's whole field of view.
             val half = !sideBySide && Tracking.halfStereoActive
             stereoAtStart = sideBySide || half
+            halfStereoRunning = half
             UltraXrFeed.configureDisplay(m.physicalWidth, m.physicalHeight, m.refreshRate, tanH, tanV)
             // In 2D the glasses show the whole picture to both eyes: the runtime then draws one view over all of
             // it. The two eye pictures are never put side by side in front of both eyes.
@@ -214,6 +233,7 @@ object XrHost : OpenXrGlassesLayer.Host {
         var vioTickNs = 0L
         while (feeding) {
             try { Thread.sleep(3) } catch (_: InterruptedException) {}
+            dropToOneViewIfStereoLost()
             if (Tracking.simulateWearer) {   // test builds on an emulator: a made-up head and hands
                 val now = System.nanoTime()
                 val hands = now - lastHandNs > 33_000_000L

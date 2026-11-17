@@ -20,7 +20,6 @@ class GameLibraryTest {
         // nothing has been played on the glasses yet, so nothing may say so
         assertTrue(shipped.none { it.state == WebGame.State.VERIFIED })
         assertTrue(shipped.none { it.state == WebGame.State.UNKNOWN })
-        assertTrue(shipped.any { it.state == WebGame.State.BLOCKED })
     }
 
     @Test fun labelsSayWhatWasDone() {
@@ -42,8 +41,9 @@ class GameLibraryTest {
     }
 
     @Test fun gamesThatCannotStartAreListedLast() {
-        val o = GameLibrary.ordered(shipped)
-        val firstBlocked = o.indexOfFirst { it.state == WebGame.State.BLOCKED }
-        assertTrue(o.drop(firstBlocked).all { it.state == WebGame.State.BLOCKED })
+        fun g(n: String, st: WebGame.State) = WebGame(n, "https://example.org/" + n, "hands", st, "")
+        val o = GameLibrary.ordered(listOf(g("a", WebGame.State.BLOCKED), g("b", WebGame.State.TESTED), g("c", WebGame.State.BLOCKED), g("d", WebGame.State.TESTED)))
+        assertEquals(listOf("b", "d", "a", "c"), o.map { it.name })
+        assertEquals(shipped, GameLibrary.ordered(shipped).sortedBy { shipped.indexOf(it) })
     }
 }

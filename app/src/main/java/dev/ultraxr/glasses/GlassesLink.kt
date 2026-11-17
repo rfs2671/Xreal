@@ -539,7 +539,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         m.drain(120) // unsolicited messages: screen on/off, panel power, firmware log lines
         if (++pollTick % 2 == 0) {
             val now = m.getDisplayMode()
-            if (now != null && now != stats.displayMode) { stats.note("glasses changed mode by themselves: " + McuProtocol.modeName(stats.displayMode) + " -> " + McuProtocol.modeName(now)); stats.displayMode = now }
+            if (now != null && now != stats.displayMode) { listener.onLog("glasses mode read: ${stats.displayMode} -> $now"); stats.note("glasses changed mode by themselves: " + McuProtocol.modeName(stats.displayMode) + " -> " + McuProtocol.modeName(now)); stats.displayMode = now }
         }
         // Half-width 3D is run by the stereo switch, which also puts the glasses back in 2D when it fails.
         val size = try { externalDisplaySize?.invoke() } catch (_: Throwable) { null }
