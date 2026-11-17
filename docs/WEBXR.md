@@ -41,8 +41,9 @@ controllers; a game or browser session in 2D uses the single-view mode automatic
 
 ## Proved on the emulator (`tools/ui-automation/webxr_test.py`)
 
-Wolvic 1.4 (Chromium engine, x86-64), unmodified except two numbers in a test copy so it accepts
-the emulator's only graphics configurations. 16 of 20 checks pass:
+Wolvic 1.4 (Chromium engine, x86-64) in a test copy with two changes (`tools/wolvic/patch_wolvic.py
+emulator`): it accepts the emulator's only graphics configurations, and it treats an unknown device
+model as a generic hand-tracking headset (see "The device model" below). All 20 checks pass:
 
 - WebXR is present; `immersive-vr` and `immersive-ar` are both offered
 - an `immersive-ar` session starts from a hand pinch on the page's button
@@ -55,17 +56,49 @@ the emulator's only graphics configurations. 16 of 20 checks pass:
   exact values fed, with `emulatedPosition` false
 - on the display: the left half holds the left eye's view and the right half the right eye's; a
   point 1.5 m away is 33 pixels apart between them (32 predicted)
+- two tracked hands as input sources (`tracked-pointer`, profile `generic-hand`), all 25 joints each
+- finger positions are real: the thumb and index tips are 4 mm apart in a pinch and 147 mm apart
+  when open, as the simulated hands are
+- pinches arrive as `select` events (14 in the run)
 - with the stand-in glasses in 2D (checked by hand, same page): eye separation 0, symmetric
   projections, one square drawn once in the middle of the whole picture
 
+## The device model
+
+Wolvic gives pages input sources only on device models it knows (a table in its native code:
+Quest, Pico, Lynx-R1, Magic Leap 2 and a few more). On any other model, an emulator or a Pixel,
+its controller type is "unknown" and the web engine drops every input source: pages get no hands,
+no joints, no `select`, although the same hands work in Wolvic's own windows. An unmodified
+Wolvic release on the Pixel would start sessions but give games no input.
+
+`tools/wolvic/patch_wolvic.py` makes the copy that is used instead: Igalia's release with one
+value changed, so that an unknown model counts as the Lynx-R1 (a headset used with hands). The
+emulator copy made by that tool is the one all the results here come from. The phone copy (arm64,
+the same release and the same one change) is installed on the Pixel but has never been run.
+A build from source would be cleaner, but Wolvic's engines need their own patched builds of
+GeckoView or Chromium, which this machine cannot produce.
+
+## Existing third-party pages (`tools/ui-automation/webxr_pages.py`, emulator)
+
+The pages are not ours and are not changed. The test presses each page's own "enter XR" button and
+then reads what the page's session was given.
+
+| Page | Result |
+|---|---|
+| three.js XR dragging (pick shapes up with a ray) | `immersive-ar`, additive, 1764 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 12 selects |
+| three.js XR ball shooter (physics) | `immersive-ar`, additive, 1626 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 11 selects |
+| three.js AR cones (place objects) | `immersive-ar`, additive, 1812 frames, two views, head yaw 0.5 rad, two hands with 25 joints, 12 selects |
+| three.js hand input cubes | Refused: the page *requires* `hand-tracking`, and this engine does not grant that feature (it still delivers joints to pages that ask for it as optional) |
+
+"Ran" here means the session, the two eye views, the moving head pose, the hands and the pinches all
+reached the page. Nobody played these, and the simulated hands do not aim at anything, so whether
+a shape can actually be picked up is not shown.
+
 ## Not working
 
-- **Input inside an immersive session (4 checks fail).** Pages get no input sources at all from
-  this Wolvic build on this runtime: no hands, no joints, no `select`. The same hands do move
-  Wolvic's pointer and click in its own windows, so the joints reach the browser; it does not
-  pass them on. Not yet known whether this is the Chromium engine build or something the runtime
-  still gets wrong. The Gecko build, which is the one for the phone, could not be run on the
-  emulator (it crashes in graphics setup under arm translation).
+- **Pages that require hand tracking** (rather than ask for it) are refused by this engine. The
+  Gecko engine may differ; it could not be run on the emulator at all (it crashes in graphics
+  setup under arm translation), so only the Chromium engine has been exercised.
 - **Hit testing and anchors.** Not implemented, and not asked for by the test: a session that
   requests them makes Wolvic 1.4 end the page ("Environment integration is not supported").
 - **Bluetooth gamepads as XR input.** Android delivers gamepad events to the focused app, which
@@ -74,9 +107,11 @@ the emulator's only graphics configurations. 16 of 20 checks pass:
 
 ## Not tested at all
 
-- Anything on the Pixel or the glasses, including whether Wolvic's arm64 Gecko build runs there.
+- Anything on the Pixel beyond installing: Ultra XR and the Wolvic copy are installed and the
+  phone's runtime broker answers a query correctly; neither a session nor Wolvic itself has run there.
+- Anything on the glasses.
 - Real tracking through this path. The simulated wearer proves the plumbing, not the tracking.
-- Any third-party WebXR game. Without input in the session there was no point yet.
+- Whether any game is actually playable. Third-party pages were run (see below), not played.
 - Frame timing and heat on the phone.
 
 ## Tools

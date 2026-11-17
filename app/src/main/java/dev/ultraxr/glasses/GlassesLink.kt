@@ -417,12 +417,54 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
                 try { dump.write(n and 0xFF); dump.write(n shr 8); dump.write(buf, 0, n) } catch (_: Exception) {}
                 dumpedReports++
             }
+            recordWrite(2, now, buf, n)
             pipeline.onImuReport(buf, n, now)
+        }
+    }
+
+    // ---- recording for offline tracking work
+    private var rec: java.io.DataOutputStream? = null
+    private var recUntilNs = 0L
+    private val recLock = Any()
+    @Volatile var recordedBytes = 0L; private set
+    val recording: Boolean get() = rec != null
+
+    /**
+     * Records everything the tracker is fed, raw, for [seconds]: every camera frame and every motion report, each
+     * with the time it arrived. Played back later through the same decoding and the same estimator, it lets
+     * tracking changes be compared on the same motion without the glasses.
+     *
+     * File: the line "UXREC1", then records of: type (1 = camera frame, 2 = motion report), arrival time in
+     * System.nanoTime() nanoseconds (8 bytes, big-endian), length (4 bytes), the bytes. About 9 MB a second.
+     */
+    fun record(file: File, seconds: Int) {
+        synchronized(recLock) {
+            stopRecording()
+            try {
+                file.parentFile?.mkdirs()
+                rec = java.io.DataOutputStream(java.io.BufferedOutputStream(FileOutputStream(file), 1 shl 20)).also { it.write(("UXREC1" + 10.toChar()).toByteArray()) }
+                recUntilNs = System.nanoTime() + seconds * 1_000_000_000L; recordedBytes = 0
+                listener.onLog("recording tracking data for $seconds s to $file")
+            } catch (e: Exception) { rec = null; listener.onLog("recording did not start: $e") }
+        }
+    }
+
+    private fun stopRecording() {
+        synchronized(recLock) { val r = rec ?: return; rec = null; try { r.close() } catch (_: Exception) {}; listener.onLog("recording finished: ${recordedBytes / 1_000_000} MB") }
+    }
+
+    private fun recordWrite(type: Int, tNs: Long, bytes: ByteArray, length: Int) {
+        if (rec == null) return
+        synchronized(recLock) {
+            val r = rec ?: return
+            if (tNs > recUntilNs) { stopRecording(); return }
+            try { r.writeByte(type); r.writeLong(tNs); r.writeInt(length); r.write(bytes, 0, length); recordedBytes += length + 13 } catch (_: Exception) { stopRecording() }
         }
     }
 
     private fun onFrame(frame: ByteArray) {
         val now = System.nanoTime()
+        recordWrite(1, now, frame, frame.size)
         val dump = frameDump
         if (dump != null && dumpedFrames < CAPTURE_FRAMES) { try { dump.write(frame) } catch (_: Exception) {}; dumpedFrames++ }
         pipeline.onCameraFrame(frame, now)
@@ -543,6 +585,7 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         conn = null
         try { frameDump?.close(); imuDump?.close() } catch (_: Exception) {}
         frameDump = null; imuDump = null
+        stopRecording()
     }
 
     private fun openCapture() {

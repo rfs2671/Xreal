@@ -33,6 +33,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
     private lateinit var banner: LinearLayout
     private lateinit var bannerText: TextView
     private lateinit var bannerButton: TextView
+    private lateinit var webList: LinearLayout
     private lateinit var appsList: LinearLayout
     private lateinit var bestText: TextView
     private val home = HomeScene()
@@ -122,6 +123,10 @@ class LauncherActivity : Activity(), Tracking.Observer {
         hero.add(Ui.button(this, "Spatial desktop") { startActivity(Intent(this, DesktopActivity::class.java)) }, topDp = 10)
         root.add(hero, topDp = 18)
 
+        root.add(Ui.text(this, "WebXR games", 18f, bold = true), topDp = 28)
+        webList = Ui.column(this)
+        root.add(webList, topDp = 10)
+
         root.add(Ui.text(this, "Your XR apps", 18f, bold = true), topDp = 28)
         appsList = Ui.column(this)
         root.add(appsList, topDp = 10)
@@ -173,9 +178,41 @@ class LauncherActivity : Activity(), Tracking.Observer {
         bannerText.text = msg; bannerButton.text = action; bannerAction = run; banner.visibility = View.VISIBLE
     }
 
+    /** The WebXR pages this build knows about, with what was actually observed for each (assets/webxr_pages.json). */
+    private fun refreshWeb() {
+        webList.removeAllViews()
+        fun note(t: String) = Ui.text(this, t, 14f, Ui.MUTED).apply {
+            background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity); val p = Ui.dp(this@LauncherActivity, 18); setPadding(p, p, p, p); setLineSpacing(0f, 1.2f)
+        }
+        val browser = XrRuntime.browser(this)
+        if (browser == null) {
+            webList.add(note("WebXR games run in the Wolvic browser on Ultra XR's runtime. Install the Ultra XR copy of Wolvic (tools/wolvic in the project) and the games appear here."))
+            return
+        }
+        val pages = try { org.json.JSONArray(assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { org.json.JSONArray() }
+        for (k in 0 until pages.length()) {
+            val o = pages.getJSONObject(k)
+            val row = Ui.row(this)
+            row.background = Ui.pressable(this, Ui.rounded(Ui.SURFACE, 20f, this))
+            val p = Ui.dp(this, 14); row.setPadding(p, p, p, p)
+            val col = Ui.column(this)
+            col.add(Ui.text(this, o.optString("name"), 16f, bold = true))
+            col.add(Ui.text(this, o.optString("needs") + " · " + o.optString("status"), 12f, Ui.MUTED).apply { setLineSpacing(0f, 1.2f) }, topDp = 4)
+            row.add(col, 0, weight = 1f)
+            row.add(Ui.text(this, "Open", 14f, Ui.ACCENT, bold = true).apply { gravity = Gravity.END }, ViewGroup.LayoutParams.WRAP_CONTENT)
+            row.isClickable = true
+            val url = o.optString("url"); val name = o.optString("name")
+            row.setOnClickListener { play(name) { stereo -> XrRuntime.launchUrl(this, browser, url, stereo) } }
+            webList.add(row, topDp = 8)
+        }
+        val open = Ui.button(this, "Open the browser") { play(browser.loadLabel(packageManager).toString()) { stereo -> XrRuntime.launch(this, browser, stereo) } }
+        webList.add(open, topDp = 10)
+    }
+
     private fun refreshApps() {
+        refreshWeb()
         appsList.removeAllViews()
-        val apps = XrRuntime.installedApps(this)
+        val apps = XrRuntime.installedApps(this).filter { !it.activityInfo.packageName.startsWith("com.igalia.wolvic") }   // the browser has its own section
         if (apps.isEmpty()) {
             appsList.add(Ui.text(this, "Android OpenXR games you install will show up here and start with one tap.", 14f, Ui.MUTED).apply {
                 background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity); val p = Ui.dp(this@LauncherActivity, 18); setPadding(p, p, p, p); setLineSpacing(0f, 1.2f)
@@ -211,28 +248,29 @@ class LauncherActivity : Activity(), Tracking.Observer {
      * before it starts (switching afterwards would take the game's picture away): ask for 3D, wait
      * for it to hold, then launch. If 3D cannot be had, say so instead of showing a doubled picture.
      */
-    private fun play(info: ResolveInfo) {
+    private fun play(info: ResolveInfo) = play(info.loadLabel(packageManager).toString()) { stereo -> XrRuntime.launch(this, info, stereo) }
+
+    private fun play(label: String, launch: (stereo: Boolean) -> Unit) {
         if (startingGame) return
         gameNote = false
         val link = Tracking.link
         val glasses = link?.state == GlassesLink.State.STREAMING
-        if (!glasses || Tracking.halfStereoActive || dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(this)) { stage?.stop(); XrRuntime.launch(this, info); return }
+        if (!glasses || Tracking.halfStereoActive || dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(this)) { stage?.stop(); launch(true); return }
         startingGame = true
         link!!.stereo.reset()
         Tracking.stereoWant("game", true)
-        val label = info.loadLabel(packageManager)
         val started = android.os.SystemClock.uptimeMillis()
         val wait = object : Runnable {
             override fun run() {
                 val sw = link.stereo
                 when {
                     isFinishing || isDestroyed -> { startingGame = false; Tracking.stereoWant("game", false) }
-                    Tracking.halfStereoActive -> { startingGame = false; banner.visibility = View.GONE; stage?.stop(); XrRuntime.launch(this@LauncherActivity, info) }
+                    Tracking.halfStereoActive -> { startingGame = false; banner.visibility = View.GONE; stage?.stop(); launch(true) }
                     sw.state == dev.ultraxr.glasses.StereoSwitch.State.GAVE_UP || android.os.SystemClock.uptimeMillis() - started > 90_000 -> {
                         // 3D could not be had: the glasses are back in 2D and the game gets one picture for both eyes.
                         startingGame = false; gameNote = true; Tracking.stereoWant("game", false)
-                        showBanner("3D could not be started (" + sw.lastReason.ifEmpty { "no answer from the glasses" } + "), so $label is shown in 2D: one picture for both eyes, without depth.", "Try 3D again") { play(info) }
-                        stage?.stop(); XrRuntime.launch(this@LauncherActivity, info, wantStereo = false)
+                        showBanner("3D could not be started (" + sw.lastReason.ifEmpty { "no answer from the glasses" } + "), so $label is shown in 2D: one picture for both eyes, without depth.", "Try 3D again") { play(label, launch) }
+                        stage?.stop(); launch(false)
                     }
                     else -> { showBanner("Starting 3D for $label (try ${sw.attempts.coerceAtLeast(1)} of 3). The picture blanks for a few seconds.", "Cancel") { startingGame = false; Tracking.stereoWant("game", false); banner.visibility = View.GONE; ui.removeCallbacks(this) }; ui.postDelayed(this, 500) }
                 }

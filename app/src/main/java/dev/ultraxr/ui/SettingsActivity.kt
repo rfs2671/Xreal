@@ -37,6 +37,19 @@ class SettingsActivity : Activity() {
         root.add(slider("World scale", "If virtual objects drift against the room when you turn your head, nudge this.", 80, 120, (s.fovScale * 100).toInt(), { "$it %" }) { s.fovScale = it / 100f }, topDp = 10)
         root.add(slider("Your height", "Sets where the floor grid sits.", 120, 200, (s.standingHeightM * 100).toInt(), { "$it cm" }) { s.standingHeightM = it / 100f }, topDp = 10)
 
+        // For tracking work without the glasses: one recording of real motion to replay offline.
+        val recCard = card("Record tracking data", "Saves 60 seconds of raw camera and motion data (about 550 MB) in the app's folder. Look around, then walk a few steps and come back to exactly where you started.")
+        recCard.add(Ui.button(this, "Record 60 seconds") {
+            val link = Tracking.link
+            if (link == null || link.state != dev.ultraxr.glasses.GlassesLink.State.STREAMING) android.widget.Toast.makeText(this, "The glasses are not streaming", android.widget.Toast.LENGTH_SHORT).show()
+            else {
+                val name = "track-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + ".uxrec"
+                link.record(java.io.File(getExternalFilesDir("recordings"), name), 60)
+                android.widget.Toast.makeText(this, "Recording for 60 seconds", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }, topDp = 10)
+        root.add(recCard, topDp = 10)
+
         root.add(Ui.text(this, "Ultra XR ${packageManager.getPackageInfo(packageName, 0).versionName}\nGPL-3.0. Built on Basalt, Monado, XR Gate and Pocket XR; see the project page for licences.", 12f, Ui.MUTED).apply { setLineSpacing(0f, 1.3f) }, topDp = 26)
         setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); addView(root) })
     }

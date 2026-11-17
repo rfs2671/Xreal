@@ -20,6 +20,18 @@ object XrRuntime {
             .sortedBy { it.loadLabel(c.packageManager).toString().lowercase() }
     }
 
+    /** The WebXR browser, if one that uses this runtime is installed (Wolvic's generic OpenXR builds). */
+    fun browser(c: Context): ResolveInfo? = installedApps(c).firstOrNull { it.activityInfo.packageName.startsWith("com.igalia.wolvic") }
+
+    /** Opens a web page in the WebXR browser with tracking kept alive behind it. */
+    fun launchUrl(c: Context, browser: ResolveInfo, url: String, wantStereo: Boolean = true) {
+        Tracking.stereoWant("game", wantStereo)
+        TrackingService.start(c)
+        XrHost.openShell()
+        val i = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).setClassName(browser.activityInfo.packageName, browser.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { c.startActivity(i) } catch (e: Exception) { Tracking.log("could not open $url in ${browser.activityInfo.packageName}: $e") }
+    }
+
     fun statusLine(c: Context): String = (if (available) "Runtime packaged and loaded" else "Runtime unavailable") + ": $detail; ${installedApps(c).size} OpenXR app(s) installed; ${XrHost.lastEvent}"
 
     /** Starts an OpenXR app with tracking kept alive behind it. */

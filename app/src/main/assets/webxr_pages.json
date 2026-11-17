@@ -1,0 +1,26 @@
+[
+  {
+    "name": "XR dragging (three.js)",
+    "url": "https://threejs.org/examples/webxr_xr_dragging.html",
+    "needs": "Hands: point and pinch to pick shapes up",
+    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses."
+  },
+  {
+    "name": "Ball shooter (three.js)",
+    "url": "https://threejs.org/examples/webxr_xr_ballshooter.html",
+    "needs": "Hands: pinch to shoot balls that bounce",
+    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses."
+  },
+  {
+    "name": "AR cones (three.js)",
+    "url": "https://threejs.org/examples/webxr_ar_cones.html",
+    "needs": "Hands: pinch to place cones in the room",
+    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses."
+  },
+  {
+    "name": "Hand cubes (three.js)",
+    "url": "https://threejs.org/examples/webxr_vr_handinput_cubes.html",
+    "needs": "Hands with finger joints, as a required feature",
+    "status": "Does not start: this browser engine refuses sessions that require hand tracking, although it delivers hand joints to pages that only ask for them."
+  }
+]
