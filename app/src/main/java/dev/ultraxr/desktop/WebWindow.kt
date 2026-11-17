@@ -28,7 +28,7 @@ import dev.ultraxr.tracking.Tracking
  * and WebGL work. Everything here runs on the main thread.
  */
 @SuppressLint("SetJavaScriptEnabled")
-class WebWindow(private val context: Context, val id: Int, private val kind: String, initialUrl: String, private val onChanged: (WebWindow) -> Unit) {
+class WebWindow(private val context: Context, val id: Int, private val kind: String, initialUrl: String, private val darkPages: Boolean, private val onChanged: (WebWindow) -> Unit) {
     val pixelWidth = PIXEL_WIDTH
     var pixelHeight = PIXEL_HEIGHT; private set
     var title: String = ""; private set
@@ -68,14 +68,13 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
     fun reload() { web?.reload() }
     fun canGoBack(): Boolean = web?.canGoBack() ?: false
 
-    /** Inserts text at the page's focused field, as typing on a keyboard would. */
+    /** Inserts text at the page's focused field, as typing on a keyboard would; then Enter if asked. */
     fun typeText(text: String, enter: Boolean) {
         val w = web ?: return
-        if (text.isNotEmpty()) {
-            val js = org.json.JSONObject.quote(text)
-            w.evaluateJavascript("(function(t){var e=document.activeElement;if(!e)return;try{if(!document.execCommand('insertText',false,t)){if('value' in e){e.value+=t;e.dispatchEvent(new Event('input',{bubbles:true}));}}}catch(x){}})($js)", null)
-        }
-        if (enter) key(KeyEvent.KEYCODE_ENTER)
+        if (text.isEmpty()) { if (enter) key(KeyEvent.KEYCODE_ENTER); return }
+        val js = org.json.JSONObject.quote(text)
+        // Enter is sent only after the text has gone in: the script runs asynchronously.
+        w.evaluateJavascript("(function(t){var e=document.activeElement;if(!e)return;try{if(!document.execCommand('insertText',false,t)){if('value' in e){e.value+=t;e.dispatchEvent(new Event('input',{bubbles:true}));}}}catch(x){}})($js)") { if (enter) key(KeyEvent.KEYCODE_ENTER) }
     }
 
     fun key(code: Int) {
@@ -84,7 +83,7 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
         w.dispatchKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_DOWN, code, 0)); w.dispatchKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_UP, code, 0))
     }
 
-    /** Gamepad and keyboard events from the phone's activity, passed to the page (Gamepad API). */
+    /** Keyboard and gamepad events from the phone's activity, passed to the page (typing, Gamepad API). */
     fun forwardKey(e: KeyEvent): Boolean = web?.dispatchKeyEvent(e) ?: false
     fun forwardMotion(e: MotionEvent): Boolean = web?.dispatchGenericMotionEvent(e) ?: false
 
@@ -122,7 +121,8 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
         display = null
     }
 
-    private inner class Page(c: Context, d: Display) : Presentation(c, d) {
+    // A dark theme, so the page is told the system is in dark mode and darkening applies.
+    private inner class Page(c: Context, d: Display) : Presentation(c, d, android.R.style.Theme_Material_NoActionBar) {
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
             val w = WebView(context)
@@ -134,11 +134,14 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
                 useWideViewPort = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 setSupportMultipleWindows(false)
+                // On see-through glasses a white page is a bright slab and black is transparent, so pages are
+                // asked for their dark theme and darkened when they have none.
+                if (darkPages && android.os.Build.VERSION.SDK_INT >= 33) isAlgorithmicDarkeningAllowed = true
                 // Xbox Cloud Gaming supports Chrome on Android but refuses the embedded-WebView
                 // user agent; give that one site the plain Chrome form of the same string.
                 if (kind == "xbox") userAgentString = userAgentString.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+ "), "")
             }
-            w.setBackgroundColor(0xFF101418.toInt())
+            w.setBackgroundColor(if (darkPages) 0xFF000000.toInt() else 0xFF101418.toInt())
             w.webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, u: String?, favicon: android.graphics.Bitmap?) { loading = true; if (u != null) url = u; onChanged(this@WebWindow) }
                 override fun onPageFinished(view: WebView, u: String?) { loading = false; if (u != null) url = u; title = view.title ?: title; onChanged(this@WebWindow) }

@@ -7,6 +7,41 @@ Floating web windows in the glasses, controlled from the phone. Open it from the
 1920x1080@60 picture shown to both eyes (see PIXEL_RESULTS.md), so windows are placed in space
 around you and stay there as you turn your head, but there is no binocular depth.
 
+## How it is designed, and why
+
+The glasses are see-through: black is not a colour there, it is nothing, and a large bright
+area is glare. So the interface is drawn with light on nothing. There are no panels.
+
+- **The rail.** One thin line around you just below eye level. Windows sit above it; the
+  stretch under the focused window turns amber. It is the only permanent thing.
+- **The dock** hangs under the rail. Tip your head down and the apps are there; rest your gaze
+  on one for about a second and it opens (a ring closes as you hold).
+- **Focus** is a hairline of amber around a window and its title in white; other windows'
+  titles are grey and they carry no buttons.
+- **Pages are shown dark** by default, so a white web page is not a bright slab.
+- **Type:** Atkinson Hyperlegible throughout, a face drawn for low-acuity reading.
+- New windows take about three quarters of the view's width and controls stay near the middle,
+  because the edges of these optics are the least sharp.
+
+What other systems get wrong, from reviews and forum reports (2026), and the answer here:
+XREAL's app leaves the display stuck after mode switches (this never switches the glasses'
+mode); its screens wander in a moving vehicle (Gather, or a three-finger tap in pocket mode,
+brings everything back at once); Android XR's hand tracking misses grabs and has no eye
+tracking (hands are optional here and everything also works by looking or by touch);
+Viture's edges are too blurred to read (content and controls are kept central); and every
+phone-tethered system makes you look at the phone (pocket mode).
+
+## Without looking at the phone
+
+- **Pocket mode** (button on the phone): the screen goes black and becomes one touchpad that
+  works by feel, with a haptic tick for each action. Slide = pointer, tap = click, double-tap
+  and hold = drag, two fingers = scroll, pinch = resize, two-finger tap = next window, long
+  press = Move on/off, three-finger tap = bring everything in front of you. Leave with a
+  three-finger long press or Back twice. The phone must stay on: it is the computer.
+- **Look to press:** dock apps and the focused window's title-bar buttons.
+- **Keyboard and mouse** (Bluetooth or USB): keys type into the focused window, the mouse moves
+  its pointer, the wheel scrolls.
+
 ## Using it
 
 - **Open:** YouTube, Xbox Cloud, Browser, 3D web, or type an address or a search and press Go.
@@ -52,13 +87,17 @@ unit tests (`DesktopTest`, `PositionConfidenceTest`):
 - an attached 1920x1080 display taking over from the phone preview, the picture on it, detach,
   re-attach, windows surviving all three
 - 60 frames a second with two windows in the emulator's preview
+- pocket mode (black screen, tap clicks, Back twice leaves), keys typed into a window,
+  a white page shown dark on the attached display, the rail and dock geometry (unit tests)
 - Xbox Cloud Gaming's catalogue and YouTube load in a window (not signed in, nothing streamed)
 
 Not verified, because it needs the glasses, a head, hands or an account:
 
 - what the windows look like in the glasses, their size and sharpness, readability of text
 - head tracking of the windows, gaze focus, follow-head behaviour while actually turning
-- hand pointing and pinching
+- hand pointing and pinching; look-to-press with a real head (its timing is unit-tested)
+- pocket-mode gestures with more than one finger, haptics, and whether it works in a pocket
+- a real Bluetooth keyboard and mouse
 - two-finger scroll and pinch-resize on a real touchscreen (the emulator test uses volume keys)
 - game controllers reaching a page, Xbox Cloud sign-in and streaming, YouTube playback of real
   videos, audio routing
@@ -70,10 +109,10 @@ Known limits: Android's WebView has no WebXR, so immersive WebXR pages do not ru
 WebGL pages do. Pages cannot open the phone's keyboard; use the Type box. DRM-protected video
 may refuse to play or play at low quality.
 
-## The acceptance test (about ten minutes, glasses plugged into the Pixel)
+## The acceptance test (about twelve minutes, glasses plugged into the Pixel)
 
-1. **Open.** Start Ultra XR, tap Spatial desktop. In the glasses you should see a dark panel
-   with a clock. Tap YouTube, then Browser on the phone. *Pass:* two windows, the second to the
+1. **Open.** Start Ultra XR, tap Spatial desktop. In the glasses you should see a clock and a
+   thin line below it, nothing else. Tap YouTube, then Browser on the phone. *Pass:* two windows, the second to the
    right of the first, text readable.
 2. **Head.** Turn your head left and right. *Pass:* the windows stay where they are in the room
    and do not swim or jump. Look at each for a moment: its outline lights up.
@@ -85,16 +124,21 @@ may refuse to play or play at low quality.
    *Pass:* each does what it says and nothing disappears for good.
 5. **Follow.** Press Locked so it reads Following, then turn your body 90 degrees.
    *Pass:* that window comes with you after a moment; the locked one stays behind.
-6. **Hands.** Point at a window and pinch on a link; pinch a title bar and move your hand.
+6. **No phone.** Tip your head down to the dock and rest your gaze on Browser until the ring
+   closes. Then press Pocket mode, put the phone face-down, and use it by feel: slide, tap,
+   two-finger scroll, two-finger tap, three-finger tap. *Pass:* the app opens from your gaze
+   alone; each pocket gesture does its job with a tick you can feel; three-finger long press
+   leaves.
+7. **Hands.** Point at a window and pinch on a link; pinch a title bar and move your hand.
    *Pass:* the click lands where you point; the window follows your hand. (If hands are not
    picked up at all, note that and carry on.)
-7. **Game.** Tap Xbox Cloud, sign in, start any game with a controller connected to the phone.
+8. **Game.** Tap Xbox Cloud, sign in, start any game with a controller connected to the phone.
    *Pass:* the stream plays in the window and the controller works.
-8. **Reconnect.** Unplug the glasses, wait five seconds, plug them back in, choose Mirror if
+9. **Reconnect.** Unplug the glasses, wait five seconds, plug them back in, choose Mirror if
    Android asks. *Pass:* the same windows come back without reopening anything.
-9. **Background.** Switch to another app for half a minute and come back.
+10. **Background.** Switch to another app for half a minute and come back.
    *Pass:* the windows are still there and still follow your head.
-10. **Restart.** Close Ultra XR from recents and open the desktop again.
+11. **Restart.** Close Ultra XR from recents and open the desktop again.
     *Pass:* the same windows return in the same places.
 
 Report the step numbers that failed and what you saw.

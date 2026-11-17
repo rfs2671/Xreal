@@ -188,12 +188,23 @@ def main():
 
     # 10b. glasses attach and detach (an emulator's extra display stands in for the glasses)
     if uia.SERIAL.startswith("emulator"):
-        titles = sorted(w["title"] for w in state())
         uia.tap("Gather"); time.sleep(0.5)
         uia.adb("emu", "multidisplay", "add", "1", "1920", "1080", "240", "0"); time.sleep(5)
         t = uia.texts()
         check("when a display is attached the desktop moves onto it", any("Showing on the glasses" in x for x in t), "")
         uia.tap("Gather"); time.sleep(1.0)      # centre the windows for the new view
+        # a white page is darkened (black is see-through on the glasses)
+        go(BASE + "/light.html"); wait(title_is("light-page"), 15); time.sleep(1.5)
+        dshots = os.path.join(out, "glasses-dark"); os.makedirs(dshots, exist_ok=True)
+        for f in os.listdir(dshots): os.remove(os.path.join(dshots, f))
+        uia.adb("emu", "screenrecord", "screenshot", "--display", "1", dshots.replace(os.sep, "/")); time.sleep(1.5)
+        bright = 1.0
+        try:
+            import numpy as np, cv2
+            img = cv2.imread(os.path.join(dshots, sorted(os.listdir(dshots))[-1])); bright = float((img.min(axis=2) > 200).mean())
+        except Exception: pass
+        check("a white page is shown dark on the glasses display", bright < 0.15, "%.0f%% of the picture is near-white" % (bright * 100))
+        titles = sorted(w["title"] for w in state())
         shots = os.path.join(out, "glasses"); os.makedirs(shots, exist_ok=True)
         for f in os.listdir(shots): os.remove(os.path.join(shots, f))
         uia.adb("emu", "screenrecord", "screenshot", "--display", "1", shots.replace(os.sep, "/")); time.sleep(1.5)
@@ -203,7 +214,7 @@ def main():
             img = cv2.imread(os.path.join(shots, sorted(os.listdir(shots))[-1])); size = img.shape[1], img.shape[0]
             lit = float((img.max(axis=2) > 40).mean())
         except Exception as e: size = str(e)
-        check("the picture on the attached display is 1920x1080 and shows the windows", size == (1920, 1080) and lit > 0.15, "%s, %.0f%% lit" % (size, lit * 100))
+        check("the picture on the attached display is 1920x1080 and shows the windows", size == (1920, 1080) and lit > 0.02, "%s, %.0f%% lit" % (size, lit * 100))
         check("windows keep their pages across the switch", sorted(w["title"] for w in state()) == titles, "")
         uia.adb("emu", "multidisplay", "del", "1"); time.sleep(4)
         t = uia.texts()
@@ -212,6 +223,30 @@ def main():
         uia.adb("emu", "multidisplay", "add", "1", "1920", "1080", "240", "0"); time.sleep(5)
         check("re-attaching shows it on the display again", any("Showing on the glasses" in x for x in uia.texts()), "")
         uia.adb("emu", "multidisplay", "del", "1"); time.sleep(3)
+
+    # 10c. pocket mode: the whole screen is a touchpad; Back twice leaves it
+    go(BASE + "/click.html"); wait(title_is("click-test"), 15)
+    uia.tap("Pocket mode"); time.sleep(1.5)
+    if uia.find("Got it"): uia.tap("Got it"); time.sleep(0.8)     # Android's one-time note about full screen
+    check("Pocket mode covers the screen with a black touchpad", uia.find("Pocket touchpad") is not None, "")
+    pk = os.path.join(out, "12-pocket.png"); uia.shot(pk)
+    dark = 0.0
+    try:
+        import numpy as np, cv2
+        dark = float((cv2.imread(pk).max(axis=2) < 16).mean())
+    except Exception: pass
+    check("the phone screen is black in pocket mode", dark > 0.97, "%.1f%% black" % (dark * 100))
+    uia.sh("input tap 540 1200"); s = wait(title_is("clicked-1"), 10)
+    check("a tap anywhere in pocket mode clicks in the focused window", focused(s) is not None and focused(s)["title"] == "clicked-1", focused(s)["title"] if focused(s) else "")
+    uia.sh("input keyevent KEYCODE_BACK"); time.sleep(2.5)
+    check("one Back press does not leave pocket mode", uia.find("Pocket touchpad") is not None, "")
+    uia.sh("input keyevent KEYCODE_BACK; input keyevent KEYCODE_BACK"); time.sleep(1.2)
+    check("Back twice leaves pocket mode", uia.find("Pocket touchpad") is None and uia.find("Spatial desktop") is not None, "")
+
+    # 10d. a hardware keyboard types into the focused window
+    go(BASE + "/type.html"); wait(title_is("type-empty"), 15); time.sleep(1.0)
+    uia.sh("input keyevent KEYCODE_H KEYCODE_I"); s = wait(title_is("typed-hi"), 10)
+    check("keys from a keyboard are typed into the focused window", focused(s) is not None and focused(s)["title"] == "typed-hi", focused(s)["title"] if focused(s) else "")
 
     # 11. closing
     n0 = len(state()); uia.tap("Close"); s = wait(lambda s: len(s) == n0 - 1, 8)

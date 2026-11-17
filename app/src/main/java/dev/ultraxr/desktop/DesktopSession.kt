@@ -50,6 +50,18 @@ class DesktopSession(private val activity: Activity) {
     var gazeFocus: Boolean get() = prefs.getBoolean("gazeFocus", true); set(v) { prefs.edit().putBoolean("gazeFocus", v).apply() }
     var handGestures: Boolean get() = prefs.getBoolean("handGestures", true); set(v) { prefs.edit().putBoolean("handGestures", v).apply() }
     var dimUnfocused: Boolean get() = prefs.getBoolean("dim", true); set(v) { prefs.edit().putBoolean("dim", v).apply() }
+    /** Pages in their dark theme (black is see-through on the glasses). Applies to windows opened afterwards. */
+    var darkPages: Boolean get() = prefs.getBoolean("darkPages", true); set(v) { prefs.edit().putBoolean("darkPages", v).apply() }
+    /** Resting the gaze on a dock app or a title-bar button presses it: no phone and no hands needed. */
+    var lookToPress: Boolean get() = prefs.getBoolean("lookToPress", true); set(v) { prefs.edit().putBoolean("lookToPress", v).apply() }
+
+    private val regular: Typeface = try { Typeface.createFromAsset(activity.assets, "fonts/AtkinsonHyperlegible-Regular.ttf") } catch (_: Exception) { Typeface.SANS_SERIF }
+    private val bold: Typeface = try { Typeface.createFromAsset(activity.assets, "fonts/AtkinsonHyperlegible-Bold.ttf") } catch (_: Exception) { Typeface.DEFAULT_BOLD }
+    private val dwell = Dwell()
+    private var dockBitmap: Bitmap? = null
+    private var ringYaw = 0.0; private var ringPitch = 0.0; private var ringDistance = 2.0; private var ringProgress = 0.0
+    /** Called when something was pressed by looking, so the phone can give a haptic tick. */
+    var onLookPress: (() -> Unit)? = null
 
     fun start() {
         try { prefs.getString("layout", null)?.let { desktop.load(JSONObject(it)) } } catch (e: Exception) { Tracking.log("desktop: saved layout ignored: $e") }
@@ -69,7 +81,7 @@ class DesktopSession(private val activity: Activity) {
     private fun save() { prefs.edit().putString("layout", desktop.toJson().toString()).apply(); savedRevision = desktop.revision }
 
     private fun ensureWeb(w: DesktopWindow): WebWindow = web.getOrPut(w.id) {
-        WebWindow(activity, w.id, w.kind, w.url) { ww ->
+        WebWindow(activity, w.id, w.kind, w.url, darkPages) { ww ->
             desktop.find(ww.id)?.let { m ->
                 val t = ww.title.ifBlank { m.title }
                 if (m.title != t || m.url != ww.url) { m.title = t; m.url = ww.url; desktop.touch() }
@@ -108,6 +120,14 @@ class DesktopSession(private val activity: Activity) {
     fun type(text: String, enter: Boolean) { desktop.focused?.let { web[it.id]?.typeText(text, enter) } }
     fun focusedWeb(): WebWindow? = desktop.focused?.let { web[it.id] }
     fun resetLayout() { for (id in desktop.windows.map { it.id }) close(id); changed() }
+
+    /** Focus the next window that is showing (wraps around). Returns false if there is none to move to. */
+    fun cycleFocus(): Boolean {
+        val vis = desktop.windows.filter { !it.minimized }
+        if (vis.size < 2) return false
+        val i = vis.indexOfFirst { it.id == desktop.focusedId }
+        desktop.focus(vis[(i + 1) % vis.size].id); changed(); return true
+    }
 
     private fun changed() { onChanged?.invoke() }
 
@@ -167,6 +187,25 @@ class DesktopSession(private val activity: Activity) {
         }
         if (handGestures && !full) hands(nowNs, head, origin, anchor, tracked) else if (handDown) releaseHand()
 
+        // Look-to-press: the dock's apps and the title-bar buttons.
+        var looked: String? = null
+        if (lookToPress && !full && nowNs - padTouchNs > 700_000_000L && !handDown) {
+            val tile = Rail.dockTile(origin, forward, anchor, desktop.followAnchor.yaw, HomeApps.all.size)
+            if (tile != null) { looked = "dock:$tile"; ringDistance = Rail.DOCK_DISTANCE }
+            else {
+                val g = desktop.hit(origin, forward, anchor)
+                // only the focused window shows its buttons, so only those can be pressed
+                if (g != null && g.barButton != null && g.window.id == desktop.focusedId) { looked = "bar:${g.window.id}:${g.barButton.name}"; ringDistance = g.distance }
+            }
+        }
+        val fire = dwell.update(nowNs, looked)
+        ringYaw = Geometry.yawOf(forward); ringPitch = Geometry.pitchOf(forward); ringProgress = if (looked != null) dwell.progress else 0.0
+        if (fire != null) {
+            if (fire.startsWith("dock:")) open(HomeApps.all[fire.substring(5).toInt()])
+            else { val p = fire.split(":"); barAction(p[1].toInt(), BarButton.valueOf(p[2])) }
+            onLookPress?.invoke()
+        }
+
         if (desktop.revision != savedRevision && !handDown && !pressed) save()
         if (nowNs - lastPerfNs > 5_000_000_000L) {
             lastPerfNs = nowNs
@@ -203,7 +242,7 @@ class DesktopSession(private val activity: Activity) {
             if (d != null && !d.onBar && hit != null && hit.window.id == d.window.id) web[d.window.id]?.touch(MotionEvent.ACTION_MOVE, hit.u, hit.v)
         } else if (!hand.pinching && handDown) {
             val d = handDownHit
-            if (d != null && d.onBar && d.barButton != null && hit != null && hit.window.id == d.window.id && hit.barButton == d.barButton) barAction(d.window.id, d.barButton)
+            if (d != null && d.onBar && d.barButton != null && hit != null && hit.window.id == d.window.id && hit.barButton == d.barButton && d.window.id == desktop.focusedId) barAction(d.window.id, d.barButton)
             else if (d != null && !d.onBar) { val c = cursors[d.window.id] ?: doubleArrayOf(d.u, d.v); web[d.window.id]?.touch(MotionEvent.ACTION_UP, c[0], c[1]) }
             releaseHand()
         }
@@ -242,7 +281,12 @@ class DesktopSession(private val activity: Activity) {
             val minute = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
             if (homeBitmap == null || minute != homeMinute) { homeBitmap = drawHome(minute); homeMinute = minute; homeVersion++ }
         }
-        val frame = RenderFrame(list, anchor, if (showHome) homeBitmap else null, homeVersion, desktop.followAnchor.yaw, positionOk, if (dimUnfocused) 0.62f else 1f)
+        if (dockBitmap == null) dockBitmap = drawDock()
+        val f = desktop.focused?.takeIf { !it.minimized && full < 0 }
+        val frame = RenderFrame(list, anchor, if (showHome) homeBitmap else null, homeVersion, desktop.followAnchor.yaw, positionOk, if (dimUnfocused) 0.55f else 1f,
+            dock = if (full < 0) dockBitmap else null, dockVersion = 1, dockYaw = desktop.followAnchor.yaw,
+            railYaw = if (f != null) desktop.worldYaw(f) else Double.NaN, railHalf = if (f != null) Math.atan(f.shownWidth() / 2 / f.shownDistance()) else 0.0, showRail = full < 0,
+            dwellYaw = ringYaw, dwellPitch = ringPitch, dwellDistance = ringDistance, dwellProgress = ringProgress)
         for (r in renderers) r.frame = frame
         statusLine = when (head.mode) {
             HeadTracker.Mode.NONE -> "No glasses: preview"
@@ -251,52 +295,60 @@ class DesktopSession(private val activity: Activity) {
         }
     }
 
-    // ---- textures drawn with the 2D canvas
+    // ---- textures drawn with the 2D canvas. Everything is light on a transparent ground: on the
+    // glasses black is see-through, so there are no panels behind text.
     private fun drawBar(w: DesktopWindow, focused: Boolean): Bitmap {
         val bw = 1024; val bh = (bw * w.shownBarHeight() / w.shownWidth()).toInt().coerceIn(40, 120)
         val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.color = if (focused) 0xF01B2530.toInt() else 0xD0141A22.toInt(); c.drawRect(0f, 0f, bw.toFloat(), bh.toFloat(), p)
-        val slot = bw * Desktop.BUTTON_FRACTION.toFloat(); val cy = bh / 2f; val r = bh * 0.2f
-        p.color = Color.WHITE; p.textSize = bh * 0.46f; p.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        val maxText = bw - slot * 4.4f
-        val title = android.text.TextUtils.ellipsize(w.title.ifBlank { "Window" }, android.text.TextPaint(p), maxText - bh * 0.5f, android.text.TextUtils.TruncateAt.END).toString()
-        c.drawText(title, bh * 0.5f, cy + p.textSize * 0.35f, p)
-        p.style = Paint.Style.STROKE; p.strokeWidth = bh * 0.06f; p.strokeCap = Paint.Cap.ROUND
+        val ink = if (focused) Ink.WHITE_INT else Ink.SLATE_INT
+        val slot = bw * Desktop.BUTTON_FRACTION.toFloat(); val cy = bh * 0.46f; val r = bh * 0.19f
+        p.color = ink; p.textSize = bh * 0.5f; p.typeface = if (focused) bold else regular
+        val maxText = bw - slot * 4.6f
+        val title = android.text.TextUtils.ellipsize(w.title.ifBlank { "Window" }, android.text.TextPaint(p), maxText, android.text.TextUtils.TruncateAt.END).toString()
+        c.drawText(title, bh * 0.12f, cy + p.textSize * 0.34f, p)
+        p.style = Paint.Style.STROKE; p.strokeWidth = bh * 0.055f; p.strokeCap = Paint.Cap.ROUND
         fun cx(i: Int) = bw - slot * (i + 0.5f)
-        // close
-        p.color = 0xFFFF8A80.toInt(); c.drawLine(cx(0) - r, cy - r, cx(0) + r, cy + r, p); c.drawLine(cx(0) - r, cy + r, cx(0) + r, cy - r, p)
-        p.color = Color.WHITE
-        // maximize / restore
-        if (w.maximized) { c.drawRect(cx(1) - r * 0.6f, cy - r * 0.6f, cx(1) + r * 0.6f, cy + r * 0.6f, p) } else c.drawRect(cx(1) - r, cy - r, cx(1) + r, cy + r, p)
-        // minimize
-        c.drawLine(cx(2) - r, cy + r, cx(2) + r, cy + r, p)
-        // follow head (filled dot in a ring) or locked in space (pin)
-        if (w.follow) { p.color = 0xFF7BE6FF.toInt(); c.drawCircle(cx(3), cy, r, p); p.style = Paint.Style.FILL; c.drawCircle(cx(3), cy, r * 0.45f, p) }
-        else { c.drawCircle(cx(3), cy - r * 0.35f, r * 0.55f, p); c.drawLine(cx(3), cy + r * 0.2f, cx(3), cy + r * 1.1f, p) }
+        if (focused) {   // buttons only on the focused window: fewer marks, and nothing to press by accident
+            p.color = Ink.CORAL_INT; c.drawLine(cx(0) - r, cy - r, cx(0) + r, cy + r, p); c.drawLine(cx(0) - r, cy + r, cx(0) + r, cy - r, p)
+            p.color = ink
+            if (w.maximized) c.drawRect(cx(1) - r * 0.6f, cy - r * 0.6f, cx(1) + r * 0.6f, cy + r * 0.6f, p) else c.drawRect(cx(1) - r, cy - r, cx(1) + r, cy + r, p)
+            c.drawLine(cx(2) - r, cy + r, cx(2) + r, cy + r, p)
+            if (w.follow) { p.color = Ink.AMBER_INT; c.drawCircle(cx(3), cy, r, p); p.style = Paint.Style.FILL; c.drawCircle(cx(3), cy, r * 0.42f, p) }
+            else { c.drawCircle(cx(3), cy - r * 0.35f, r * 0.55f, p); c.drawLine(cx(3), cy + r * 0.2f, cx(3), cy + r * 1.1f, p) }
+        } else if (w.follow) { p.color = Ink.SLATE_INT; c.drawCircle(cx(0), cy, r * 0.7f, p) }
         return b
     }
 
+    /** The clock that stands on the rail when no window is open. */
     private fun drawHome(minute: String): Bitmap {
-        val bw = 1280; val bh = 640
+        val bw = 900; val bh = 420
         val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.color = 0xCC0E141B.toInt(); c.drawRoundRect(RectF(0f, 0f, bw.toFloat(), bh.toFloat()), 56f, 56f, p)
-        p.color = Color.WHITE; p.textAlign = Paint.Align.CENTER
-        p.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL); p.textSize = 150f; c.drawText(minute, bw / 2f, 200f, p)
-        p.typeface = Typeface.create("sans-serif", Typeface.NORMAL); p.textSize = 34f; p.color = 0xFF9FB3C8.toInt()
-        c.drawText(SimpleDateFormat("EEEE d MMMM", Locale.getDefault()).format(Date()), bw / 2f, 262f, p)
-        val apps = HomeApps.all; val tile = 230f; val gap = 40f; val total = apps.size * tile + (apps.size - 1) * gap; var x = (bw - total) / 2f
-        for (a in apps) {
-            p.color = 0xFF18222D.toInt(); c.drawRoundRect(RectF(x, 330f, x + tile, 530f), 40f, 40f, p)
-            p.color = a.color; c.drawCircle(x + tile / 2, 405f, 44f, p)
-            p.color = Color.WHITE; p.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); p.textSize = 40f
-            c.drawText(a.title.take(1), x + tile / 2, 419f, p)
-            p.textSize = 30f; c.drawText(a.title, x + tile / 2, 498f, p)
-            x += tile + gap
+        val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER
+        p.color = Ink.WHITE_INT; p.typeface = regular; p.textSize = 230f; p.letterSpacing = -0.02f
+        c.drawText(minute, bw / 2f, 250f, p)
+        p.letterSpacing = 0f; p.color = Ink.SLATE_INT; p.textSize = 46f
+        c.drawText(SimpleDateFormat("EEEE d MMMM", Locale.getDefault()).format(Date()), bw / 2f, 330f, p)
+        p.color = Ink.AMBER_INT; p.textSize = 34f
+        c.drawText("Look down to open an app", bw / 2f, 400f, p)
+        return b
+    }
+
+    /** The dock under the rail: one outlined mark and a name per app. Looked at, or opened from the phone. */
+    private fun drawDock(): Bitmap {
+        val bw = 1100; val bh = 220
+        val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER
+        val apps = HomeApps.all; val tile = bw / apps.size.toFloat()
+        for ((i, a) in apps.withIndex()) {
+            val x = tile * (i + 0.5f)
+            p.style = Paint.Style.STROKE; p.strokeWidth = 5f; p.color = Ink.WHITE_INT
+            c.drawCircle(x, 78f, 50f, p)
+            p.style = Paint.Style.FILL; p.typeface = bold; p.textSize = 52f
+            c.drawText(a.title.take(1), x, 97f, p)
+            p.typeface = regular; p.textSize = 38f; p.color = Ink.WHITE_INT
+            c.drawText(a.title, x, 190f, p)
         }
-        p.color = 0xFF6F8296.toInt(); p.textSize = 26f; p.typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        c.drawText("Open an app from your phone", bw / 2f, 596f, p)
         return b
     }
 

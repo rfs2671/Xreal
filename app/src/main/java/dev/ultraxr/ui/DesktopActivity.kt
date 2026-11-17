@@ -56,6 +56,9 @@ class DesktopActivity : Activity() {
     private var previewRenderer: DesktopRenderer? = null
     private var glasses: StagePresentation? = null
     private var moveMode = false
+    private var pocket: View? = null
+    private var rootView: View? = null
+    private var backPressedAt = 0L
     private var active = false
     private var lastChips = ""
 
@@ -86,6 +89,7 @@ class DesktopActivity : Activity() {
         Tracking.acquire(this)
         session = DesktopSession(this)
         session.onChanged = { refreshChips() }
+        session.onLookPress = { tick(heavy = false) }
         build()
         session.start()
         refreshChips()
@@ -165,6 +169,8 @@ class DesktopActivity : Activity() {
     private fun build() {
         val root = Ui.column(this)
         root.setPadding(Ui.dp(this, 16), Ui.dp(this, 44), Ui.dp(this, 16), Ui.dp(this, 16))
+        // Something other than the address box can hold focus, so keys go to the focused window.
+        root.isFocusable = true; root.isFocusableInTouchMode = true; rootView = root
         val head = Ui.row(this)
         head.add(Ui.text(this, "Spatial desktop", 24f, bold = true), 0, weight = 1f)
         status = Ui.chip(this); head.add(status, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -216,6 +222,7 @@ class DesktopActivity : Activity() {
         c2.add(small("Gather") { session.gather() }, 0, weight = 1f, startDp = 6)
         c2.add(small("More") { settings() }, 0, weight = 1f, startDp = 6)
         root.add(c2, topDp = 6)
+        root.add(small("Pocket mode") { enterPocket() }.apply { contentDescription = "Pocket mode" }, topDp = 6)
 
         // touchpad
         val pad = TextView(this).apply {
@@ -233,7 +240,7 @@ class DesktopActivity : Activity() {
     }
 
     private fun go() { val t = urlBox.text.toString(); if (t.isBlank()) return; if (session.desktop.focused == null) session.open("Browser", HomeApps.toUrl(t)) else session.navigate(t); urlBox.setText(""); hideKeyboard() }
-    private fun hideKeyboard() { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(urlBox.windowToken, 0); urlBox.clearFocus() }
+    private fun hideKeyboard() { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(urlBox.windowToken, 0); urlBox.clearFocus(); rootView?.requestFocus() }
     private fun toast(s: String) = android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show()
 
     private fun refreshChips() {
@@ -263,16 +270,65 @@ class DesktopActivity : Activity() {
         val col = Ui.column(this, 18)
         fun box(label: String, value: Boolean, set: (Boolean) -> Unit) = CheckBox(this).apply { text = label; isChecked = value; setTextColor(Ui.TEXT); textSize = 15f; setOnCheckedChangeListener { _, b -> set(b) } }.also { col.add(it, topDp = 4) }
         box("Focus the window I look at", session.gazeFocus) { session.gazeFocus = it }
+        box("Look to press: rest your gaze on an app or a title-bar button", session.lookToPress) { session.lookToPress = it }
         box("Hand gestures (pinch to click, pinch a title bar to move)", session.handGestures) { session.handGestures = it }
         box("Dim windows that are not focused", session.dimUnfocused) { session.dimUnfocused = it }
+        box("Dark pages (easier on see-through glasses; applies to new windows)", session.darkPages) { session.darkPages = it }
         box("Use position tracking (experimental; off = rotation only)", session.usePosition) { session.usePosition = it }
         col.add(small("Recenter view") { session.recenter() }, topDp = 12)
         col.add(small("Close all windows") { session.resetLayout() }, topDp = 6)
         AlertDialog.Builder(this).setTitle("Desktop settings").setView(col).setPositiveButton("Done", null).show()
     }
 
+    // ---- pocket mode: the whole screen is a black touchpad that works by feel
+    /**
+     * Gestures (each answered with a haptic tick):
+     * slide = pointer, tap = click, double-tap and hold = drag, two fingers = scroll, pinch = resize,
+     * two-finger tap = next window, long press = Move on/off, three-finger tap = bring everything in
+     * front of you. Leave with a three-finger long press, or Back twice.
+     */
+    private fun enterPocket() {
+        if (pocket != null) return
+        val v = View(this).apply { setBackgroundColor(0xFF000000.toInt()); contentDescription = "Pocket touchpad"; isClickable = true }
+        v.setOnTouchListener(Pad(pocketMode = true))
+        addContentView(v, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        pocket = v
+        window.attributes = window.attributes.apply { screenBrightness = 0.01f }
+        window.decorView.windowInsetsController?.let { it.hide(android.view.WindowInsets.Type.systemBars()); it.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE }
+        hideKeyboard(); tick(heavy = true)
+        Tracking.log("desktop: pocket mode on")
+    }
+
+    private fun exitPocket() {
+        val v = pocket ?: return
+        (v.parent as? ViewGroup)?.removeView(v); pocket = null
+        window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
+        window.decorView.windowInsetsController?.show(android.view.WindowInsets.Type.systemBars())
+        tick(heavy = true)
+        Tracking.log("desktop: pocket mode off")
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (pocket != null) {
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - backPressedAt < 1500) exitPocket() else { backPressedAt = now; tick(heavy = false) }
+            return
+        }
+        @Suppress("DEPRECATION") super.onBackPressed()
+    }
+
+    private fun tick(heavy: Boolean) {
+        val v = pocket ?: window.decorView
+        v.performHapticFeedback(if (heavy) android.view.HapticFeedbackConstants.LONG_PRESS else android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+
     /** Game controllers and keyboards reach the focused page, so the Gamepad API works there. */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // A hardware keyboard types into the focused window, unless the address box is being used.
+        if (!urlBox.hasFocus() && event.keyCode != KeyEvent.KEYCODE_BACK && !KeyEvent.isGamepadButton(event.keyCode)
+            && event.keyCode != KeyEvent.KEYCODE_VOLUME_DOWN && event.keyCode != KeyEvent.KEYCODE_VOLUME_UP && (event.source == 0 || event.source and InputDevice.SOURCE_KEYBOARD == InputDevice.SOURCE_KEYBOARD)
+            && session.focusedWeb()?.forwardKey(event) == true) return true
         // The volume keys scroll the focused window, so it can be done by feel with the glasses on.
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
             if (session.desktop.focused != null) {
@@ -285,13 +341,27 @@ class DesktopActivity : Activity() {
         return super.dispatchKeyEvent(event)
     }
 
+    private var mouseX = Float.NaN; private var mouseY = Float.NaN
+
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        // A mouse moves the pointer in the focused window; its wheel scrolls it.
+        if (event.source and InputDevice.SOURCE_MOUSE == InputDevice.SOURCE_MOUSE) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_MOVE -> {
+                    if (!mouseX.isNaN()) session.padMove(((event.x - mouseX) / 900f).toDouble(), ((event.y - mouseY) / 900f).toDouble(), moveMode)
+                    mouseX = event.x; mouseY = event.y; return true
+                }
+                MotionEvent.ACTION_SCROLL -> { session.padScroll(0.0, (event.getAxisValue(MotionEvent.AXIS_VSCROLL) * 0.12).toDouble(), false); return true }
+                MotionEvent.ACTION_HOVER_EXIT, MotionEvent.ACTION_HOVER_ENTER -> { mouseX = Float.NaN; mouseY = Float.NaN }
+            }
+        }
         if (event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK && session.focusedWeb()?.forwardMotion(event) == true) return true
         return super.dispatchGenericMotionEvent(event)
     }
 
     /** Touchpad gestures. */
-    private inner class Pad : View.OnTouchListener {
+    private inner class Pad(private val pocketMode: Boolean = false) : View.OnTouchListener {
+        private var maxPointers = 0; private var longPress: Runnable? = null
         private var lx = 0f; private var ly = 0f; private var sx = 0f; private var sy = 0f
         private var downAt = 0L; private var lastTapAt = 0L
         private var moved = false; private var dragging = false; private var multi = false
@@ -300,29 +370,39 @@ class DesktopActivity : Activity() {
             val w = v.width.coerceAtLeast(1).toFloat(); val slop = Ui.dp(this@DesktopActivity, 10)
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    lx = e.x; ly = e.y; sx = e.x; sy = e.y; downAt = e.eventTime; moved = false; multi = false
+                    lx = e.x; ly = e.y; sx = e.x; sy = e.y; downAt = e.eventTime; moved = false; multi = false; maxPointers = 1
                     if (e.eventTime - lastTapAt < 320 && !moveMode) { dragging = true; session.padPress(true) }
+                    else if (pocketMode) { cancelLong(); longPress = Runnable { if (!moved && maxPointers == 1) { moveMode = !moveMode; refreshChips(); tick(heavy = true); moved = true } }.also { ui.postDelayed(it, 650) } }
                 }
-                MotionEvent.ACTION_POINTER_DOWN -> { multi = true; if (dragging) { dragging = false; session.padPress(false) }; lx = cx(e); ly = cy(e); span = span(e) }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    multi = true; maxPointers = maxOf(maxPointers, e.pointerCount); if (dragging) { dragging = false; session.padPress(false) }; lx = cx(e); ly = cy(e); span = span(e); sx = lx; sy = ly
+                    if (pocketMode && e.pointerCount == 3) { cancelLong(); longPress = Runnable { if (!moved) { moved = true; exitPocket() } }.also { ui.postDelayed(it, 900) } }
+                }
                 MotionEvent.ACTION_MOVE -> {
                     if (e.pointerCount >= 2) {
                         val x = cx(e); val y = cy(e); val s = span(e)
+                        if (!moved && hypot(x - sx, y - sy) < slop && (span <= 0 || abs(s / span - 1f) < 0.035f)) return true   // still a possible tap
                         if (span > 0 && s > 0 && abs(s / span - 1f) > 0.035f) { session.padPinch((s / span).toDouble()); span = s }
                         else session.padScroll(((x - lx) / w).toDouble(), ((y - ly) / w).toDouble(), moveMode)
-                        lx = x; ly = y; moved = true
+                        lx = x; ly = y; moved = true; cancelLong()
                     } else if (!multi) {
-                        if (!moved && hypot(e.x - sx, e.y - sy) > slop) moved = true
+                        if (!moved && hypot(e.x - sx, e.y - sy) > slop) { moved = true; cancelLong() }
                         if (moved) session.padMove(((e.x - lx) / w).toDouble(), ((e.y - ly) / w).toDouble(), moveMode)
                         lx = e.x; ly = e.y
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    cancelLong()
+                    val quick = e.actionMasked == MotionEvent.ACTION_UP && e.eventTime - downAt < 320
                     if (dragging) { dragging = false; session.padPress(false) }
-                    else if (!moved && !multi && e.actionMasked == MotionEvent.ACTION_UP && e.eventTime - downAt < 280) { if (!moveMode) session.padTap(); lastTapAt = e.eventTime }
+                    else if (!moved && !multi && quick) { if (!moveMode) session.padTap(); lastTapAt = e.eventTime; if (pocketMode) tick(heavy = false) }
+                    else if (pocketMode && !moved && quick && maxPointers == 2) { if (session.cycleFocus()) tick(heavy = false) }
+                    else if (pocketMode && !moved && quick && maxPointers >= 3) { session.gather(); tick(heavy = true) }
                 }
             }
             return true
         }
+        private fun cancelLong() { longPress?.let { ui.removeCallbacks(it) }; longPress = null }
         private fun cx(e: MotionEvent) = (e.getX(0) + e.getX(1)) / 2
         private fun cy(e: MotionEvent) = (e.getY(0) + e.getY(1)) / 2
         private fun span(e: MotionEvent) = hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))

@@ -23,7 +23,21 @@ class RenderWindow(
 )
 
 class RenderFrame(val windows: List<RenderWindow>, val anchor: DoubleArray, val home: Bitmap?, val homeVersion: Long, val homeYaw: Double,
-    val usePosition: Boolean, val dim: Float)
+    val usePosition: Boolean, val dim: Float,
+    /** The dock under the rail (always shown unless a window is fullscreen), facing [dockYaw]. */
+    val dock: Bitmap? = null, val dockVersion: Long = 0, val dockYaw: Double = 0.0,
+    /** The stretch of rail under the focused window is lit: centre heading and half-width, radians. NaN for none. */
+    val railYaw: Double = Double.NaN, val railHalf: Double = 0.0, val showRail: Boolean = true,
+    /** Look-to-press progress ring: world direction, distance, and 0..1 (0 hides it). */
+    val dwellYaw: Double = 0.0, val dwellPitch: Double = 0.0, val dwellDistance: Double = 2.0, val dwellProgress: Double = 0.0)
+
+/** The interface is drawn with light on nothing: black is see-through on the glasses. */
+object Ink {
+    val AMBER = floatArrayOf(1.0f, 0.706f, 0.329f)     // #FFB454 focus
+    val WHITE = floatArrayOf(0.949f, 0.957f, 0.941f)   // #F2F4F0 text
+    val SLATE = floatArrayOf(0.361f, 0.400f, 0.439f)   // #5C6670 idle lines
+    const val AMBER_INT = 0xFFFFB454.toInt(); const val WHITE_INT = 0xFFF2F4F0.toInt(); const val SLATE_INT = 0xFF8A949E.toInt(); const val CORAL_INT = 0xFFFF6B5E.toInt()
+}
 
 /**
  * Draws the spatial desktop: each window is a rounded rectangle textured with its page, with a
@@ -49,6 +63,8 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     private var progOes = 0; private var prog2d = 0; private var progFlat = 0
     private var vao = 0
     private var homeTex = 0; private var homeVersion = -1L
+    private var dockTex = 0; private var dockVersion = -1L
+    private val uniforms = HashMap<Int, IntArray>(); private var boundProgram = 0
     private val proj = FloatArray(16); private val view = FloatArray(16); private val vp = FloatArray(16); private val model = FloatArray(16); private val mvp = FloatArray(16)
     private val headM = FloatArray(16); private val ident = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private var lastNs = 0L; private var fpsWindowStart = 0L; private var fpsFrames = 0
@@ -57,7 +73,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         // A new GL context: every texture and surface from the old one is gone.
         val old = tex.toMap(); tex.clear()
         for ((id, t) in old) { onSurface(id, null); try { t.surface.release(); t.st.release() } catch (_: Exception) {} }
-        homeTex = 0; homeVersion = -1
+        homeTex = 0; homeVersion = -1; dockTex = 0; dockVersion = -1; uniforms.clear(); boundProgram = 0
         try {
             val vs = """#version 300 es
                 layout(location=0) in vec2 aPos; uniform mat4 uMvp; uniform mat4 uTex; out vec2 vUv; out vec2 vLocal;
@@ -117,14 +133,33 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
 
         GLES30.glEnable(GLES30.GL_BLEND); GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-        GLES30.glDisable(GLES30.GL_DEPTH_TEST); GLES30.glBindVertexArray(vao)
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST); GLES30.glBindVertexArray(vao); boundProgram = 0
 
+        if (f.showRail) {
+            // The rail: short straight pieces around the user. The piece(s) under the focused window are lit.
+            val seg = 2 * Math.PI / Rail.SEGMENTS; val len = 2 * Rail.RADIUS * Math.tan(seg / 2) * 0.92
+            val lookYaw = Geometry.yawOf(Q.rotate(q, doubleArrayOf(0.0, 0.0, -1.0)))
+            for (i in 0 until Rail.SEGMENTS) {
+                val yaw = Geometry.wrap(i * seg)
+                if (Math.abs(Geometry.wrap(yaw - lookYaw)) > RAIL_VISIBLE) continue      // behind or beside the view
+                val lit = !f.railYaw.isNaN() && Math.abs(Geometry.wrap(yaw - f.railYaw)) <= f.railHalf
+                val col = if (lit) Ink.AMBER else Ink.SLATE
+                Geometry.modelMatrix(Geometry.centre(f.anchor, yaw, Rail.PITCH, Rail.RADIUS), yaw, 0.0, len, Rail.THICKNESS, model)
+                draw(progFlat, 0, 0, vp, ident, len, Rail.THICKNESS, Rail.THICKNESS / 2, col[0], col[1], col[2], if (lit) 0.9f else 0.6f, 1f)
+            }
+        }
+        if (f.dock != null) {
+            if (dockTex == 0) dockTex = newTexture2d()
+            if (dockVersion != f.dockVersion) { upload(dockTex, f.dock); dockVersion = f.dockVersion }
+            Geometry.modelMatrix(Geometry.centre(f.anchor, f.dockYaw, Rail.DOCK_PITCH, Rail.DOCK_DISTANCE), f.dockYaw, Rail.DOCK_PITCH, Rail.DOCK_WIDTH, Rail.DOCK_HEIGHT, model)
+            draw(prog2d, GLES30.GL_TEXTURE_2D, dockTex, vp, ident, Rail.DOCK_WIDTH, Rail.DOCK_HEIGHT, 0.0, 1f, 1f, 1f, 1f, 1f)
+        }
         if (f.home != null) {
             if (homeTex == 0) homeTex = newTexture2d()
             if (homeVersion != f.homeVersion) { upload(homeTex, f.home); homeVersion = f.homeVersion }
-            val c = Geometry.centre(f.anchor, f.homeYaw, 0.0, HOME_DISTANCE)
-            Geometry.modelMatrix(c, f.homeYaw, 0.0, HOME_WIDTH, HOME_WIDTH * f.home.height / f.home.width, model)
-            draw(prog2d, GLES30.GL_TEXTURE_2D, homeTex, vp, ident, HOME_WIDTH, HOME_WIDTH * f.home.height / f.home.width, 0.05, 1f, 1f, 1f, 1f, 1f)
+            val hh = HOME_WIDTH * f.home.height / f.home.width
+            Geometry.modelMatrix(Geometry.centre(f.anchor, f.homeYaw, 0.0, HOME_DISTANCE), f.homeYaw, 0.0, HOME_WIDTH, hh, model)
+            draw(prog2d, GLES30.GL_TEXTURE_2D, homeTex, vp, ident, HOME_WIDTH, hh, 0.0, 1f, 1f, 1f, 1f, 1f)
         }
         // Far windows first, so nearer ones cover them; the focused window last among equals.
         for (w in f.windows.sortedWith(compareByDescending<RenderWindow> { it.distance }.thenBy { it.focused })) {
@@ -133,9 +168,9 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
             val c = if (w.headLocked) doubleArrayOf(0.0, 0.0, -w.distance) else Geometry.centre(f.anchor, w.yaw, w.pitch, w.distance)
             val yaw = if (w.headLocked) 0.0 else w.yaw; val pitch = if (w.headLocked) 0.0 else w.pitch
             val shade = if (w.focused) 1f else f.dim
-            if (w.focused && !w.headLocked) {   // soft outline behind the focused window
-                Geometry.modelMatrix(c, yaw, pitch, w.width + 0.03, w.height + 0.03, model)
-                draw(progFlat, 0, 0, matrix, ident, w.width + 0.03, w.height + 0.03, 0.045, 0.35f, 0.75f, 1f, 0.55f, 1f)
+            if (w.focused && !w.headLocked) {   // a hairline of amber around the focused window
+                Geometry.modelMatrix(c, yaw, pitch, w.width + 0.005, w.height + 0.005, model)
+                draw(progFlat, 0, 0, matrix, ident, w.width + 0.005, w.height + 0.005, 0.0325, Ink.AMBER[0], Ink.AMBER[1], Ink.AMBER[2], 0.85f, 1f)
             }
             Geometry.modelMatrix(c, yaw, pitch, w.width, w.height, model)
             if (t.hasFrame) draw(progOes, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.oes, matrix, t.m, w.width, w.height, 0.03, shade, shade, shade, 1f, 1f)
@@ -146,14 +181,19 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
                 val up = w.height / 2 + w.barHeight / 2 + 0.012
                 val bc = offset(c, yaw, pitch, 0.0, up)
                 Geometry.modelMatrix(bc, yaw, pitch, w.width, w.barHeight, model)
-                draw(prog2d, GLES30.GL_TEXTURE_2D, t.bar, matrix, ident, w.width, w.barHeight, w.barHeight * 0.45, shade, shade, shade, 1f, 1f)
+                draw(prog2d, GLES30.GL_TEXTURE_2D, t.bar, matrix, ident, w.width, w.barHeight, 0.0, 1f, 1f, 1f, 1f, 1f)
             }
             if (w.showCursor) {
                 val size = (w.distance * 0.018).coerceAtLeast(0.012)
                 val cc = offset(c, yaw, pitch, (w.cursorU - 0.5) * w.width, (0.5 - w.cursorV) * w.height)
                 Geometry.modelMatrix(cc, yaw, pitch, size, size, model)
-                draw(progFlat, 0, 0, matrix, ident, size, size, size / 2, 1f, 1f, 1f, 0.95f, if (w.pressed) 0.01f else 0.55f)
+                draw(progFlat, 0, 0, matrix, ident, size, size, size / 2, Ink.AMBER[0], Ink.AMBER[1], Ink.AMBER[2], 1f, if (w.pressed) 0.01f else 0.6f)
             }
+        }
+        if (f.dwellProgress > 0.0) {   // look-to-press: a ring that closes as the hold completes
+            val size = f.dwellDistance * 0.05
+            Geometry.modelMatrix(Geometry.centre(f.anchor, f.dwellYaw, f.dwellPitch, f.dwellDistance * 0.985), f.dwellYaw, f.dwellPitch, size, size, model)
+            draw(progFlat, 0, 0, vp, ident, size, size, size / 2, Ink.AMBER[0], Ink.AMBER[1], Ink.AMBER[2], 1f, (0.92 - 0.9 * f.dwellProgress).toFloat().coerceIn(0.02f, 0.92f))
         }
         GLES30.glDisable(GLES30.GL_BLEND)
         avgCpuMs = avgCpuMs * 0.95 + (System.nanoTime() - now) / 1e6 * 0.05
@@ -166,16 +206,18 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     }
 
     private fun draw(prog: Int, target: Int, texture: Int, viewProj: FloatArray, texM: FloatArray, w: Double, h: Double, radius: Double, r: Float, g: Float, b: Float, a: Float, ringOrAlpha: Float) {
-        GLES30.glUseProgram(prog)
+        // uniform locations are looked up once per program, not on every draw
+        val u = uniforms.getOrPut(prog) { IntArray(UNIFORM_NAMES.size) { GLES30.glGetUniformLocation(prog, UNIFORM_NAMES[it]) } }
+        if (boundProgram != prog) { GLES30.glUseProgram(prog); boundProgram = prog }
         Matrix.multiplyMM(mvp, 0, viewProj, 0, model, 0)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(prog, "uMvp"), 1, false, mvp, 0)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(prog, "uTex"), 1, false, texM, 0)
-        GLES30.glUniform2f(GLES30.glGetUniformLocation(prog, "uSize"), w.toFloat(), h.toFloat())
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(prog, "uRadius"), radius.coerceAtMost(minOf(w, h) / 2).toFloat())
-        GLES30.glUniform4f(GLES30.glGetUniformLocation(prog, "uTint"), r * a, g * a, b * a, a)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(prog, "uAlpha"), 1f)
-        if (prog == progFlat) GLES30.glUniform1f(GLES30.glGetUniformLocation(prog, "uRing"), if (ringOrAlpha < 1f) ringOrAlpha else 0f)
-        if (texture != 0) { GLES30.glActiveTexture(GLES30.GL_TEXTURE0); GLES30.glBindTexture(target, texture); GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "uSampler"), 0) }
+        GLES30.glUniformMatrix4fv(u[0], 1, false, mvp, 0)
+        GLES30.glUniformMatrix4fv(u[1], 1, false, texM, 0)
+        GLES30.glUniform2f(u[2], w.toFloat(), h.toFloat())
+        GLES30.glUniform1f(u[3], radius.coerceAtMost(minOf(w, h) / 2).toFloat())
+        GLES30.glUniform4f(u[4], r * a, g * a, b * a, a)
+        GLES30.glUniform1f(u[5], 1f)
+        if (prog == progFlat) GLES30.glUniform1f(u[6], if (ringOrAlpha < 1f) ringOrAlpha else 0f)
+        if (texture != 0) { GLES30.glActiveTexture(GLES30.GL_TEXTURE0); GLES30.glBindTexture(target, texture); GLES30.glUniform1i(u[7], 0) }
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
     }
 
@@ -213,7 +255,9 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
 
     companion object {
         private const val NEAR = 0.08
-        const val HOME_DISTANCE = 1.9
-        const val HOME_WIDTH = 1.5
+        private val RAIL_VISIBLE = Math.toRadians(62.0)
+        private val UNIFORM_NAMES = arrayOf("uMvp", "uTex", "uSize", "uRadius", "uTint", "uAlpha", "uRing", "uSampler")
+        const val HOME_DISTANCE = 2.0
+        const val HOME_WIDTH = 0.9
     }
 }

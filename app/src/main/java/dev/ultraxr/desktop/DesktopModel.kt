@@ -282,3 +282,56 @@ object HomeApps {
         return if (!s.contains(' ') && s.contains('.')) "https://$s" else "https://www.google.com/search?q=" + java.net.URLEncoder.encode(s, "UTF-8")
     }
 }
+
+/**
+ * Look-to-press. Resting the gaze on a target for [holdNs] presses it once; the gaze must leave
+ * before the same target can be pressed again, so it cannot repeat while you keep looking.
+ * A short [armNs] passes before progress starts, so sweeping across a target does nothing.
+ */
+class Dwell(private val holdNs: Long = 900_000_000L, private val armNs: Long = 250_000_000L) {
+    var target: String? = null; private set
+    /** 0 while arming, rising to 1 when the press happens. */
+    var progress = 0.0; private set
+    private var sinceNs = 0L
+    private var fired = false
+
+    /** [lookedAt] is what the gaze is on now (null for nothing). Returns the target to press, once. */
+    fun update(nowNs: Long, lookedAt: String?): String? {
+        if (lookedAt != target) { target = lookedAt; sinceNs = nowNs; fired = false; progress = 0.0; return null }
+        if (lookedAt == null || fired) { progress = 0.0; return null }
+        val t = nowNs - sinceNs - armNs
+        progress = (t.toDouble() / holdNs).coerceIn(0.0, 1.0)
+        if (t >= holdNs) { fired = true; progress = 0.0; return lookedAt }
+        return null
+    }
+
+    fun cancel() { target = null; progress = 0.0; fired = false }
+}
+
+/**
+ * The rail: one thin line around the user just below eye level. Windows sit above it; the dock
+ * (the apps that can be opened) hangs below it and comes into view when the head tips down.
+ * All of it stays inside the central part of the glasses' 43 x 25 degree view when looked at,
+ * because the edges of the optics are the least sharp.
+ */
+object Rail {
+    val PITCH = Math.toRadians(-11.0)
+    const val RADIUS = 2.0
+    const val SEGMENTS = 48
+    const val THICKNESS = 0.0035
+    val DOCK_PITCH = Math.toRadians(-17.5)
+    const val DOCK_DISTANCE = 2.0
+    const val DOCK_WIDTH = 1.1
+    const val DOCK_HEIGHT = 0.22
+
+    /** Which dock tile a horizontal position [u] (0..1 across the dock) falls on, of [count] equal tiles. */
+    fun tileAt(u: Double, count: Int): Int? = if (count <= 0 || u < 0.0 || u >= 1.0) null else (u * count).toInt().coerceIn(0, count - 1)
+
+    /** The dock tile a ray looks at, or null. The dock faces the user at heading [dockYaw]. */
+    fun dockTile(origin: DoubleArray, dir: DoubleArray, anchor: DoubleArray, dockYaw: Double, count: Int): Int? {
+        val c = Geometry.centre(anchor, dockYaw, DOCK_PITCH, DOCK_DISTANCE)
+        val h = Geometry.planeHit(origin, dir, c, dockYaw, DOCK_PITCH) ?: return null
+        if (kotlin.math.abs(h[1]) > DOCK_HEIGHT / 2) return null
+        return tileAt(h[0] / DOCK_WIDTH + 0.5, count)
+    }
+}
