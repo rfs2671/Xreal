@@ -112,6 +112,8 @@ class DesktopActivity : Activity() {
         if (intent.getBooleanExtra(EXTRA_STEREO_PREVIEW, false) && applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) session.forceStereo = true
         build()
         session.start()
+        // The home view opens on its main menu; windows from last time are put away, not closed (the phone lists them).
+        session.showHome()
         refreshChips()
     }
 
@@ -257,7 +259,11 @@ class DesktopActivity : Activity() {
         c2.add(small("Gather") { session.gather() }, 0, weight = 1f, startDp = 6)
         c2.add(small("More") { settings() }, 0, weight = 1f, startDp = 6)
         root.add(c2, topDp = 6)
-        root.add(small("Pocket mode") { enterPocket() }.apply { contentDescription = "Pocket mode" }, topDp = 6)
+        // one row for both, so the preview below keeps its place
+        val c3 = Ui.row(this)
+        c3.add(small("Main menu") { session.showHome() }.apply { contentDescription = "Main menu" }, 0, weight = 1f)
+        c3.add(small("Pocket mode") { enterPocket() }.apply { contentDescription = "Pocket mode" }, 0, weight = 1f, startDp = 6)
+        root.add(c3, topDp = 6)
 
         // touchpad
         val pad = TextView(this).apply {
@@ -364,6 +370,18 @@ class DesktopActivity : Activity() {
 
     /** Game controllers and keyboards reach the focused page, so the Gamepad API works there. */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // A remote: the arrows step across the main menu's icons, or move the cursor in a window; OK selects; Menu
+        // shows the main menu. A full keyboard's arrows and a game controller's pad still reach the page in a window.
+        val arrows = when (event.keyCode) { KeyEvent.KEYCODE_DPAD_LEFT -> -1 to 0; KeyEvent.KEYCODE_DPAD_RIGHT -> 1 to 0; KeyEvent.KEYCODE_DPAD_UP -> 0 to -1; KeyEvent.KEYCODE_DPAD_DOWN -> 0 to 1; else -> null }
+        val ok = event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || event.keyCode == KeyEvent.KEYCODE_BUTTON_A
+        if (!urlBox.hasFocus() && pocket == null) {
+            val onHome = session.desktop.visible.isEmpty()
+            val fullKeyboard = event.device?.keyboardType == android.view.KeyCharacterMap.ALPHA
+            val gamepad = event.source and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD || event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
+            if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) session.showHome(); return true }
+            if (arrows != null && (onHome || (!fullKeyboard && !gamepad))) { if (event.action == KeyEvent.ACTION_DOWN) session.keyMove(arrows.first, arrows.second); return true }
+            if (ok && (onHome || (!fullKeyboard && !gamepad && event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER))) { if (event.action == KeyEvent.ACTION_UP) session.keySelect(); return true }
+        }
         // A hardware keyboard types into the focused window, unless the address box is being used.
         if (!urlBox.hasFocus() && event.keyCode != KeyEvent.KEYCODE_BACK && !KeyEvent.isGamepadButton(event.keyCode)
             && event.keyCode != KeyEvent.KEYCODE_VOLUME_DOWN && event.keyCode != KeyEvent.KEYCODE_VOLUME_UP && (event.source == 0 || event.source and InputDevice.SOURCE_KEYBOARD == InputDevice.SOURCE_KEYBOARD)

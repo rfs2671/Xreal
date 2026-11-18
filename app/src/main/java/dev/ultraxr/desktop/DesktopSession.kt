@@ -173,17 +173,59 @@ class DesktopSession(private val activity: Activity) {
         val w = desktop.focused ?: return
         if (moveMode) { desktop.move(w.id, -dx * 1.2, -dy * 1.2); return }
         val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
-        c[0] = (c[0] + dx * 0.9).coerceIn(0.0, 1.0); c[1] = (c[1] + dy * 0.9 * w.aspect).coerceIn(0.0, 1.0)
+        // The cursor can leave the page upwards onto the window's title bar, where a tap presses the button under
+        // it (close, maximise, minimise, lock). A press that began in the page stays in the page.
+        val top = if (pressed || desktop.fullscreenId == w.id) 0.0 else -barSpan(w)
+        c[0] = (c[0] + dx * 0.9).coerceIn(0.0, 1.0); c[1] = (c[1] + dy * 0.9 * w.aspect).coerceIn(top, 1.0)
         if (pressed) web[w.id]?.touch(MotionEvent.ACTION_MOVE, c[0], c[1])
     }
+    /** The title bar's height as a fraction of the window's: the cursor's v runs from minus this to 1. */
+    private fun barSpan(w: DesktopWindow) = w.shownBarHeight() / w.shownHeight()
     fun padTap() {
         padTouchNs = System.nanoTime()
         if (desktop.visible.isEmpty()) { if (homeHover >= 0) activateHome(homeHover); return }
-        val w = desktop.focused ?: return; val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }; web[w.id]?.tap(c[0], c[1])
+        val w = desktop.focused ?: return; val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
+        if (c[1] < 0.0) { Desktop.barButtonAt(c[0])?.let { barAction(w.id, it); onLookPress?.invoke() }; return }
+        web[w.id]?.tap(c[0], c[1])
+    }
+
+    /** The main menu: every window is put away (not closed) and the home's icons show. */
+    fun showHome() { for (w in desktop.windows) if (!w.minimized) desktop.minimize(w.id); changed() }
+
+    // ---- a remote's or a keyboard's arrow keys
+    private var keyHover = -1; private var keyNs = 0L
+    private val KEY_HOLD_NS = 8_000_000_000L
+    /** One step of the arrow keys: across the home's icons when the home shows, else the cursor of the focused window. */
+    fun keyMove(dx: Int, dy: Int) {
+        val now = System.nanoTime()
+        if (desktop.visible.isEmpty()) {
+            val n = homeItems.size; if (n == 0) return
+            val cs = HomeGrid.centres(n)
+            val from = if (keyHover in 0 until n && now - keyNs < KEY_HOLD_NS) keyHover else if (homeHover >= 0) homeHover else -1
+            if (from < 0) { keyHover = 0; keyNs = now; return }
+            // the nearest icon in that direction: the step along it counts once, the step across it three times
+            var best = -1; var bestD = Float.MAX_VALUE
+            for (i in 0 until n) {
+                if (i == from) continue
+                val ax = cs[i][0] - cs[from][0]; val ay = cs[i][1] - cs[from][1]
+                val along = ax * dx + ay * dy; val across = Math.abs(ax * dy) + Math.abs(ay * dx)
+                if (along <= 1f) continue
+                val d = along + across * 3f
+                if (d < bestD) { bestD = d; best = i }
+            }
+            if (best >= 0) keyHover = best else keyHover = from
+            keyNs = now
+        } else padMove(dx * 0.06, dy * 0.06 / (desktop.focused?.aspect ?: 1.0), false)
+    }
+    /** The remote's OK key. */
+    fun keySelect() {
+        if (desktop.visible.isEmpty()) { val now = System.nanoTime(); if (keyHover >= 0 && now - keyNs < KEY_HOLD_NS) { activateHome(keyHover); return } }
+        padTap()
     }
     fun padPress(down: Boolean) {
         val w = desktop.focused ?: return; val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
         if (down == pressed) return
+        if (down && c[1] < 0.0) return      // on the title bar: buttons answer to a tap
         pressed = down; web[w.id]?.touch(if (down) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_UP, c[0], c[1])
     }
     fun padScroll(dx: Double, dy: Double, moveMode: Boolean) {
@@ -230,6 +272,8 @@ class DesktopSession(private val activity: Activity) {
             val h = Geometry.planeHit(origin, forward, Geometry.centre(anchor, yaw, 0.0, DesktopRenderer.HOME_DISTANCE), yaw, 0.0)
             if (h != null) hover = HomeGrid.hit(h[0], h[1], homeItems.size) ?: -1
         }
+        // an icon chosen with the arrow keys stays chosen for a while, wherever the head points
+        if (showHome && keyHover in homeItems.indices && nowNs - keyNs < KEY_HOLD_NS) hover = keyHover
         homeHover = hover
         if (showHome && handGestures) {
             val pinching = Tracking.hands.any { it.pinching }
@@ -241,7 +285,9 @@ class DesktopSession(private val activity: Activity) {
         var looked: String? = null
         if (lookToPress && !full && nowNs - padTouchNs > 700_000_000L && !handDown) {
             val tile = if (showHome) null else Rail.dockTile(origin, forward, anchor, desktop.followAnchor.yaw, HomeApps.all.size)
-            if (showHome && hover >= 0) { looked = "home:$hover"; ringDistance = DesktopRenderer.HOME_DISTANCE }
+            // an icon opens by looking only when there is a head to look with (not in the phone preview) and it was not chosen with the keys
+            if (showHome && hover >= 0 && tracked && !(keyHover == hover && nowNs - keyNs < KEY_HOLD_NS)) { looked = "home:$hover"; ringDistance = DesktopRenderer.HOME_DISTANCE }
+            else if (showHome) { }
             else if (tile != null) { looked = "dock:$tile"; ringDistance = Rail.DOCK_DISTANCE }
             else {
                 val g = desktop.hit(origin, forward, anchor)

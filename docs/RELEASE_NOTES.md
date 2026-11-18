@@ -25,3 +25,17 @@ Ultra XR for Pixel + XREAL Air 2 Ultra.
 - Emulator: enter a game from its card, hold Leave, enter again: 3 of 3 checks both times, the touchpad service
   bound again after the restart. Not yet done on the phone.
 - The home view and the launcher's glasses picture try again for a few seconds when their window is refused.
+
+## Home view: the cursor reaches the title bar, the main menu comes first, arrow keys (18 November 2026)
+
+- The touchpad's cursor could not leave a window's page, so the close, maximise and minimise buttons above it
+  could only be pressed by looking at them. The cursor now moves up onto the title bar and a tap presses the
+  button under it.
+- The home view opens on its main menu (the icons: games, Room check, web apps). Windows from last time are put
+  away, not closed; the phone lists them. A "Main menu" button on the phone, and a remote's Menu key, go back to it.
+- A remote's arrows step across the main menu's icons and OK opens the chosen one; in a window they move the
+  cursor and OK taps. A full keyboard's arrows and a game controller still reach the page.
+- An icon opens by looking only while the head is tracked (the phone preview no longer opens the middle icon by
+  itself), and not while it is chosen with the arrow keys.
+- The dock under a window still holds the four web shortcuts only. Android apps are not shown in the glasses:
+  the home view draws web pages and starts WebXR games; it does not host other apps' windows.

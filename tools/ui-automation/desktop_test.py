@@ -180,7 +180,14 @@ def main():
     uia.sh("input keyevent KEYCODE_HOME"); time.sleep(1.5); uia.sh("am force-stop %s" % pkg); time.sleep(1)
     uia.sh("am start -n %s/.ui.LauncherActivity --ez desktop true" % pkg); time.sleep(7)
     s = wait(lambda s: len(s) == len(before), 20)
-    after = sorted((w["id"], round(w["yaw"]), w["minimized"], w["follow"], round(w["width"], 1)) for w in s)
+    check("it opens on the main menu, with the windows of last time put away", bool(s) and all(w["minimized"] for w in s), str([w["minimized"] for w in s or []]))
+    # bring them back from their chips on the phone, as the owner would
+    for _ in range(len(before)):
+        chip = next((n for n in uia.nodes() if n["text"].startswith("▁")), None)
+        if chip is None: break
+        x1, y1, x2, y2 = chip["box"]; uia.sh("input tap %d %d" % ((x1 + x2) // 2, (y1 + y2) // 2)); time.sleep(0.8)
+    s = wait(lambda s: len(s) == len(before) and not any(w["minimized"] for w in s), 10)
+    after = sorted((w["id"], round(w["yaw"]), w["minimized"], w["follow"], round(w["width"], 1)) for w in (s or []))
     check("the layout is restored after the app is closed and reopened", before == after, "%s vs %s" % (before, after))
     s = wait(lambda s: all(w["title"] not in ("", "Window") for w in s), 30)
     check("the restored windows reload their pages", all(w["title"] for w in s), str([w["title"] for w in s]))
