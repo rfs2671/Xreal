@@ -34,6 +34,11 @@ RUNS = {
     # and the same build with the hold switched off
     "hold":   ("", ""),
     "hold2":  ("", ""),
+    # hand tracking on a recording with hands in it: as shipped, pictures brightened, quality filter off, both
+    "h_base":    ("", ""),
+    "h_stretch": ("", "stretch=1" + chr(10)),
+    "h_qf0":     ("", "quality_filter=0" + chr(10)),
+    "h_both":    ("", "stretch=1" + chr(10) + "quality_filter=0" + chr(10)),
     "hold3":  ("", ""),      # with the estimator restarted when it wanders while the glasses lie still
     "hold4":  ("", ""),
     "nohold": ("hold_when_still=0" + chr(10), ""),

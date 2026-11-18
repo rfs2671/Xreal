@@ -249,16 +249,15 @@ test away from accessibility services. Not run on the phone.
 
 ## Hands: what was changed after the first sessions
 
-No session has yet produced a pinch, and there is no recording with a tracked hand in it, so
-these are reasoned changes with unit tests, not measured ones. The session record now collects
+The pinch rule is measured on a recording of the owner's hands; the rest are reasoned changes
+with unit tests. None of it has been tried inside a game yet. The session record now collects
 what is needed to measure them (each hand's finger length, the closest the fingertips came in
 millimetres and in finger lengths, frames held through a loss).
 
-- **Pinch judged against the hand** (`core/SessionTools.kt`, `PinchState`): fingertips count as
-  together under 18 mm or under 0.28 of the index finger's length, whichever is easier, and
-  apart again only over 32 mm and 0.48. A tracker that puts a hand a little too far away makes
-  it a little too large by the same factor; a rule in finger lengths survives that.
-- **Two results in a row** start or end a pinch, so one stray frame does neither.
+- **Pinch rule from measurement** (`core/SessionTools.kt`, `PinchState`): fingertips count as
+  together under 33 mm (or under 0.46 of the index finger's length) and apart again only over
+  46 mm (and 0.65), on single results. The first rule, 18 mm for two results in a row, caught
+  none of the owner's five recorded pinches; see `docs/TRACKING_ANALYSIS.md`.
 - **Brief loss is bridged**: a hand that disappears for up to a quarter of a second (fingers
   hiding each other as they touch) is reported where it was, pinch included.
 - **Fingertips handed over touching** while Ultra XR's rule says "pinching", because a browser

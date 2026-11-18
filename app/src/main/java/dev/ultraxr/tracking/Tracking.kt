@@ -438,6 +438,18 @@ object Tracking : GlassesLink.Listener {
                         lyingRestartNs = now; restartVio(v, "wandering " + dev.ultraxr.core.Fmt.f(dist(p, lyingAt!!), 2) + " m with the glasses lying still"); lyingAt = null; restarted = true
                     } else if (lying && lyingAt == null) lyingAt = p.copyOf()
                     val use = trusted && !lying && !restarted
+                    // Picked up and tracking again: while the glasses lay still their position was held at the table,
+                    // and the way up to the face is not tracked (the estimator is starting afresh). So the world is
+                    // recentred on the wearer once position has been good for a second, as when a game starts.
+                    if (wasLying != lyingBefore && !lying) recentreDueNs = -1L
+                    lyingBefore = lying
+                    if (recentreDueNs == -1L && use) recentreDueNs = now + 1_000_000_000L
+                    if (recentreDueNs > 0L && !use) recentreDueNs = -1L
+                    if (recentreDueNs > 0L && now >= recentreDueNs) {
+                        recentreDueNs = 0L
+                        log("6DoF: picked up and tracking again, view recentred")
+                        val hook = onPickedUp; if (hook != null) hook() else recenter()
+                    }
                     if (restarted) wasUsing = false
                     else if (supervisor.onState(now, out[0].toLong(), true, p, vel, vioFeatures)) { resetVio(v); wasUsing = false }
                     else if (use) { head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13])); wasUsing = true }
@@ -462,6 +474,10 @@ object Tracking : GlassesLink.Listener {
     private var wasLying = false
     private var wasUsing = false
     private var lyingAt: DoubleArray? = null
+    private var lyingBefore = false
+    private var recentreDueNs = 0L
+    /** Called when the glasses have been picked up again and position is tracked; a running XR session recentres itself. */
+    @Volatile var onPickedUp: (() -> Unit)? = null
     private var lyingRestartNs = 0L
     private fun dist(a: DoubleArray, b: DoubleArray) = Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))
     private const val LYING_WANDER_M = 0.10
@@ -478,6 +494,16 @@ object Tracking : GlassesLink.Listener {
 
     /** Hand tracking settings under measurement (files/hand_options.txt). */
     @Volatile var handOptions = dev.ultraxr.core.HandOptions(); private set
+
+    /**
+     * Creates both trackers again, reading the option files afresh. For replays: the options of the next run are
+     * picked up without ending the app's process (which Android would answer by switching the touchpad service off).
+     */
+    fun reloadTrackers() {
+        val app = appContext ?: return
+        val json = activeFactoryJson ?: try { File(app.filesDir, "factory_config.json").takeIf { it.isFile }?.readText() } catch (_: Exception) { null }
+        startTrackers(app, json)
+    }
 
     /** Set while a recording is replayed: every position state and every hand result is written to CSV files. */
     @Volatile var replayLog: ReplayLog? = null

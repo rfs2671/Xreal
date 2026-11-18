@@ -33,22 +33,33 @@ class SessionToolsTest {
     @Test fun aPinchStartsOnceAndNeedsTheFingersApartToEnd() {
         val p = PinchState()
         assertFalse(p.update(0.06f)); assertFalse(p.pinching)
-        assertTrue(p.update(0.015f))
-        assertFalse("still the same pinch", p.update(0.025f)); assertTrue(p.pinching)
-        assertFalse(p.update(0.04f)); assertFalse(p.pinching)
-        assertTrue(p.update(0.01f))
+        assertTrue(p.update(0.025f))
+        assertFalse("still the same pinch", p.update(0.040f)); assertTrue(p.pinching)
+        assertFalse(p.update(0.05f)); assertFalse(p.pinching)
+        assertTrue(p.update(0.02f))
         p.lost(); assertFalse(p.pinching)
     }
 
+    @Test fun theOwnersRecordedPinchesAreCaught() {
+        // The right hand's fingertip distances from the recording of 17 November 2026, every third result, in mm.
+        val mm = intArrayOf(73, 44, 40, 52, 106, 111, 94, 111, 87, 54, 85, 101, 97, 35, 28, 39, 65, 76, 94, 94, 84, 69, 79, 49, 64, 49, 74, 79, 57, 71, 59,
+            53, 59, 53, 82, 100, 92, 57, 53, 62, 40, 38, 41, 37, 26, 20, 45, 27, 25, 65, 40, 38, 54, 31, 49, 40, 25, 23)
+        val now = PinchState(); val first = PinchState(0.018f, 0.032f, 0.28f, 0.48f, frames = 2)
+        var caught = 0; var before = 0
+        for (v in mm) { if (now.update(v / 1000f, 0.071f)) caught++; if (first.update(v / 1000f, 0.071f)) before++ }
+        assertEquals("the first rule caught none of them", 0, before)
+        assertTrue("five deliberate pinches, at least four caught: $caught", caught in 4..6)
+    }
+
     @Test fun aPinchCanBeJudgedInFingerLengths() {
-        // A hand tracked 30 % too large: its fingertips never come under 18 mm, but they do come under 0.28 finger lengths.
+        // A hand tracked 30 % too large: its fingertips never come under 33 mm, but they do come under 0.46 finger lengths.
         val p = PinchState()
-        assertFalse(p.update(0.060f, 0.100f))
-        assertTrue("24 mm on a 100 mm finger is together", p.update(0.024f, 0.100f))
-        assertFalse(p.update(0.040f, 0.100f)); assertTrue("40 mm is not yet apart on that hand", p.pinching)
-        assertFalse(p.update(0.055f, 0.100f)); assertFalse(p.pinching)
+        assertFalse(p.update(0.080f, 0.100f))
+        assertTrue("40 mm on a 100 mm finger is together", p.update(0.040f, 0.100f))
+        assertFalse(p.update(0.055f, 0.100f)); assertTrue("55 mm is not yet apart on that hand", p.pinching)
+        assertFalse(p.update(0.070f, 0.100f)); assertFalse(p.pinching)
         // without a finger length the millimetre rule is all there is
-        assertFalse(PinchState().update(0.024f))
+        assertFalse(PinchState().update(0.040f))
     }
 
     @Test fun oneStrayResultNeitherStartsNorEndsAPinch() {

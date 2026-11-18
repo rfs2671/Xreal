@@ -207,3 +207,43 @@ any run.
 
 Not addressed, because nothing here can measure it: drift while walking. That needs a recording
 with a walk that returns to its start.
+
+## Hands, measured at last (recording of 17 November 2026, 22:29)
+
+After the owner reported that hand gestures did not register at all, a 45 s recording was made
+with the glasses on and his hands held up and pinching (`live-1794972570764.uxrec`, 854 MB, kept
+outside the repository). It was replayed through the hand tracker on the phone four times.
+
+**Detection.** With the shipped settings each hand was found in 12 to 15 % of all results, which
+sounds bad and is not: the hand that was raised into the middle of the view was found in every
+result for as long as it was there (right hand 6 to 18 s: 171 of 173; left hand 33 to 36 s: 59 of
+59), in runs of 114 and 174 results without a break. Between 18 and 30 s both hands were low, at
+the bottom corners of the cameras' view, and neither was found once. Brightening the pictures
+and switching the quality filter off changed the totals by a few results either way, inside the
+run-to-run spread; neither is adopted.
+
+So the tracker sees a hand that is up in front of the face and not one held at chest height. That
+is where the cameras look, and it is a limit the wearer has to know about.
+
+**Pinch.** The right hand's five deliberate pinches brought thumb tip and index tip, as the
+tracker measures them, to 23, 17, 24, 31 and 23 mm; an open hand measured 50 mm and more. The
+shipped rule needed under 18 mm for two results in a row. Tested on the recorded distances:
+
+| Rule | Right hand's 5 pinches caught | Left hand's 2 |
+|---|---|---|
+| under 18 mm, over 32 mm to end, two results in a row (shipped) | 0 | 0 |
+| under 25 / over 40, two in a row | 2 | 0 |
+| under 32 / over 45, single results | 5 | 1 |
+| under 34 / over 46, single results | 4 | 2 |
+| under 38 / over 50, single results | 5 | 4 (two of them not pinches) |
+
+The rule is now under 33 mm to start and over 46 mm to end, on single results (0.46 and 0.65 of
+the index finger's 71 mm when the finger's length is known). Two results in a row was the wrong
+safeguard at 15 results a second: a quick pinch is only two or three results long. The recorded
+distances are a unit test (`SessionToolsTest.theOwnersRecordedPinchesAreCaught`).
+
+While a hand is being tracked the tracker gives 15 results a second, not 30; the phone was also
+warm (thermal status 2), which halves the rate again when it applies.
+
+Not yet tried: these pinches inside a game. The numbers say the tracker measures them and the
+new rule catches them; whether the browser then clicks where the hand points has to be seen.

@@ -37,7 +37,9 @@ class ReplayService : Service() {
         } catch (_: Throwable) {}
         Tracking.acquire(this); holds = true
         Thread {
-            Thread.sleep(4000)       // the trackers are created on a worker thread
+            Thread.sleep(3000)       // the trackers are created on a worker thread
+            Tracking.reloadTrackers() // with this run's option files
+            Thread.sleep(2000)
             Tracking.replay(File(getExternalFilesDir("recordings"), name), getExternalFilesDir("replay")!!, tag) { note ->
                 Tracking.log("replay finished: $note")
                 stopSelf()

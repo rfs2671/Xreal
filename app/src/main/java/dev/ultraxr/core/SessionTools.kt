@@ -36,8 +36,8 @@ class RecenterGesture(private val holdNs: Long = 1_500_000_000L) {
  *  - Brief loss: the tracker often loses a hand for a frame or two exactly when the fingers touch, because they hide
  *    each other. [lost] with a time keeps the pinch for [holdNs]; only a longer loss ends it.
  */
-class PinchState(private val pressM: Float = 0.018f, private val releaseM: Float = 0.032f,
-                 private val pressRatio: Float = 0.28f, private val releaseRatio: Float = 0.48f,
+class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Float = RELEASE_M,
+                 private val pressRatio: Float = 0.46f, private val releaseRatio: Float = 0.65f,
                  private val frames: Int = 1, private val holdNs: Long = 250_000_000L) {
     var pinching = false; private set
     private var run = 0
@@ -55,6 +55,18 @@ class PinchState(private val pressM: Float = 0.018f, private val releaseM: Float
         if (++run < frames) return false
         run = 0; pinching = wants
         return pinching && !was
+    }
+
+    companion object {
+        /**
+         * Measured, not chosen: in the owner's recording of 17 November 2026 (five deliberate pinches of the right hand,
+         * tracked at 15 results a second) the fingertips came to 23, 17, 24, 31 and 23 mm apart as the tracker
+         * measures them, and an open hand sat at 50 mm and more. The first rule (18 mm, two results in a row) caught
+         * none of the five. Under 33 mm to start and over 46 mm to end, on single results, catches four or five of
+         * the five and both of the left hand's two. In finger lengths (his index finger: 71 mm) that is 0.46 and 0.65.
+         */
+        const val PRESS_M = 0.033f
+        const val RELEASE_M = 0.046f
     }
 
     /** The hand was not found. Without a time, or after [holdNs] without the hand, the pinch ends. Returns true while it is kept. */

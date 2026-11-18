@@ -207,11 +207,13 @@ object XrHost : OpenXrGlassesLayer.Host {
             @Suppress("DEPRECATION")
             wake = pm.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK, "ultraxr:openxr").apply { acquire(4 * 60 * 60 * 1000L) }
         } catch (_: Throwable) {}
+        Tracking.onPickedUp = { recentreNow() }
         if (!feeding) { feeding = true; thread(name = "openxr-feed") { feedLoop() } }
     }
 
     override fun onApplicationDisconnected() {
         applicationConnected = false
+        Tracking.onPickedUp = null
         feeding = false
         lastEvent = "the OpenXR application left"
         closeJournal()
@@ -267,7 +269,7 @@ object XrHost : OpenXrGlassesLayer.Host {
         val pressed = booleanArrayOf(false, false)
         val joints = FloatArray(UltraXrFeed.HAND_FLOATS)
         val ho = Tracking.handOptions
-        val pinch = arrayOf(dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM, frames = 2), dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM, frames = 2))
+        val pinch = arrayOf(dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM), dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM))
         // The last hand given to the application, kept through a loss of a quarter of a second at most.
         val heldJoints = arrayOf(FloatArray(UltraXrFeed.HAND_FLOATS), FloatArray(UltraXrFeed.HAND_FLOATS))
         val heldSinceNs = longArrayOf(0L, 0L); val haveHeld = booleanArrayOf(false, false)
