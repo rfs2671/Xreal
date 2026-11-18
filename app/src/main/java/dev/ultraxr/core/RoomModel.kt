@@ -149,6 +149,25 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         return out
     }
 
+    /**
+     * The places that have been measured again and again: the middle of every box found at least [minHits] times and
+     * seen within the last 30 pictures (ten seconds), within [range] metres of the head; up to [max], x, y, z each.
+     * Unlike the corners of one picture these stay where they are from one look to the next.
+     */
+    @Synchronized fun lastingPoints(headX: Double, headY: Double, headZ: Double, max: Int = 220, minHits: Int = 4, range: Double = 3.0): FloatArray {
+        val out = ArrayList<Box>()
+        for (b in boxes.values) {
+            if (b.hits < minHits || latest - b.last > 30) continue
+            val dx = b.sx / b.hits - headX; val dy = b.sy / b.hits - headY; val dz = b.sz / b.hits - headZ
+            if (dx * dx + dy * dy + dz * dz <= range * range) out.add(b)
+        }
+        val step = maxOf(1, (out.size + max - 1) / max)
+        val f = FloatArray(((out.size + step - 1) / step) * 3); var k = 0
+        var i = 0
+        while (i < out.size) { val b = out[i]; f[k++] = (b.sx / b.hits).toFloat(); f[k++] = (b.sy / b.hits).toFloat(); f[k++] = (b.sz / b.hits).toFloat(); i += step }
+        return f
+    }
+
     /** Finds the floor, table tops and walls. [headY] is how high the head is now (the floor is looked for below it). */
     @Synchronized fun analyse(headY: Double, headX: Double = Double.NaN, headZ: Double = Double.NaN): RoomFindings {
         if (headTop.isNaN() || headY > headTop) headTop = headY

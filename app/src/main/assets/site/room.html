@@ -131,8 +131,8 @@ function frame(t, f) {
     const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]], c = add(h.point, mul(n, 0.004));
     circle(c, u, v, 0.07, [1, 1, 1]); circle(c, u, v, 0.02, [1, 1, 1]); line(c, add(c, mul(n, 0.1)), [1, 1, 1]);
   }
-  // A yellow cross on every place the cameras measured in their newest picture: corners of things, edges, marks on
-  // the floor. If the picture in the glasses is lined up with the world, each cross sits on the thing it was
+  // A yellow cross on every place the cameras have measured several times over: corners of things, edges, marks on
+  // the floor. They stay where they are from one look to the next. If the picture in the glasses is lined up with the world, each cross sits on the thing it was
   // measured on (one eye closed). Crosses that all float above their things are the picture sitting too high.
   R.points = room.points.length;
   for (const c of room.points) {

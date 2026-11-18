@@ -136,3 +136,17 @@ So that test says nothing about the tilt. Changed on it:
 - **Room check draws a yellow cross on each place the cameras measured** in their newest picture, in place of
   relying on the rings. The same reasoning holds: the crosses come from the cameras, so where they sit against
   the real corners they were measured on is the picture's error, and the picture buttons move them.
+
+### The third test of 18 November (17:00): "yellow crosses moving around all over"
+
+From the phone's log: the session ran from the main menu, position was tracked for the whole two minutes over a
+23 m walk and came back within about 10 cm of where it started; head height stayed within 10 cm except one dip
+of 0.6 m that the cameras' floor distance followed (1.57 to 0.98 m and back: the wearer bending down). The floor
+settled at 1.5 to 1.6 m under the cameras. No picture button was pressed.
+
+So the tracking was sound in that session and the crosses were at fault as drawn: they were the corners of the
+newest picture only, replaced three times a second by whichever corners the next picture gave. Nothing stayed
+long enough to be compared with the thing under it.
+
+Changed: a cross is now drawn only on a place measured at least four times and seen in the last ten seconds
+(the room model's own 5 cm boxes), within 3 m. Those stay where they are from one look to the next.
