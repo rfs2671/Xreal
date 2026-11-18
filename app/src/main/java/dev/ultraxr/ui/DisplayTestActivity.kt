@@ -90,7 +90,7 @@ class DisplayTestActivity : Activity() {
         p2.add(Ui.button(this, "Remove pattern (mirror)") { note("pattern removed: Android mirrors the phone"); dismiss(); refresh() }, 0, weight = 1f)
         p2.add(Ui.button(this, "Show pattern") { show(currentModeId()) }, 0, weight = 1f, startDp = 8)
         root.add(p2, topDp = 8)
-        setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); addView(root) })
+        setContentView(ScrollView(this).apply { addView(root) })
     }
 
     override fun onResume() {

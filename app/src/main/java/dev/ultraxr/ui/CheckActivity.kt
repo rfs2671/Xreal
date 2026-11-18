@@ -153,7 +153,7 @@ class CheckActivity : Activity() {
             list.add(row, topDp = 8)
         }
         root.add(list, topDp = 14)
-        setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); addView(root) })
+        setContentView(ScrollView(this).apply { addView(root) })
         stage = GlassesStage(this, null, scene)
     }
 

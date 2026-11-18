@@ -433,34 +433,8 @@ class DesktopSession(private val activity: Activity) {
                 p.shader = android.graphics.RadialGradient(cx, cy, r * 1.55f, intArrayOf(0x55FFFFFF, 0x22FFFFFF, 0x00FFFFFF), floatArrayOf(0.62f, 0.8f, 1f), android.graphics.Shader.TileMode.CLAMP)
                 c.drawCircle(cx, cy, r * 1.55f, p); p.shader = null
             }
-            // body: the app's own colour, lighter at the upper left as if lit from there
-            val hsv = FloatArray(3); Color.colorToHSV(item.color, hsv)
-            val light = Color.HSVToColor(floatArrayOf(hsv[0], hsv[1] * 0.55f, minOf(1f, hsv[2] * 1.25f + 0.1f)))
-            val deep = Color.HSVToColor(floatArrayOf(hsv[0], minOf(1f, hsv[1] * 1.05f), hsv[2] * 0.72f))
-            p.shader = android.graphics.RadialGradient(cx - r * 0.35f, cy - r * 0.45f, r * 1.7f, intArrayOf(light, item.color, deep), floatArrayOf(0f, 0.55f, 1f), android.graphics.Shader.TileMode.CLAMP)
-            c.drawCircle(cx, cy, r, p); p.shader = null
-            // rim: bright at the top, fading out below
-            p.style = Paint.Style.STROKE; p.strokeWidth = if (on) 3.5f else 2.5f
-            p.shader = android.graphics.LinearGradient(0f, cy - r, 0f, cy + r, if (on) 0xFFFFFFFF.toInt() else 0xB4FFFFFF.toInt(), 0x1EFFFFFF, android.graphics.Shader.TileMode.CLAMP)
-            c.drawCircle(cx, cy, r - 1.5f, p); p.shader = null; p.style = Paint.Style.FILL
-            // the mark: the name's first letter, or a play triangle for a game
-            p.color = 0xFFFFFFFF.toInt()
-            if (item.kind == HomeItem.Kind.GAME) {
-                val t = r * 0.42f; val path = android.graphics.Path()
-                path.moveTo(cx - t * 0.62f, cy - t); path.lineTo(cx + t * 0.98f, cy); path.lineTo(cx - t * 0.62f, cy + t); path.close()
-                p.pathEffect = android.graphics.CornerPathEffect(r * 0.12f); c.drawPath(path, p); p.pathEffect = null
-            } else {
-                p.typeface = medium; p.textSize = r * 0.95f
-                c.drawText(item.title.take(1), cx, cy + r * 0.33f, p)
-            }
-            // a game played on the glasses by its owner carries a small tick
-            if (item.verified) {
-                val bx = cx + r * 0.68f; val by = cy - r * 0.68f
-                p.color = 0xFFFFFFFF.toInt(); c.drawCircle(bx, by, 17f, p)
-                p.color = deep; p.style = Paint.Style.STROKE; p.strokeWidth = 4.5f; p.strokeCap = Paint.Cap.ROUND
-                c.drawLine(bx - 7f, by + 1f, bx - 2f, by + 6f, p); c.drawLine(bx - 2f, by + 6f, bx + 8f, by - 6f, p)
-                p.style = Paint.Style.FILL; p.strokeCap = Paint.Cap.BUTT
-            }
+            HomeIcon.draw(c, p, cx, cy, r, item.color, item.kind == HomeItem.Kind.GAME, item.title.take(1), item.verified, on)
+            p.textAlign = Paint.Align.CENTER
             // looking alone: a thin arc closes around the icon, and it opens when the circle is whole
             if (on && progress > 0f) {
                 p.style = Paint.Style.STROKE; p.strokeWidth = 5f; p.strokeCap = Paint.Cap.ROUND; p.color = 0xFFFFFFFF.toInt()

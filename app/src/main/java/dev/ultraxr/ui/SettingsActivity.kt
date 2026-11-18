@@ -58,7 +58,7 @@ class SettingsActivity : Activity() {
         root.add(recCard, topDp = 10)
 
         root.add(Ui.text(this, "Ultra XR ${packageManager.getPackageInfo(packageName, 0).versionName}\nGPL-3.0. Built on Basalt, Monado, XR Gate and Pocket XR; see the project page for licences.", 12f, Ui.MUTED).apply { setLineSpacing(0f, 1.3f) }, topDp = 26)
-        setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); addView(root) })
+        setContentView(ScrollView(this).apply { addView(root) })
     }
 
     override fun onDestroy() { Tracking.release(); super.onDestroy() }

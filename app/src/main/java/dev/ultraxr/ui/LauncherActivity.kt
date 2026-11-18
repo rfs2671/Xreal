@@ -145,6 +145,9 @@ class LauncherActivity : Activity(), Tracking.Observer {
         banner.add(bannerText); banner.add(bannerButton, topDp = 12)
         root.add(banner, topDp = 18)
 
+        // The home view in the glasses is the main way in; the phone's own list below does the same things.
+        root.add(Ui.button(this, "Open home in the glasses", primary = true) { startActivity(Intent(this, DesktopActivity::class.java)) }, topDp = 22)
+
         // Games come first: recently played, favourites, then everything.
         recentTitle = Ui.text(this, "Recently played", 18f, bold = true); recentList = Ui.column(this)
         root.add(recentTitle, topDp = 26); root.add(recentList, topDp = 10)
@@ -191,7 +194,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         actions.add(Ui.button(this, "Recentre") { Tracking.recenter(); home.reanchor() }, 0, weight = 1f)
         actions.add(Ui.button(this, "Settings") { startActivity(Intent(this, SettingsActivity::class.java)) }, 0, weight = 1f, startDp = 10)
         root.add(actions, topDp = 28)
-        setContentView(ScrollView(this).apply { setBackgroundColor(Ui.BG); isFillViewport = true; addView(root) })
+        setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
     }
 
     private fun update() {
@@ -249,41 +252,50 @@ class LauncherActivity : Activity(), Tracking.Observer {
         recentTitle.visibility = View.GONE; favTitle.visibility = View.GONE
         if (browser == null) { webList.add(note("The WebXR browser is not installed on this phone, so games cannot start.")); return }
 
-        fun card(g: dev.ultraxr.core.WebGame): View {
-            val row = Ui.row(this)
-            row.background = Ui.pressable(this, Ui.rounded(Ui.SURFACE, 20f, this))
-            val p = Ui.dp(this, 16); row.setPadding(p, p, Ui.dp(this, 8), p)
-            val col = Ui.column(this)
-            col.add(Ui.text(this, g.name, 17f, bold = true))
-            col.add(Ui.text(this, g.needs, 13f, 0xFFC9D6E6.toInt()).apply { setLineSpacing(0f, 1.2f) }, topDp = 5)
-            val chip = Ui.chip(this)
-            Ui.setChip(chip, dev.ultraxr.core.GameLibrary.label(g.state), when (g.state) {
-                dev.ultraxr.core.WebGame.State.VERIFIED -> Ui.GOOD; dev.ultraxr.core.WebGame.State.TESTED -> Ui.WARN
-                dev.ultraxr.core.WebGame.State.BLOCKED -> Ui.BAD; else -> Ui.MUTED })
-            col.add(chip, ViewGroup.LayoutParams.WRAP_CONTENT, topDp = 10)
-            row.add(col, 0, weight = 1f)
-            val star = Ui.text(this, if (g.url in favs) "\u2605" else "\u2606", 24f, if (g.url in favs) Ui.WARN else Ui.MUTED).apply {
-                gravity = Gravity.CENTER; minWidth = Ui.dp(this@LauncherActivity, 52); minHeight = Ui.dp(this@LauncherActivity, 52)
-                contentDescription = if (g.url in favs) "Remove ${g.name} from favourites" else "Add ${g.name} to favourites"
-                isClickable = true
-                setOnClickListener { library.edit().putStringSet("favourites", dev.ultraxr.core.GameLibrary.toggleFavourite(favourites(), g.url)).apply(); refreshWeb() }
+        // Games as the same round icons the glasses show, three to a row. Tap to play; press and hold to keep one first.
+        val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
+        val runnable = games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }
+        fun tile(g: dev.ultraxr.core.WebGame): View {
+            val blocked = g.state == dev.ultraxr.core.WebGame.State.BLOCKED
+            val tint = tints[(runnable.indexOf(g).takeIf { it >= 0 } ?: games.indexOf(g)) % tints.size]
+            val col = Ui.column(this).apply { gravity = Gravity.CENTER_HORIZONTAL }
+            val icon = dev.ultraxr.desktop.HomeIcon.IconView(this, tint, true, g.name.take(1), g.state == dev.ultraxr.core.WebGame.State.VERIFIED, blocked)
+            col.addView(icon, LinearLayout.LayoutParams(Ui.dp(this, 76), Ui.dp(this, 76)))
+            val fav = g.url in favs
+            col.add(Ui.text(this, (if (fav) "\u2605 " else "") + g.name.substringBefore(" (").trim(), 14f, Ui.TEXT, bold = true).apply { gravity = Gravity.CENTER; maxLines = 2 }, topDp = 10)
+            val caption = when (g.state) {
+                dev.ultraxr.core.WebGame.State.VERIFIED -> "Played on the glasses"
+                dev.ultraxr.core.WebGame.State.TESTED -> "Tested, not yet seen"
+                dev.ultraxr.core.WebGame.State.BLOCKED -> "Does not run yet"
+                else -> "Not tested"
             }
-            row.add(star, ViewGroup.LayoutParams.WRAP_CONTENT)
-            row.isClickable = true; row.contentDescription = "Play ${g.name}"
-            row.setOnClickListener {
+            col.add(Ui.text(this, caption, 12f, Ui.MUTED).apply { gravity = Gravity.CENTER }, topDp = 4)
+            col.setPadding(Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14))
+            col.background = Ui.pressable(this, Ui.rounded(0x00000000, 22f, this))
+            col.isClickable = true
+            col.contentDescription = "Play ${g.name}. " + g.detail
+            col.setOnClickListener {
                 library.edit().putString("recent", dev.ultraxr.core.GameLibrary.played(recent(), g.url).joinToString("\u0001")).apply()
                 play(g.name) { stereo ->
                     XrRuntime.launchUrl(this, browser, g.url, stereo)
                     if (Tracking.settings.autoEnter) dev.ultraxr.xr.XrHost.autoEnter(g.enter)
                 }
             }
-            return row
+            col.setOnLongClickListener { library.edit().putStringSet("favourites", dev.ultraxr.core.GameLibrary.toggleFavourite(favourites(), g.url)).apply(); refreshWeb(); true }
+            return col
         }
-        val byUrl = games.associateBy { it.url }
-        rec.mapNotNull { byUrl[it] }.let { list -> if (list.isNotEmpty()) { recentTitle.visibility = View.VISIBLE; for (g in list) recentList.add(card(g), topDp = 8) } }
-        games.filter { it.url in favs }.let { list -> if (list.isNotEmpty()) { favTitle.visibility = View.VISIBLE; for (g in list) favList.add(card(g), topDp = 8) } }
-        for (g in dev.ultraxr.core.GameLibrary.ordered(games)) webList.add(card(g), topDp = 8)
-        webList.add(Ui.button(this, "Browse the web in XR") { play(browser.loadLabel(packageManager).toString()) { stereo -> XrRuntime.launch(this, browser, stereo) } }, topDp = 10)
+        // favourites first, then what was played last, then the rest; games that do not run yet stay last
+        val order = dev.ultraxr.core.GameLibrary.ordered(games).sortedBy { g -> if (g.state == dev.ultraxr.core.WebGame.State.BLOCKED) 3 else if (g.url in favs) 0 else if (g.url in rec) 1 else 2 }
+        val panel = Ui.column(this, 8).apply { background = Ui.rounded(Ui.SURFACE, 28f, this@LauncherActivity) }
+        for (chunk in order.chunked(3)) {
+            val r = Ui.row(this).apply { gravity = Gravity.TOP }
+            for (g in chunk) r.add(tile(g), 0, weight = 1f)
+            repeat(3 - chunk.size) { r.add(View(this), 0, weight = 1f) }
+            panel.add(r)
+        }
+        webList.add(panel)
+        webList.add(Ui.text(this, "Tap to play. Press and hold to keep a game first.", 13f, Ui.MUTED).apply { gravity = Gravity.CENTER }, topDp = 10)
+        webList.add(Ui.button(this, "Browse the web in XR") { play(browser.loadLabel(packageManager).toString()) { stereo -> XrRuntime.launch(this, browser, stereo) } }, topDp = 14)
     }
 
     private fun refreshApps() {
