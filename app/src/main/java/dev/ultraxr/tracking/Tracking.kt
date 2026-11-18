@@ -605,7 +605,7 @@ object Tracking : GlassesLink.Listener {
                 }
                 if (version != head.worldVersion) continue           // recentred meanwhile: these points are in the old world
                 room.add(world, k, frame++); roomPictures++
-                if (frame % 3 != 0) continue
+                if (frame % 2 != 0) continue
                 val f = room.analyse(cam.p[1], cam.p[0], cam.p[2])
                 if (version != head.worldVersion) continue
                 roomFindings = f

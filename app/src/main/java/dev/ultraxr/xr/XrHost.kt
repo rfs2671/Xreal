@@ -280,11 +280,13 @@ object XrHost : OpenXrGlassesLayer.Host {
     @Volatile private var floorTrim = Float.NaN; private var floorTrimApplied = 0f
     /** Moves the floor a step down (positive) or up for the owner, who is looking at it; kept for next time. */
     fun nudgeFloor(stepM: Float) {
-        val t = ((if (floorTrim.isNaN()) Tracking.settings.floorTrimM else floorTrim) + stepM).coerceIn(-0.4f, 0.4f)
+        val t = ((if (floorTrim.isNaN()) Tracking.settings.floorTrimM else floorTrim) + stepM).coerceIn(-1.2f, 1.2f)
         floorTrim = t; Tracking.settings.floorTrimM = t
         val fy = Tracking.floorY
         Tracking.log("OpenXR: floor moved by the owner to " + dev.ultraxr.core.Fmt.f(t * 100.0, 0) + " cm below what was " + (if (fy.isNaN()) "set as height" else "measured (" + dev.ultraxr.core.Fmt.f(-fy, 2) + " m below the origin)"))
     }
+    /** How far under the glasses the cameras put the floor right now, in metres; NaN when they have not found it. */
+    val measuredBelowGlassesM: Double get() { val fy = Tracking.floorY; return if (fy.isNaN()) Double.NaN else dev.ultraxr.openxr.UltraXrFeed.lastHead[1] - fy }
     /** The owner's floor correction in metres, for showing. */
     val floorTrimM: Float get() = if (floorTrim.isNaN()) 0f else floorTrim
 

@@ -27,7 +27,7 @@
 'use strict';
 // What the page saw, for the automated test (posted to the app in test builds; ignored otherwise).
 const R = { page: 'room', hasXR: !!navigator.xr, mode: null, error: null, frames: 0, ready: false, measured: null, floorY: null, eyeHeight: null,
-  surfaces: null, kinds: null, packets: 0, roomError: null, lookHit: null, apiHit: null, apiPlanes: null, apiAnchor: null, balls: 0, bounces: 0, features: null };
+  surfaces: null, kinds: null, packets: 0, roomError: null, lookHit: null, apiHit: null, apiPlanes: null, apiAnchor: null, balls: 0, bounces: 0, features: null, fingerMarks: 0 };
 const state = document.getElementById('state');
 function report() { state.textContent = R.error ? R.error : R.mode ? 'Running in the glasses.' : 'Tap anywhere to start.'; fetch('/report', { method: 'POST', body: JSON.stringify(R) }).catch(() => {}); }
 setInterval(report, 1000);
@@ -130,6 +130,22 @@ function frame(t, f) {
     let u = sub(a, mul(n, dot(a, n))); const l = Math.hypot(u[0], u[1], u[2]); u = mul(u, 1 / l);
     const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]], c = add(h.point, mul(n, 0.004));
     circle(c, u, v, 0.07, [1, 1, 1]); circle(c, u, v, 0.02, [1, 1, 1]); line(c, add(c, mul(n, 0.1)), [1, 1, 1]);
+  }
+  // A small ring on each tracked index fingertip and thumb tip. The cameras that track the hand sit beside the eyes,
+  // so if the picture in the glasses is lined up with the world, each ring sits on its fingertip (with one eye
+  // closed: the picture is the same for both eyes, so up close it doubles). Where it sits instead is the display's error.
+  R.fingerMarks = 0;
+  for (const input of session.inputSources) {
+    if (!input.hand || !f.getJointPose) continue;
+    for (const name of ['index-finger-tip', 'thumb-tip']) {
+      const js = input.hand.get(name); const jp = js ? f.getJointPose(js, room.ref) : null; if (!jp) continue;
+      const c = [jp.transform.position.x, jp.transform.position.y, jp.transform.position.z];
+      let n = sub(head, c); const l = Math.hypot(n[0], n[1], n[2]) || 1; n = mul(n, 1 / l);
+      let u = [n[2], 0, -n[0]]; const ul = Math.hypot(u[0], u[1], u[2]) || 1; u = mul(u, 1 / ul);
+      const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]];
+      circle(c, u, v, 0.012, [1, 0.3, 0.3]); line(add(c, mul(u, -0.02)), add(c, mul(u, 0.02)), [1, 0.3, 0.3]); line(add(c, mul(v, -0.02)), add(c, mul(v, 0.02)), [1, 0.3, 0.3]);
+      R.fingerMarks++;
+    }
   }
   for (const b of balls) { circle(b.p, [1, 0, 0], [0, 1, 0], BALL, [1, 0.9, 0.2]); circle(b.p, [1, 0, 0], [0, 0, 1], BALL, [1, 0.9, 0.2]); circle(b.p, [0, 1, 0], [0, 0, 1], BALL, [1, 0.9, 0.2]); }
 

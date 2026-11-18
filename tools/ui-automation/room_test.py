@@ -52,6 +52,7 @@ def main():
     wait(lambda r: r.get("measured") is True and abs((r.get("eyeHeight") or 0) - 1.30) < 0.04, 30)
     r = last() or {}
     check("a floor found by the cameras becomes the page's floor", r.get("measured") is True and abs((r.get("eyeHeight") or 0) - 1.30) < 0.04, "measured=%s, eyes %s m above the floor" % (r.get("measured"), r.get("eyeHeight")))
+    check("a ring is drawn on each tracked fingertip (the display alignment test)", r.get("fingerMarks", 0) >= 2, "%s marks" % r.get("fingerMarks"))
     check("the page gets the floor, the table top and the wall", sorted((r.get("kinds") or "").split(",")) == ["floor", "table", "wall"], r.get("kinds"))
     log = uia.sh("logcat -d | grep -c 'floor 1.30 m below the world.s origin, measured'").strip()
     check("the runtime was told the measured floor", log not in ("", "0"), log + " log lines")

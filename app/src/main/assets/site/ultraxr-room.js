@@ -77,18 +77,28 @@
         this._fresh = null;
         const pose = frame.getViewerPose(this.ref);
         if (pose) {
-          const hp = d.head.p, moved = this._lastHead ? Math.hypot(hp[0] - this._lastHead[0], hp[1] - this._lastHead[1], hp[2] - this._lastHead[2]) : 0;
-          this._lastHead = hp;
-          // a head on the move is in a slightly different place by the time the page asks: only calm samples count
-          if (!this.ready || moved < 0.03) {
-            const yaw = yawOf(Qa(pose.transform.orientation)) - yawOf(d.head.q);
-            const shift = sub(P(pose.transform.position), rotY(yaw, hp));
-            if (!this.ready) { this.yaw = yaw; this.shift = shift; this.ready = true; }
+          // The page's space and the app's differ by one fixed turn and shift (until a recentre). A reading taken while
+          // the head moves is off, because the app's pose and the page's are from slightly different moments: a head
+          // turning at 100 degrees a second is 5 to 10 degrees further on. So only readings from a calm head count
+          // (under 1.5 cm and 0.6 degrees since the reading before), and the answer is the middle of the last 21 of
+          // them, held still: one odd reading moves nothing.
+          const hp = d.head.p, hy = yawOf(d.head.q), lh = this._lastHead;
+          let dyaw = lh ? hy - lh.yaw : 0; while (dyaw > Math.PI) dyaw -= 2 * Math.PI; while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+          const calm = !!lh && Math.hypot(hp[0] - lh.p[0], hp[1] - lh.p[1], hp[2] - lh.p[2]) < 0.015 && Math.abs(dyaw) < 0.0105;
+          this._lastHead = { p: hp, yaw: hy };
+          const yaw = yawOf(Qa(pose.transform.orientation)) - hy;
+          const shift = sub(P(pose.transform.position), rotY(yaw, hp));
+          if (!this.ready) { this.yaw = yaw; this.shift = shift; this.ready = true; this._fits = []; this._odd = 0; }
+          else if (calm) {
+            let dy = yaw - this.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
+            const far = Math.abs(dy) > 0.12 || Math.hypot(shift[0] - this.shift[0], shift[1] - this.shift[1], shift[2] - this.shift[2]) > 0.25;
+            // far off three calm readings running: the world was recentred; start again from here
+            if (far) { if (++this._odd >= 3) { this._fits = []; this._odd = 0; this.yaw = yaw; this.shift = shift; } }
             else {
-              let dy = yaw - this.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
-              const far = Math.abs(dy) > 0.2 || Math.hypot(shift[0] - this.shift[0], shift[1] - this.shift[1], shift[2] - this.shift[2]) > 0.3;
-              const k = far ? 1 : 0.15;                 // a recentre is taken at once, noise is averaged away
-              this.yaw += k * dy; this.shift = add(this.shift, mul(sub(shift, this.shift), k));
+              this._odd = 0; this._fits.push([this.yaw + dy, shift[0], shift[1], shift[2]]); if (this._fits.length > 21) this._fits.shift();
+              const mid = (k) => { const v = this._fits.map((f) => f[k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+              const ny = mid(0), ns = [mid(1), mid(2), mid(3)];
+              if (Math.abs(ny - this.yaw) > 0.002 || Math.hypot(ns[0] - this.shift[0], ns[1] - this.shift[1], ns[2] - this.shift[2]) > 0.004) { this.yaw = ny; this.shift = ns; }
             }
           }
         }

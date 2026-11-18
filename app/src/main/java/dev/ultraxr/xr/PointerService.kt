@@ -33,7 +33,7 @@ class PointerService : AccessibilityService() {
     private var pad: Pad? = null
     private var keysLogged = 0
     private val tick = object : Runnable {
-        override fun run() { sync(); handler.postDelayed(this, 500) }
+        override fun run() { sync(); pad?.invalidate(); handler.postDelayed(this, 500) }
     }
 
     override fun onServiceConnected() {
@@ -187,7 +187,10 @@ class PointerService : AccessibilityService() {
             canvas.drawText("Hold: floor down", width * 0.72f, height * 0.705f + 6 * density, paint)
             paint.textSize = 13f * density; paint.color = 0xFF9FB0C4.toInt()
             val cm = Math.round(XrHost.floorTrimM * 100)
-            canvas.drawText("Floor " + XrHost.floorSource + (if (cm == 0) "" else ", moved " + Math.abs(cm) + " cm " + (if (cm > 0) "down" else "up")), width / 2f, height * 0.78f, paint)
+            // what the cameras measure, in a number the wearer can check against a tape measure or their own height
+            val below = XrHost.measuredBelowGlassesM
+            val said = if (below.isNaN()) "Floor not found yet (using the height setting)" else "Cameras: floor " + dev.ultraxr.core.Fmt.f(below, 2) + " m under the glasses"
+            canvas.drawText(said + (if (cm == 0) "" else ", moved " + Math.abs(cm) + " cm " + (if (cm > 0) "down" else "up")), width / 2f, height * 0.78f, paint)
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {
