@@ -22,7 +22,8 @@ import kotlin.math.abs
  * Turns the phone into a touchpad while an XR application is running, so a game can be entered and played without
  * hand tracking. Android gives touches and keys to the application in front (the XR application), not to Ultra XR;
  * an accessibility service is the supported way for another app to receive them. It reads no screen content and
- * asks for no accessibility events: it only shows its own touchpad window and listens to the volume keys.
+ * asks Android for one kind of event only, which app's window came to the front, so that the touchpad can leave the
+ * screen when the game is left; it reads nothing of any window. It shows its own touchpad window and listens to the volume keys.
  *
  * Drag: move the pointer. Tap: select. Two fingers down, or volume-down held: press and keep pressed (grab and
  * carry). Volume-up: recentre the view and the pointer. A mouse moves and clicks the same pointer.
@@ -35,22 +36,58 @@ class PointerService : AccessibilityService() {
         override fun run() { sync(); handler.postDelayed(this, 500) }
     }
 
-    override fun onServiceConnected() { running = true; handler.post(tick) }
+    override fun onServiceConnected() {
+        running = true
+        // The one thing asked of Android: which app's window came to the front (its package name, nothing in it),
+        // so the touchpad leaves the screen when the wearer leaves the game.
+        try { serviceInfo = serviceInfo.apply { eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED; notificationTimeout = 100 } } catch (t: Throwable) { Tracking.log("pointer: cannot watch which app is in front: $t") }
+        handler.post(tick)
+    }
     override fun onUnbind(intent: android.content.Intent?): Boolean { running = false; handler.removeCallbacks(tick); hide(); return super.onUnbind(intent) }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    /** False once another app (or Ultra XR's own screens) is in front of the game: the touchpad is then taken away. */
+    @Volatile private var gameInFront = true
+    private var wasConnected = false
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val pkg = event.packageName?.toString() ?: return; val cls = event.className?.toString() ?: ""
+        val game = dev.ultraxr.openxr.OpenXrGlassesLayer.clientPackage
+        val front = when {
+            game.isNotEmpty() && pkg == game -> true
+            pkg == packageName -> if (cls.startsWith("dev.ultraxr.ui.")) false else return       // our own touchpad window is not "another app"
+            pkg == "com.android.systemui" || pkg == "android" || cls.contains("InputMethod") -> return   // the notification shade, the volume panel, a keyboard
+            else -> false
+        }
+        if (front != gameInFront) { gameInFront = front; Tracking.log("pointer: " + (if (front) "the game is in front again" else "$pkg is in front, touchpad put away")); sync() }
+    }
     override fun onInterrupt() {}
 
     private fun wanted() = XrHost.applicationConnected
 
-    private fun sync() { if (wanted() && pad == null) show() else if (!wanted() && pad != null) hide() }
+    private fun sync() {
+        // a game that has just connected is in front, whatever was seen before
+        val c = wanted(); if (c && !wasConnected) gameInFront = true; wasConnected = c
+        val want = c && gameInFront
+        if (want && pad == null) show() else if (!want && pad != null) hide()
+    }
 
     private fun show() {
         val v = Pad(this)
+        v.onLeave = { leave() }
         val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.OPAQUE)
         try { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(v, lp); pad = v; Tracking.log("pointer: touchpad shown on the phone") }
         catch (t: Throwable) { Tracking.log("pointer: touchpad could not be shown: $t") }
+    }
+
+    /**
+     * The "Leave the game" button on the touchpad: the touchpad goes and the phone shows its home screen. Without
+     * it the touchpad covered the phone for as long as the browser kept its session, with no way past it.
+     */
+    private fun leave() {
+        Tracking.log("pointer: Leave pressed, touchpad put away and the phone sent to its home screen")
+        gameInFront = false; hide()
+        try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (t: Throwable) { Tracking.log("pointer: could not go home: $t") }
     }
 
     private fun hide() {
@@ -78,6 +115,17 @@ class PointerService : AccessibilityService() {
         // A swipe across the phone's short side carries the pointing hand about 0.7 m: across the whole view.
         private val metresPerPixel = 0.7 / minOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels).coerceAtLeast(1)
         init { setBackgroundColor(0xFF05070A.toInt()); keepScreenOn = true }
+        var onLeave: (() -> Unit)? = null
+        /** Where the Leave button is, as fractions of the upright page: across its middle, near the bottom. */
+        private fun inLeave(ux: Float, uy: Float, w: Int, h: Int) = ux > w * 0.2f && ux < w * 0.8f && uy > h * 0.80f && uy < h * 0.89f
+        /** A place on the screen as a place on the upright page that [onDraw] draws (the inverse of its turning). */
+        private fun toPage(x: Float, y: Float, out: FloatArray) {
+            val t = turn(); val w = if (t == 1 || t == 3) height else width; val h = if (t == 1 || t == 3) width else height
+            val dx = x - width / 2f; val dy = y - height / 2f
+            when (t) { 1 -> { out[0] = -dy; out[1] = dx }; 3 -> { out[0] = dy; out[1] = -dx }; 2 -> { out[0] = -dx; out[1] = -dy }; else -> { out[0] = dx; out[1] = dy } }
+            out[0] += w / 2f; out[1] += h / 2f
+        }
+        private val page = FloatArray(2)
 
         /**
          * The browser holds the phone's screen in landscape, but the phone is held upright. The touchpad therefore
@@ -111,7 +159,7 @@ class PointerService : AccessibilityService() {
 
         private fun drawPad(canvas: Canvas, width: Int, height: Int) {
             val lines = listOf("Touchpad" to 26f, "" to 10f, "Drag: move the pointer" to 17f, "Tap: select" to 17f, "Two fingers, or hold volume-down:" to 17f, "grab and carry" to 17f,
-                "Volume-up: recentre" to 17f, "Back: leave the game" to 17f, "" to 10f, "Selections so far: " + PointerInput.clicks to 14f)
+                "Volume-up: recentre" to 17f, "" to 10f, "Selections so far: " + PointerInput.clicks to 14f)
             var y = height * 0.30f
             for ((text, size) in lines) {
                 paint.textSize = size * density; paint.color = if (size > 20f) 0xFFE8F0FA.toInt() else 0xFF9FB0C4.toInt()
@@ -120,6 +168,11 @@ class PointerService : AccessibilityService() {
                 y += size * density * 1.7f
             }
             if (PointerInput.pressed(System.nanoTime())) { paint.color = 0xFF3D8BFF.toInt(); canvas.drawRect(0f, 0f, width.toFloat(), 6 * density, paint) }
+            // the way out, always there
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f * density; paint.color = 0xFF9FB0C4.toInt()
+            canvas.drawRoundRect(width * 0.2f, height * 0.80f, width * 0.8f, height * 0.89f, 24 * density, 24 * density, paint)
+            paint.style = Paint.Style.FILL; paint.textSize = 18f * density; paint.color = 0xFFE8F0FA.toInt(); paint.textAlign = Paint.Align.CENTER
+            canvas.drawText("Leave the game", width / 2f, height * 0.845f + 6 * density, paint)
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -139,7 +192,12 @@ class PointerService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     PointerInput.hold(now, 0, false)
-                    if (e.actionMasked == MotionEvent.ACTION_UP && !many && now - downNs < 300_000_000L && travelled < 24 * density) PointerInput.tap(now)
+                    if (e.actionMasked == MotionEvent.ACTION_UP && !many && now - downNs < 600_000_000L && travelled < 24 * density) {
+                        toPage(e.x, e.y, page)
+                        val t = turn(); val w = if (t == 1 || t == 3) height else width; val h = if (t == 1 || t == 3) width else height
+                        if (inLeave(page[0], page[1], w, h)) { onLeave?.invoke(); return true }
+                        if (now - downNs < 300_000_000L) PointerInput.tap(now)
+                    }
                 }
             }
             invalidate(); postInvalidateDelayed(260)      // and once more when a tap's short press is over

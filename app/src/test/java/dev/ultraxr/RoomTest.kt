@@ -125,6 +125,8 @@ class RoomTest {
 
     @Test fun theCounterTopAndTheWallAreFound() {
         val m = RoomModel(); madeUpRoom(m)
+        // a table top or wall is reported the third time it is found
+        assertTrue(m.analyse(0.0).surfaces.none { it.kind != RoomSurface.Kind.FLOOR })
         m.analyse(0.0); val f = m.analyse(0.0)
         val top = f.surfaces.firstOrNull { it.kind == RoomSurface.Kind.TABLE }
         assertNotNull("surfaces: " + f.surfaces.map { it.kind.toString() + " at " + it.cy }, top)
@@ -159,13 +161,44 @@ class RoomTest {
 
     @Test fun aRecentreMovesTheRoomAlong() {
         val m = RoomModel(); madeUpRoom(m)
-        m.analyse(0.0); m.analyse(0.0)
+        m.analyse(0.0); m.analyse(0.0); m.analyse(0.0)
         // the wearer sat down 0.4 m and turned a quarter turn, then recentred: the world's origin is the head again
         m.transform(Pose(doubleArrayOf(0.0, 0.4, 0.0), Q.axisAngle(0.0, 1.0, 0.0, Math.PI / 2)))
         val f = m.analyse(0.0)
         assertEquals(-1.05, f.floorY, 0.03)
         val wall = f.surfaces.first { it.kind == RoomSurface.Kind.WALL }
         assertTrue("the wall now faces along x", abs(wall.nx) > 0.995)
+    }
+
+    @Test fun whatIsNoLongerSeenIsForgotten() {
+        // The wearer walks on: twenty seconds of pictures of somewhere else. The table and wall of the first room are
+        // not reported any more (the estimator's errors add up, so they would be shown in the wrong place); the floor,
+        // which is the same floor, stays.
+        val m = RoomModel(); madeUpRoom(m)
+        repeat(3) { m.analyse(0.0) }
+        val r = Random(9); val pts = FloatArray(3 * 150)
+        for (f in 40 until 40 + RoomModel.WINDOW + 30) {
+            for (i in 0 until 150) { pts[i * 3] = (10 + 4 * r.nextDouble()).toFloat(); pts[i * 3 + 1] = (-1.45 + r.nextGaussian() * 0.015).toFloat(); pts[i * 3 + 2] = (-3 + 4 * r.nextDouble()).toFloat() }
+            m.add(pts, 150, f)
+            if (f % 3 == 0) m.analyse(0.0)
+        }
+        val f = m.analyse(0.0)
+        assertEquals(-1.45, f.floorY, 0.03)
+        assertTrue("left behind: " + f.surfaces.map { it.kind }, f.surfaces.none { it.kind != RoomSurface.Kind.FLOOR })
+    }
+
+    @Test fun afterPositionWasLostTheFloorIsWhereItWasUnderTheHead() {
+        // Position is lost while the wearer walks, and comes back in a world 0.7 m higher than before. The old floor
+        // height would now be 0.75 m under the head (above a table); the floor is put 1.45 m under the head again.
+        val m = RoomModel(); madeUpRoom(m)
+        repeat(6) { m.analyse(0.0) }
+        m.regained(0.7)
+        val f = m.analyse(0.7)
+        assertEquals(0.7 - 1.45, f.floorY, 0.04)
+        assertTrue(f.surfaces.none { it.kind != RoomSurface.Kind.FLOOR })
+        // and without a floor ever found, none is made up
+        val n = RoomModel(); n.regained(0.3)
+        assertTrue(n.analyse(0.3).floorY.isNaN())
     }
 
     @Test fun aRayMeetsTheTableOnlyOverTheTable() {

@@ -151,12 +151,16 @@ object LocalSite {
         sb.append(",\"session\":true,\"head\":{\"age_ms\":").append((System.nanoTime() - UltraXrFeed.lastHeadNs) / 1_000_000)
             .append(",\"p\":[").append(f(head[0].toDouble())).append(',').append(f(head[1] + h)).append(',').append(f(head[2].toDouble()))
             .append("],\"q\":[").append(f(head[3].toDouble())).append(',').append(f(head[4].toDouble())).append(',').append(f(head[5].toDouble())).append(',').append(f(head[6].toDouble())).append("]}")
+        // table tops and walls are only where they are said to be while position is tracked
+        val tracked = Tracking.simulateWearer || Tracking.head.predict(System.nanoTime()).mode == dev.ultraxr.core.HeadTracker.Mode.SIX_DOF
+        sb.append(",\"tracked\":").append(tracked)
         val r = Tracking.roomFindings
         val measured = r != null && !r.floorY.isNaN()
         sb.append(",\"floor\":{\"measured\":").append(measured).append(",\"y\":").append(f(if (measured) r!!.floorY + h else 0.0)).append("}")
         sb.append(",\"surfaces\":[")
         var n = 0
         if (r != null) for (s in r.surfaces) {
+            if (!tracked && s.kind != RoomSurface.Kind.FLOOR) continue
             if (n++ > 0) sb.append(',')
             sb.append("{\"kind\":\"").append(when (s.kind) { RoomSurface.Kind.FLOOR -> "floor"; RoomSurface.Kind.TABLE -> "table"; RoomSurface.Kind.WALL -> "wall" })
                 .append("\",\"c\":[").append(f(s.cx)).append(',').append(f(s.cy + h)).append(',').append(f(s.cz))

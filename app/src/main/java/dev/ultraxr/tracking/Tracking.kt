@@ -488,7 +488,11 @@ object Tracking : GlassesLink.Listener {
                         head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13])); wasUsing = true
                         // After more than two seconds without position the wearer may be somewhere else: what was
                         // found of the room is dropped (the floor's height is kept until a new one is found).
-                        if (roomUsedNs != 0L && now - roomUsedNs > 2_000_000_000L) { room.forgetSurfaces(); log("room: position was away for " + (now - roomUsedNs) / 1_000_000_000L + " s, surfaces forgotten") }
+                        if (roomUsedNs != 0L && now - roomUsedNs > 2_000_000_000L) {
+                            val headNow = head.appFromEstimator().apply(Q.rotate(HeadTracker.Z_TO_Y, p))[1]
+                            room.regained(headNow); roomFindings = room.analyse(headNow)
+                            log("room: position was away for " + (now - roomUsedNs) / 1_000_000_000L + " s: surfaces forgotten, floor " + (if (floorY.isNaN()) "unknown again" else dev.ultraxr.core.Fmt.f(headNow - floorY, 2) + " m below the head as before"))
+                        }
                         roomUsedNs = now
                         // This state is the head at the moment of a picture the room is waiting on: hand both over.
                         synchronized(roomLock) {

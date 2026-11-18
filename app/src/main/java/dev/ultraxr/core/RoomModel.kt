@@ -48,6 +48,9 @@ class RoomFindings(val floorY: Double, val floorSupport: Int, val surfaces: List
  *   table tops    other heights that stand out, where the boxes form a patch at least 30 cm wide
  *   walls         upright planes with boxes over at least 0.8 m along and 0.6 m up
  *
+ * Only the last 20 seconds of pictures count, so what is reported is what is around the wearer now, placed by the
+ * position estimator as it is now; a table top or wall is reported once it has been found three times running.
+ *
  * Coordinates are the application's world (+y up). When that world is recentred, [transform] moves everything along.
  * No Android code: tested on the build machine with made-up rooms and, by hand, with recordings.
  */
@@ -60,16 +63,35 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
     var pointsAdded = 0L; private set
     /** The highest the head has been: the floor is looked for well below that, wherever the head is now. */
     private var headTop = Double.NaN
+    /** The newest picture's number: only what was seen in the last [WINDOW] pictures (about 20 s) counts. */
+    private var latest = 0
+    /** How far the floor was below the head at the last looks, to carry the floor over a loss of position. */
+    private val below = DoubleArray(30); private var belowN = 0
+    /** A table top or wall is shown once it has been found three times in about the same place, and dropped when it stops being found. */
+    private class Kept(var s: RoomSurface, var seen: Int, var missed: Int)
+    private val kept = ArrayList<Kept>()
 
     private fun key(x: Double, y: Double, z: Double): Long {
         val ix = floor(x / voxel).toLong() + OFF; val iy = floor(y / voxel).toLong() + OFF; val iz = floor(z / voxel).toLong() + OFF
         return (ix shl 42) or (iy shl 21) or iz
     }
 
-    @Synchronized fun clear() { boxes.clear(); headTop = Double.NaN; floorHeld = Double.NaN; floorPending = Double.NaN; floorPendingCount = 0 }
+    @Synchronized fun clear() { boxes.clear(); kept.clear(); belowN = 0; headTop = Double.NaN; floorHeld = Double.NaN; floorPending = Double.NaN; floorPendingCount = 0 }
 
     /** Drops every point but keeps the floor's height, which stays true while the wearer has not changed the world. */
-    @Synchronized fun forgetSurfaces() { boxes.clear(); floorPending = Double.NaN; floorPendingCount = 0 }
+    @Synchronized fun forgetSurfaces() { boxes.clear(); kept.clear(); floorPending = Double.NaN; floorPendingCount = 0 }
+
+    /**
+     * Position was lost and is back, with the head now at height [headY] in a world that may have shifted: nothing
+     * found before can be trusted to be where it was. Every point and surface goes. The floor is put where it
+     * usually was under the head (people do not change height much), until the cameras find it again.
+     */
+    @Synchronized fun regained(headY: Double) {
+        boxes.clear(); kept.clear(); floorPending = Double.NaN; floorPendingCount = 0
+        headTop = headY
+        if (belowN >= 3) { val v = below.copyOf(minOf(belowN, below.size)); v.sort(); floorHeld = headY - v[v.size / 2] }
+        else floorHeld = Double.NaN
+    }
 
     /** Adds [n] points (x, y, z floats in the world) seen in picture number [frame]. */
     @Synchronized fun add(points: FloatArray, n: Int, frame: Int) {
@@ -82,6 +104,9 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
             else if (b.last != frame) { if (b.hits < 60) { b.hits++; b.sx += x; b.sy += y; b.sz += z }; b.last = frame }
             pointsAdded++
         }
+        if (frame > latest) latest = frame
+        // what has not been seen for a minute is gone: the estimator's small errors add up, and old points end up in the wrong place
+        if (frame % 30 == 0) boxes.values.removeAll { latest - it.last > 180 }
         if (boxes.size > capacity) {
             // Full: boxes seen only once go first, the longest unseen of them first.
             val once = boxes.entries.filter { it.value.hits == 1 }.sortedBy { it.value.last }
@@ -102,6 +127,10 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         // a recentre turns about the vertical and moves: heights shift by the same amount everywhere
         if (!floorHeld.isNaN()) floorHeld = delta.apply(doubleArrayOf(0.0, floorHeld, 0.0))[1]
         if (!headTop.isNaN()) headTop = delta.apply(doubleArrayOf(0.0, headTop, 0.0))[1]
+        for (k in kept) {
+            val o = k.s; val cc = delta.apply(doubleArrayOf(o.cx, o.cy, o.cz)); val u = Q.rotate(delta.q, doubleArrayOf(o.ux, o.uy, o.uz)); val v = Q.rotate(delta.q, doubleArrayOf(o.vx, o.vy, o.vz))
+            k.s = RoomSurface(o.kind, cc[0], cc[1], cc[2], u[0], u[1], u[2], v[0], v[1], v[2], o.halfU, o.halfV, o.support)
+        }
         floorPending = Double.NaN; floorPendingCount = 0
     }
 
@@ -117,8 +146,11 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
     /** Finds the floor, table tops and walls. [headY] is how high the head is now (the floor is looked for below it). */
     @Synchronized fun analyse(headY: Double, headX: Double = Double.NaN, headZ: Double = Double.NaN): RoomFindings {
         if (headTop.isNaN() || headY > headTop) headTop = headY
+        // The floor is looked for in everything kept (the last minute): its height does not suffer from the estimator's
+        // sideways errors. Table tops and walls only in what the last 20 seconds showed.
         val c = boxes.values.filter { it.hits >= MIN_HITS }
-        if (c.size < 30) return RoomFindings(floorHeld, 0, emptyList(), boxes.size, c.size)
+        fun recent(b: Box) = latest - b.last <= WINDOW
+        if (c.size < 30) return RoomFindings(floorHeld, 0, shown(emptyList()), boxes.size, c.size)
         var lo = Double.MAX_VALUE; var hi = -Double.MAX_VALUE
         for (b in c) { val y = b.y; if (y < lo) lo = y; if (y > hi) hi = y }
         val n = ((hi - lo) / BIN).toInt() + 3
@@ -155,6 +187,8 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         }
         val surfaces = ArrayList<RoomSurface>()
         val fy = floorHeld
+        if (!fy.isNaN() && !found.isNaN() && abs(found - fy) < 0.06) { below[belowN % below.size] = headY - fy; belowN++ }
+        val found2 = ArrayList<RoomSurface>()
         val used = HashSet<Box>()
         if (!fy.isNaN() && floorBin >= 0) {
             val s = inSlab(floorBin); used.addAll(s)
@@ -175,22 +209,51 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
             i++
         }
         for (t in tops.sortedByDescending { slab[it] }.take(4)) {
-            val patch = largestPatch(inSlab(t).filter { it !in used }) ?: continue
+            val patch = largestPatch(inSlab(t).filter { it !in used && recent(it) }) ?: continue
             var sum = 0.0; for (b in patch) sum += b.y
             val r = rectangle(patch, RoomSurface.Kind.TABLE, sum / patch.size) ?: continue
             if (r.halfV < 0.15 || r.halfU * r.halfV * 4 < 0.12) continue        // a line of boxes is an edge, not a top
-            surfaces.add(r); used.addAll(patch)
+            if (r.halfU > 1.5 || r.halfV > 1.0) continue                         // bigger than any table: a level slice through a cluttered room
+            if (!near(r, headX, headZ)) continue
+            // a top is covered with boxes, not just framed by a few: half of its 20 cm squares must hold one
+            val sq = HashSet<Long>(); for (b in patch) sq.add((floor(b.x / 0.2).toLong() shl 32) xor (floor(b.z / 0.2).toLong() and 0xFFFFFFFFL))
+            if (sq.size < 0.5 * (r.halfU * 2 * r.halfV * 2) / 0.04) continue
+            found2.add(r); used.addAll(patch)
         }
 
         // ---- walls: upright planes among what is left between knee and head height
-        val rest = c.filter { it !in used && it.y > base + 0.25 && it.y < base + 2.3 }.toMutableList()
+        val rest = c.filter { it !in used && recent(it) && it.y > base + 0.25 && it.y < base + 2.3 }.toMutableList()
         repeat(4) {
             val w = wall(rest, headX, headZ) ?: return@repeat
-            surfaces.add(w.first)
+            if (near(w.first, headX, headZ)) found2.add(w.first)
             // everything near that plane is spoken for, so the same wall is not found twice a few degrees apart
             val f = w.first; rest.removeAll { b -> abs((b.x - f.cx) * f.nx + (b.z - f.cz) * f.nz) < 0.12 && abs((b.x - f.cx) * f.ux + (b.z - f.cz) * f.uz) < f.halfU + 0.2 }
         }
+        surfaces.addAll(shown(found2))
         return RoomFindings(fy, support, surfaces, boxes.size, c.size)
+    }
+
+    private fun near(s: RoomSurface, headX: Double, headZ: Double) = headX.isNaN() || sqrt((s.cx - headX) * (s.cx - headX) + (s.cz - headZ) * (s.cz - headZ)) < MAX_RANGE + s.halfU
+
+    /**
+     * What is shown of the table tops and walls just [found]: each has to turn up three times in about the same
+     * place first, is then kept steady (its place and size follow new finds half way), and goes when it has not
+     * been found six times running (six seconds).
+     */
+    private fun shown(found: List<RoomSurface>): List<RoomSurface> {
+        val free = found.toMutableList()
+        val it = kept.iterator()
+        while (it.hasNext()) {
+            val k = it.next(); val o = k.s
+            val m = free.firstOrNull { f -> f.kind == o.kind && abs(f.nx * o.nx + f.ny * o.ny + f.nz * o.nz) > 0.94 &&
+                abs((f.cx - o.cx) * o.nx + (f.cy - o.cy) * o.ny + (f.cz - o.cz) * o.nz) < 0.08 &&
+                sqrt((f.cx - o.cx) * (f.cx - o.cx) + (f.cy - o.cy) * (f.cy - o.cy) + (f.cz - o.cz) * (f.cz - o.cz)) < 0.2 + maxOf(o.halfU, f.halfU) * 0.6 }
+            if (m == null) { if (++k.missed > 6) it.remove(); continue }
+            free.remove(m); k.seen++; k.missed = 0
+            k.s = RoomSurface(o.kind, (o.cx + m.cx) / 2, (o.cy + m.cy) / 2, (o.cz + m.cz) / 2, m.ux, m.uy, m.uz, m.vx, m.vy, m.vz, (o.halfU + m.halfU) / 2, (o.halfV + m.halfV) / 2, m.support)
+        }
+        for (f in free) kept.add(Kept(f, 1, 0))
+        return kept.filter { it.seen >= 3 }.map { it.s }
     }
 
     /** The biggest group of boxes that touch each other on a 20 cm grid seen from above. */
@@ -268,18 +331,18 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
             // of things has as many boxes beside it as on it, and is not a wall.
             var beside = 0
             for (b in list) { val d = abs((b.x - mx) * nx + (b.z - mz) * nz); if (d >= 0.05 && d < 0.20) beside++ }
-            if (on.size < 2.5 * beside / 3.0) continue
+            if (on.size < 1.5 * beside) continue
             // and it does not pass through the wearer
             if (!headX.isNaN() && abs((headX - mx) * nx + (headZ - mz) * nz) < 0.35) continue
             val along = DoubleArray(on.size) { (on[it].x - mx) * ux + (on[it].z - mz) * uz }.also { it.sort() }
             val up = DoubleArray(on.size) { on[it].y }.also { it.sort() }
             fun at(s: DoubleArray, f: Double) = s[((s.size - 1) * f).toInt()]
             val a0 = at(along, 0.03); val a1 = at(along, 0.97); val y0 = at(up, 0.03); val y1 = at(up, 0.97)
-            if (a1 - a0 < 0.8 || y1 - y0 < 0.6) continue
+            if (a1 - a0 < 1.2 || y1 - y0 < 1.0) continue
             // filled, not a line of boxes along one shelf edge: boxes in enough different 20 cm squares of the wall
             val squares = HashSet<Long>()
             for (b in on) squares.add((floor(((b.x - mx) * ux + (b.z - mz) * uz) / 0.2).toLong() shl 32) xor (floor(b.y / 0.2).toLong() and 0xFFFFFFFFL))
-            if (squares.size < 10) continue
+            if (squares.size < 0.4 * ((a1 - a0) * (y1 - y0)) / 0.04) continue
             val ca = (a0 + a1) / 2
             return RoomSurface(RoomSurface.Kind.WALL, mx + ca * ux, (y0 + y1) / 2, mz + ca * uz, ux, 0.0, uz, 0.0, 1.0, 0.0, (a1 - a0) / 2, (y1 - y0) / 2, on.size) to on
         }
@@ -295,6 +358,10 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         private const val FLOOR_MIN_BOXES = 36
         private const val FLOOR_MIN_CELLS = 12
         private const val TABLE_MIN_BOXES = 20
-        private const val WALL_MIN_BOXES = 40
+        private const val WALL_MIN_BOXES = 90
+        /** Pictures that count: about 20 s at three a second. */
+        const val WINDOW = 60
+        /** Table tops and walls further from the wearer than this are not reported: too far to place well. */
+        private const val MAX_RANGE = 3.5
     }
 }

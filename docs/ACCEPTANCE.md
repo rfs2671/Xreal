@@ -20,9 +20,11 @@ first live runs of 17 November 2026, which showed what works on the Pixel and wh
 | Phone screen in the same style | drawn; installed on the Pixel | emulator screenshots |
 | AR cones, Hand cubes, Hand tracking showcase, Moon Rider | start and run immersive | Pixel, without the owner looking |
 | XR dragging | does not run: the browser's GPU process loses its context on this page | Pixel |
-| The real floor under a game (cameras measure it; was the height setting) | measured on a recording within about 0.1 m between runs; one live reading | Pixel replay and log; not yet seen |
-| Table tops and walls for games; hit test for pages written for phones' AR | works with a made-up room | emulator only |
-| A game opened from the home view in the glasses | froze on 18 November (the home view's window kept the glasses); fixed, fix not yet seen | Pixel and glasses, by the owner |
+| A game opened from the home view in the glasses | works (froze in the morning of 18 November; fixed, and the next try owned the glasses) | Pixel and glasses, by the owner |
+| The real floor under a game (cameras measure it; was the height setting) | found at first; went wrong after position was lost while walking ("floor higher than the table"); changed, not yet seen again | Pixel and glasses, by the owner |
+| Table tops and walls | "really bad" when moving: outlines everywhere, walls made up; made local, slower to believe and quicker to forget; not yet seen again | Pixel and glasses, by the owner |
+| Hit test for pages written for phones' AR | works with a made-up room | emulator only |
+| The touchpad on the phone | covered the phone after leaving a game, with no way past it; it now leaves when another app is in front and has a Leave button | button and leaving: emulator only |
 | One picture per eye (depth) | blocked: the glasses leave their 3D mode about two seconds after this phone starts sending a picture, and show black | Pixel and glasses |
 
 What stands between this and calling it 1.0 is in the next session below: the home view and the

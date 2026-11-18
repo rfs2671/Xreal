@@ -299,6 +299,25 @@ What was measured, and where:
 | Room page: floor, table, wall, ray casts, standard hit test, planes, anchor, bouncing balls | 18 of 18 checks | emulator with a made-up room, `room_test.py` |
 | three.js `webxr_ar_hittest` unchanged, through `/p/` | its ring lies on the made-up table and a pinch places its cylinder | emulator, by picture |
 
+**First look through the glasses (owner, 18 November, Room check, a 36 m walk through several rooms):** the
+floor and then a table were found; "when I move everything starts drifting": the floor rose above the table,
+table outlines turned up all over, and walls were made up. The log shows two causes. The position estimator lost
+the wearer twice while walking (26 s and 60 s without position, jumps of 1 to 3 m), and on its return the old
+floor height was kept in a world that had shifted (floor 0.6 to 0.9 m under the head for ten seconds). And every
+point ever seen was kept, so small position errors over the walk left old surfaces in wrong places and clutter
+passed for walls. Changed the same day, not yet seen again:
+
+- only the last 20 seconds of pictures count for table tops and walls, and one minute for the floor;
+- a table top or wall is reported the third time it is found in the same place, and dropped six seconds after it
+  stops being found; a top needs half its area covered and is no bigger than 3 x 2 m; a wall needs 1.2 m by 1.0 m,
+  90 boxes, 40 % of its area covered, and fewer boxes beside it than on it; nothing beyond 3.5 m is reported;
+- when position returns after more than two seconds, every point and surface is dropped and the floor is put as far
+  under the head as it usually was (the middle of the last 30 readings), until it is found again;
+- while position is not tracked, pages are given the floor only.
+
+What this does not fix: the estimator losing the wearer while walking. Until that holds, surfaces are right near
+where the wearer stands and looks, and not a map of the home.
+
 Not known: how close the measured floor is to the real one (nobody has compared it through the glasses), how it
 does on a plain floor without texture, and whether walls are found in an ordinary room (in the recording only a
 cabinet front was, on and off). Any page on the phone can read `room.json` while a game runs.
