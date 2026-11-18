@@ -35,7 +35,8 @@ class Settings(context: Context) {
     var autoEnter: Boolean get() = p.getBoolean("autoEnter", false); set(v) = p.edit().putBoolean("autoEnter", v).apply()
     /**
      * Frame pacing of the XR compositor by the present times the display reports, instead of by its own clock.
-     * On the emulator this took the compositor from 30 to 59 frames a second; on the Pixel it has not been measured.
+     * On the emulator this took the compositor from 30 to 59 frames a second; on the Pixel 10 it was worse than the
+     * default (65 % of frames on time against 90 %), so it stays off.
      */
     var paceByDisplay: Boolean get() = p.getBoolean("paceByDisplay", false); set(v) = p.edit().putBoolean("paceByDisplay", v).apply()
     var xrInput: String get() = p.getString("xrInput", "auto") ?: "auto"; set(v) = p.edit().putString("xrInput", v).apply()

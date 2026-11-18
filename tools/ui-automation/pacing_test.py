@@ -65,11 +65,15 @@ def measure(seconds, layer_hint=None):
          "pacer": [l.split(": ", 1)[-1][:110] for l in log.splitlines() if "pacing by" in l or "Created pacer" in l or "pacing to the display" in l][:3]}
     if len(ts) > 10 and period:
         d = np.diff(ts) / period
-        r.update({"presented_per_second": float(len(ts) / ((ts[-1] - ts[0]) / 1e9)),
+        # SurfaceFlinger keeps the last 127 frames. Over a slow adb link (Wi-Fi) a reading can come later than that,
+        # and the frames in between are simply not seen: a hole in the sampling, not a freeze. Holes are counted
+        # apart and left out of the shares.
+        holes = d >= 8; d = d[~holes]
+        r.update({"sampling_holes": int(holes.sum()), "presented_per_second": float(1e9 / (np.mean(d) * period)) if len(d) else None,
                   "intervals": int(len(d)), "on_time_share": float((d < 1.5).mean()),
                   "shown_twice": int(((d >= 1.5) & (d < 2.5)).sum()), "shown_three_times_or_more": int((d >= 2.5).sum()),
                   "interval_ms_p99": float(np.percentile(d, 99) * period / 1e6), "interval_ms_max": float(d.max() * period / 1e6),
-                  "interval_jitter_ms_std": float(np.std(np.diff(ts)[d < 1.5]) / 1e6) if (d < 1.5).sum() > 2 else None})
+                  "interval_jitter_ms_std": float(np.std(d[d < 1.5]) * period / 1e6) if (d < 1.5).sum() > 2 else None})
     return r
 
 def main():

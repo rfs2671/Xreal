@@ -160,12 +160,34 @@ when each compositor frame actually reached the display.
 | paced by the display's reported present times | 59.0 | 98.3 % | 41 of 2,379 |
 
 The second mode is Monado's own display-timing pacer, which the Android target had switched off
-upstream as untested; the Android swapchain does report real present times. It is now a setting
-("Pace frames by the display", Settings; or `debug.xrt.ULTRAXR_DISPLAY_TIMING=1`), off by default,
-because the emulator's GPU path is not the Pixel's and an earlier note in the source says the
-reported times were frozen on one Samsung phone. The same script with `-s <phone>` measures the
-Pixel; that has not been run, the phone was not reachable. Until it has, there is no claim that
-pacing on the Pixel is better.
+upstream as untested; the Android swapchain does report real present times.
+
+Then the same measurement on the Pixel (`tools/pixel/lab.py pacing`: browser's XR world, simulated
+wearer, no glasses, so the compositor draws to the phone's own screen; 40 s each):
+
+| Pixel 10 Pro XL | frames on time | shown twice | shown three times or more | runtime's "late" warnings |
+|---|---|---|---|---|
+| paced by its own clock, 3 ms compositor budget (as shipped) | 90 % | 124 of 1,510 | 24 | 409 |
+| paced by its own clock, 9 ms compositor budget | 91 % | 106 of 1,448 | 22 | 5 |
+| paced by the display's reported present times | 65 % | 493 of 1,508 | 31 | 13 |
+
+(The "three times or more" column includes holes in the sampling over Wi-Fi, which this first
+version of the script could not tell from long frames; the script now counts them apart.)
+
+What this says:
+
+- On the Pixel the shipped mode is the better one. The display-timed mode, which doubled the
+  emulator's frame rate, makes a third of the frames miss on the phone. It stays off by
+  default and remains a switch in Settings.
+- The runtime's warnings do not track what reaches the display: a larger compositor budget
+  removes almost all of them (409 to 5) and changes nothing on screen.
+- About one frame in eleven is shown twice on the phone in the shipped mode, and none of the
+  three settings tried removes that. Its cause has not been found. The 63 % figure from the
+  live run was the runtime's warning count, not this.
+- Not measured: pacing on the glasses' display, with real tracking running at the same time.
+  That needs the glasses plugged in; the script can sample it during the next session.
+
+So frame pacing on the Pixel is measured but not improved by this build.
 
 ## Timing on the emulator
 
