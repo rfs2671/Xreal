@@ -30,7 +30,7 @@ async function probe() {
 }
 probe();
 
-let session = null, gl = null, refSpace = null, lastT = 0, sumMs = 0;
+let session = null, gl = null, refSpace = null, localSpace = null, lastT = 0, sumMs = 0;
 async function enter() {
   R.clicks++;
   if (session || !navigator.xr) { report(); return; }
@@ -53,6 +53,8 @@ async function enter() {
     try { await session.requestReferenceSpace(name); R.refSpaces[name] = true; } catch (e) { R.refSpaces[name] = false; }
   }
   refSpace = await session.requestReferenceSpace(R.refSpaces['local-floor'] ? 'local-floor' : 'local');
+  try { localSpace = await session.requestReferenceSpace('local'); } catch (e) {}
+  R.floorSpace = !!R.refSpaces['local-floor'];
   session.addEventListener('select', () => { R.selectEvents++; });
   session.addEventListener('squeeze', () => { R.squeezeEvents++; });
   session.addEventListener('end', () => { R.ended = true; session = null; report(); });
@@ -95,6 +97,9 @@ function frame(t, f) {
   const yaw = Math.atan2(2 * (o.w * o.y + o.x * o.z), 1 - 2 * (o.y * o.y + o.x * o.x));
   R.headYawMin = +Math.min(R.headYawMin ?? yaw, yaw).toFixed(3); R.headYawMax = +Math.max(R.headYawMax ?? yaw, yaw).toFixed(3);
   R.headXMin = +Math.min(R.headXMin ?? p.x, p.x).toFixed(3); R.headXMax = +Math.max(R.headXMax ?? p.x, p.x).toFixed(3);
+  // How high the eyes are above the page's floor (local-floor), and above the 'local' origin (about 0 for a head that started there).
+  R.eyeHeight = +p.y.toFixed(3); R.eyeHeightMin = +Math.min(R.eyeHeightMin ?? p.y, p.y).toFixed(3); R.eyeHeightMax = +Math.max(R.eyeHeightMax ?? p.y, p.y).toFixed(3);
+  if (localSpace) { const lp = f.getViewerPose(localSpace); if (lp) R.eyeHeightLocal = +lp.transform.position.y.toFixed(3); }
   // A fixed point in the room, 1.5 m in front of where the head was at the first frame.
   if (!anchorPoint) { const fw = [-Math.sin(yaw), 0, -Math.cos(yaw)]; anchorPoint = [p.x + fw[0] * 1.5, p.y, p.z + fw[2] * 1.5]; }
   R.viewports = []; R.projections = [];

@@ -20,6 +20,9 @@ first live runs of 17 November 2026, which showed what works on the Pixel and wh
 | Phone screen in the same style | drawn; installed on the Pixel | emulator screenshots |
 | AR cones, Hand cubes, Hand tracking showcase, Moon Rider | start and run immersive | Pixel, without the owner looking |
 | XR dragging | does not run: the browser's GPU process loses its context on this page | Pixel |
+| The real floor under a game (cameras measure it; was the height setting) | measured on a recording within about 0.1 m between runs; one live reading | Pixel replay and log; not yet seen |
+| Table tops and walls for games; hit test for pages written for phones' AR | works with a made-up room | emulator only |
+| A game opened from the home view in the glasses | froze on 18 November (the home view's window kept the glasses); fixed, fix not yet seen | Pixel and glasses, by the owner |
 | One picture per eye (depth) | blocked: the glasses leave their 3D mode about two seconds after this phone starts sending a picture, and show black | Pixel and glasses |
 
 What stands between this and calling it 1.0 is in the next session below: the home view and the
@@ -65,14 +68,13 @@ that minute, did you see a picture that was different in each eye?**
 **Before:** a lit room with things in it, two steps of clear floor, glasses plugged straight
 into the phone.
 
-1. **Home.** Open Ultra XR and tap **Open home in the glasses**. Round icons float in front of you.
-   **Question 1: are the icons and their names easy to read, and a comfortable size?**
-2. **Open a game by looking.** Look at **Ball shooter** and tap the phone's screen (or hold a
-   hand up and pinch, or just keep looking for two seconds).
-   **Question 2: did the game open from the look?**
-3. **Aim with a hand.** In the game, hold a hand up in front of your face, point at something
-   and pinch a few times.
-   **Question 3: does the ball go where you were pointing?**
+1. **Home.** Open Ultra XR and tap **Open home in the glasses**. Look at **Room check** and tap the phone's
+   screen. (This is the step that froze on 18 November.)
+   **Question 1: did the game open in the glasses?**
+2. **The floor.** Look down at the floor for five seconds, then around the room.
+   **Question 2: the grid turns from amber to green. Is the green grid lying on your real floor (not above, not below)?**
+3. **Surfaces.** Look at a table or counter. A blue outline may appear on it. Tap to throw balls at the floor and the table.
+   **Question 3: do the balls bounce on the real floor and table?**
 4. **Leave.** Press Back on the phone, unplug the glasses.
 
 Volume-up recentres the view and the pointer at any time.

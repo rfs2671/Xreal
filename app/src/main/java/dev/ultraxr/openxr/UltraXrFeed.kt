@@ -103,7 +103,13 @@ object UltraXrFeed {
         angVelX: Float, angVelY: Float, angVelZ: Float,
         velX: Float, velY: Float, velZ: Float,
         positionTracked: Boolean,
-    ) = PocketFeed.nativePose6(timestampNs, px, py, pz, qx, qy, qz, qw, angVelX, angVelY, angVelZ, velX, velY, velZ, positionTracked)
+    ) {
+        val h = lastHead; h[0] = px; h[1] = py; h[2] = pz; h[3] = qx; h[4] = qy; h[5] = qz; h[6] = qw; lastHeadNs = System.nanoTime()
+        PocketFeed.nativePose6(timestampNs, px, py, pz, qx, qy, qz, qw, angVelX, angVelY, angVelZ, velX, velY, velZ, positionTracked)
+    }
+    /** The head pose fed last (position, then orientation x, y, z, w) and when, for whoever tells a page where the head is. */
+    val lastHead = FloatArray(7).also { it[6] = 1f }
+    @Volatile var lastHeadNs = 0L
 
     /**
      * One hand's 26 joints ([HAND_FLOATS] floats, [Joint] order), at the camera frame's time. Joint orientations

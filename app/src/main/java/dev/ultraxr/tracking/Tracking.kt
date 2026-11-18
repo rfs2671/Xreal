@@ -73,6 +73,24 @@ object Tracking : GlassesLink.Listener {
     private val gestures = arrayOf(GestureTracker(false), GestureTracker(true))
     private var cam0InImu = Pose()
 
+    // --- the room: floor, table tops and walls from the same two cameras (core/StereoPoints, core/RoomModel)
+    val room = dev.ultraxr.core.RoomModel()
+    /** What the last look at the room found; null before the first. */
+    @Volatile var roomFindings: dev.ultraxr.core.RoomFindings? = null; private set
+    /** The floor's height in the app's world (the head's is 0 at a recentre). NaN until the cameras have found it. */
+    val floorY: Double get() = roomFindings?.floorY ?: Double.NaN
+    @Volatile var roomPictures = 0L; private set
+    @Volatile var roomFindMs = 0.0; private set
+    @Volatile private var stereoRig: dev.ultraxr.core.StereoRig? = null
+    private val roomLock = Object()
+    private val roomLeft = ByteArray(480 * 640); private val roomRight = ByteArray(480 * 640)
+    private var roomT = 0L; private var roomHave = false; private var roomReady = false
+    private var roomP = DoubleArray(3); private var roomQ = Q.identity(); private var roomFix = Pose(); private var roomWorld = 0
+    private var roomLastNs = 0L; private var roomUsedNs = 0L
+    private var roomThread: Thread? = null
+    /** Test builds on an emulator: a made-up room given to the room model's users instead of one from cameras. */
+    fun setRoomForTest(f: dev.ultraxr.core.RoomFindings?) { roomFindings = f }
+
     // --- thermal governor
     /** 0 = full rate; higher values skip more hand-tracking frames. */
     @Volatile var throttle = 0; private set
@@ -128,6 +146,7 @@ object Tracking : GlassesLink.Listener {
             thread(name = "tracking-init") { initNative(app) }
             vioThread = thread(name = "vio-poll", isDaemon = true) { vioLoop() }
             handsThread = thread(name = "hands", isDaemon = true) { handsLoop() }
+            roomThread = thread(name = "room", isDaemon = true) { roomLoop() }
         }
         if (users > 1) return
         link?.let { it.wantedDisplayMode = wantedMode(); it.sideBySideDisplayPresent = { dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(app) || dev.ultraxr.glasses.DisplayDiagnostics.sideBySideOffered(app) }
@@ -330,8 +349,12 @@ object Tracking : GlassesLink.Listener {
         }
         val c0 = pose(0); val c1 = pose(1)
         cam0InImu = c0
+        stereoRig = try { dev.ultraxr.core.StereoRig.fromBasalt(calibJson) } catch (e: Exception) { log("room: calibration not usable: $e"); null }
         // Head origin between the two cameras.
         head = HeadTracker(doubleArrayOf((c0.p[0] + c1.p[0]) / 2, (c0.p[1] + c1.p[1]) / 2, (c0.p[2] + c1.p[2]) / 2))
+        // A recentre moves the app's world; the room found so far moves with it.
+        head.onWorldMoved = { moved -> room.transform(moved); roomFindings = room.analyse(0.0) }
+        room.clear(); roomFindings = null
     }
 
     /** Display optics from the glasses' factory configuration, when it is there and plausible. */
@@ -372,6 +395,15 @@ object Tracking : GlassesLink.Listener {
         val v = vio
         if (v != 0L) { Native.vioPushStereo(v, tNs, left, right, 480, 640); supervisor.onFrame(System.nanoTime()) }
         pairIndex++
+        // The room: three pictures a second (fewer when the phone is warm), each kept until the estimator says where
+        // the head was when it was taken.
+        if (settings.roomScan && stereoRig != null) synchronized(roomLock) {
+            if (roomHave && !roomReady && tNs - roomT > 400_000_000L) roomHave = false      // the estimator skipped that picture
+            if (!roomHave && tNs - roomLastNs >= 330_000_000L * (1 + throttle)) {
+                System.arraycopy(left, 0, roomLeft, 0, left.size); System.arraycopy(right, 0, roomRight, 0, right.size)
+                roomT = tNs; roomLastNs = tNs; roomHave = true; roomReady = false
+            }
+        }
         // Hands at 30, 15 or 10 Hz depending on heat and the battery saver.
         val every = 1 + throttle + if (settings.batterySaver) 1 else 0
         if (handsHandle != 0L && pairIndex % every == 0L) synchronized(handLock) {
@@ -452,7 +484,19 @@ object Tracking : GlassesLink.Listener {
                     }
                     if (restarted) wasUsing = false
                     else if (supervisor.onState(now, out[0].toLong(), true, p, vel, vioFeatures)) { resetVio(v); wasUsing = false }
-                    else if (use) { head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13])); wasUsing = true }
+                    else if (use) {
+                        head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13])); wasUsing = true
+                        // After more than two seconds without position the wearer may be somewhere else: what was
+                        // found of the room is dropped (the floor's height is kept until a new one is found).
+                        if (roomUsedNs != 0L && now - roomUsedNs > 2_000_000_000L) { room.forgetSurfaces(); log("room: position was away for " + (now - roomUsedNs) / 1_000_000_000L + " s, surfaces forgotten") }
+                        roomUsedNs = now
+                        // This state is the head at the moment of a picture the room is waiting on: hand both over.
+                        synchronized(roomLock) {
+                            if (roomHave && !roomReady && Math.abs(out[0].toLong() - roomT) < 6_000_000L) {
+                                roomP = p; roomQ = q; roomFix = head.appFromEstimator(); roomWorld = head.worldVersion; roomReady = true; roomLock.notifyAll()
+                            }
+                        }
+                    }
                     // Not used: the head keeps its last position and turns from the IMU. When it is used
                     // again the estimator's world is re-aligned to where the head was held.
                     else if (wasUsing) { head.onVioEpochReset(); wasUsing = false }
@@ -525,6 +569,53 @@ object Tracking : GlassesLink.Listener {
         Native.vioReset(v)
         head.onVioEpochReset()
     }
+
+    /** Places what one picture pair shows in the room model, and looks the model over for the floor and surfaces. */
+    private fun roomLoop() {
+        val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)
+        val pts = FloatArray(3 * 300); val world = FloatArray(3 * 300)
+        var finder: dev.ultraxr.core.StereoPoints? = null; var finderRig: dev.ultraxr.core.StereoRig? = null
+        var frame = 0; var saidFloor = Double.NaN
+        while (running) {
+            var p: DoubleArray; var q: DoubleArray; var fix: Pose; var version: Int
+            synchronized(roomLock) {
+                while (running && !roomReady) try { roomLock.wait(500) } catch (_: InterruptedException) {}
+                if (!running) return
+                System.arraycopy(roomLeft, 0, l, 0, l.size); System.arraycopy(roomRight, 0, r, 0, r.size)
+                p = roomP; q = roomQ; fix = roomFix; version = roomWorld; roomHave = false; roomReady = false
+            }
+            val rig = stereoRig ?: continue
+            if (rig !== finderRig) { finder = dev.ultraxr.core.StereoPoints(rig); finderRig = rig }
+            try {
+                val t0 = System.nanoTime()
+                val n = finder!!.find(l, r, pts)
+                roomFindMs = (System.nanoTime() - t0) / 1e6
+                // camera 0 in the app's world: recentre fix * the estimator's body pose (turned y-up) * camera in body
+                val cam = fix * Pose(Q.rotate(HeadTracker.Z_TO_Y, p), Q.mul(HeadTracker.Z_TO_Y, q)) * rig.cam0InImu
+                var k = 0; val v = DoubleArray(3)
+                for (i in 0 until n) {
+                    v[0] = pts[i * 3].toDouble(); v[1] = pts[i * 3 + 1].toDouble(); v[2] = pts[i * 3 + 2].toDouble()
+                    if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] > ROOM_MAX_RANGE_M * ROOM_MAX_RANGE_M) continue      // too far to place well
+                    val w = cam.apply(v)
+                    world[k * 3] = w[0].toFloat(); world[k * 3 + 1] = w[1].toFloat(); world[k * 3 + 2] = w[2].toFloat(); k++
+                }
+                if (version != head.worldVersion) continue           // recentred meanwhile: these points are in the old world
+                room.add(world, k, frame++); roomPictures++
+                if (frame % 3 != 0) continue
+                val f = room.analyse(cam.p[1], cam.p[0], cam.p[2])
+                if (version != head.worldVersion) continue
+                roomFindings = f
+                replayLog?.room(link?.replaySeconds ?: 0.0, k, roomFindMs, cam.p[1], f)
+                val below = cam.p[1] - f.floorY
+                if (!f.floorY.isNaN() && (saidFloor.isNaN() || Math.abs(below - saidFloor) > 0.05)) {
+                    saidFloor = below
+                    log("room: floor " + dev.ultraxr.core.Fmt.f(below, 2) + " m below the cameras (" + f.floorSupport + " boxes), " +
+                        f.surfaces.count { it.kind == dev.ultraxr.core.RoomSurface.Kind.TABLE } + " table tops, " + f.surfaces.count { it.kind == dev.ultraxr.core.RoomSurface.Kind.WALL } + " walls, " + roomPictures + " pictures")
+                }
+            } catch (e: Throwable) { log("room: $e") }
+        }
+    }
+    private const val ROOM_MAX_RANGE_M = 4.5
 
     private fun handsLoop() {
         val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)

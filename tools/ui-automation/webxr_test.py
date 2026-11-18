@@ -113,6 +113,22 @@ def main():
         l = uia.sh("logcat -d", timeout=120) or ""
         open(os.path.join(out, "webxr-logcat.txt"), "w", encoding="utf-8", errors="replace").write(l)
         print("\n%d checks, %d failed" % (len(results), len([x for x in results if not x[1]]))); return 1
+    # The floor, while the head is still: the page's local-floor space must put the eyes the fed height above it,
+    # and follow when the runtime is told a measured floor during the session.
+    wait(lambda r: r.get("frames", 0) > 120, 60)
+    r1 = last() or {}
+    eh = r1.get("eyeHeight")
+    check("the page's floor is 1.6 m below the eyes at the start (the height setting)", eh is not None and abs(eh - 1.6) < 0.03, "eyes %s m above the page's floor, %s above its 'local' origin" % (eh, r1.get("eyeHeightLocal")))
+    uia.sh("setprop debug.ultraxr.sim_floor 1.15")
+    wait(lambda r: r.get("frames", 0) > r1.get("frames", 0) + 90, 30)
+    r2 = last() or {}
+    check("a floor measured during the session moves the page's floor (1.15 m below the eyes)", r2.get("eyeHeight") is not None and abs(r2["eyeHeight"] - 1.15) < 0.03,
+          "eyes %s m above the page's floor, %s above its 'local' origin, %d frames later" % (r2.get("eyeHeight"), r2.get("eyeHeightLocal"), r2.get("frames", 0) - r1.get("frames", 0)))
+    uia.sh("setprop debug.ultraxr.sim_floor 1.6"); uia.sh("setprop debug.ultraxr.sim_head_y 0.3")
+    wait(lambda r: r.get("frames", 0) > r2.get("frames", 0) + 90, 30)
+    r3 = last() or {}
+    check("a head fed 0.3 m higher is 0.3 m higher for the page", r3.get("eyeHeight") is not None and abs(r3["eyeHeight"] - 1.9) < 0.03, "eyes %s m above the page's floor, %s above its 'local' origin" % (r3.get("eyeHeight"), r3.get("eyeHeightLocal")))
+    uia.sh("setprop debug.ultraxr.sim_head_y 0"); time.sleep(2)
     uia.sh("setprop debug.ultraxr.sim_motion 1")      # now the simulated head turns and sways
     wait(lambda r: r.get("frames", 0) > 900, 90)
     time.sleep(12)

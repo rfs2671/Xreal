@@ -120,6 +120,13 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     /** Makes the current head position and heading the origin of the app world. */
     @Synchronized fun recenter() { recenterPending = true }
 
+    /** Called when a recentre moves the app world: every point p of the old world is now at the given pose applied to p. */
+    @Volatile var onWorldMoved: ((Pose) -> Unit)? = null
+    /** Counts recentres, so work begun in the old world can be told from work begun in the new one. */
+    @Volatile var worldVersion = 0; private set
+    /** The estimator's world (turned y-up) in the app world, now. */
+    @Synchronized fun appFromEstimator(): Pose = fix
+
     /** Head pose in the app world predicted for host time [tNs]. */
     @Synchronized fun predict(tNs: Long): State {
         if (!haveGravity) return State(Pose(), Mode.NONE, doubleArrayOf(0.0, 0.0, 0.0), Long.MAX_VALUE)
@@ -138,8 +145,11 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             val h = fix * head
             val k = Q.axisAngle(0.0, 1.0, 0.0, -Q.yawY(h.q))
             val kp = Q.rotate(k, h.p)
-            fix = Pose(doubleArrayOf(-kp[0], -kp[1], -kp[2]), k) * fix
+            val moved = Pose(doubleArrayOf(-kp[0], -kp[1], -kp[2]), k)
+            fix = moved * fix
             recenterPending = false
+            worldVersion++
+            onWorldMoved?.invoke(moved)
         }
         head = fix * head
         val w = Q.rotate(Q.mul(fix.q, qBody), lastGyro)

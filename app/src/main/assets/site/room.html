@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room check</title>
+<script src="/ultraxr-room.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #06070c; color: #fff; font: 18px/1.45 system-ui, sans-serif; }
+  #start { position: fixed; inset: 0; width: 100%; border: 0; background: none; color: inherit; font: inherit; padding: 8vmin; text-align: left; }
+  h1 { font-size: 34px; font-weight: 600; margin: 0 0 12px; }
+  p { margin: 0 0 10px; max-width: 34em; color: #c9cdd8; }
+  #state { color: #9cc2ff; }
+  canvas { display: none; }
+</style>
+</head>
+<body>
+<button id="start">
+  <h1>Room check</h1>
+  <p>Shows what the glasses' cameras have found of your room: a grid on the floor, outlines on table tops and walls.
+     The grid is <b>green</b> once the floor is measured and <b>amber</b> while it is only your height setting.</p>
+  <p>Look down at the floor for a few seconds, then around. Pinch or tap to throw a ball: it bounces off what was found.</p>
+  <p id="state">Tap anywhere to start.</p>
+</button>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+// What the page saw, for the automated test (posted to the app in test builds; ignored otherwise).
+const R = { page: 'room', hasXR: !!navigator.xr, mode: null, error: null, frames: 0, ready: false, measured: null, floorY: null, eyeHeight: null,
+  surfaces: null, kinds: null, packets: 0, roomError: null, lookHit: null, apiHit: null, apiPlanes: null, apiAnchor: null, balls: 0, bounces: 0, features: null };
+const state = document.getElementById('state');
+function report() { state.textContent = R.error ? R.error : R.mode ? 'Running in the glasses.' : 'Tap anywhere to start.'; fetch('/report', { method: 'POST', body: JSON.stringify(R) }).catch(() => {}); }
+setInterval(report, 1000);
+
+let session = null, gl = null, room = null, prog = null, buf = null, hitSource = null, anchor = null, lastT = 0;
+const balls = [];
+const V = [];                                  // line vertices: x, y, z, r, g, b
+function line(a, b, c) { V.push(a[0], a[1], a[2], c[0], c[1], c[2], b[0], b[1], b[2], c[0], c[1], c[2]); }
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+function qrot(q, v) { const x = q.x, y = q.y, z = q.z, w = q.w; const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]); return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)]; }
+function circle(c, u, v, r, col) { let p = add(c, mul(u, r)); for (let i = 1; i <= 14; i++) { const a = i * Math.PI * 2 / 14, n = add(c, add(mul(u, r * Math.cos(a)), mul(v, r * Math.sin(a)))); line(p, n, col); p = n; } }
+
+async function enter() {
+  if (session || !navigator.xr) { report(); return; }
+  try {
+    const want = new URLSearchParams(location.search).get('mode') || ((await navigator.xr.isSessionSupported('immersive-ar')) ? 'immersive-ar' : 'immersive-vr');
+    // The three surface features are asked for the standard way; ultraxr-room.js answers them.
+    session = await navigator.xr.requestSession(want, { optionalFeatures: ['local-floor', 'hand-tracking', 'hit-test', 'plane-detection', 'anchors'] });
+    R.mode = want;
+  } catch (e) { R.error = 'Could not start: ' + e; report(); return; }
+  try { R.features = Array.from(session.enabledFeatures || []); } catch (e) {}
+  const canvas = document.getElementById('c');
+  gl = canvas.getContext('webgl2', { xrCompatible: true }) || canvas.getContext('webgl', { xrCompatible: true });
+  try { await gl.makeXRCompatible(); } catch (e) {}
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  room = await UltraXRRoom.attach(session);
+  const vs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vs, 'attribute vec3 p; attribute vec3 c; uniform mat4 m; uniform vec2 o; varying vec3 k; void main(){ k = c; gl_Position = m * vec4(p, 1.0); gl_Position.xy += o * gl_Position.w; }'); gl.compileShader(vs);
+  const fs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs, 'precision mediump float; varying vec3 k; void main(){ gl_FragColor = vec4(k, 1.0); }'); gl.compileShader(fs);
+  prog = gl.createProgram(); gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog); buf = gl.createBuffer();
+  try { const viewer = await session.requestReferenceSpace('viewer'); hitSource = await session.requestHitTestSource({ space: viewer }); } catch (e) { R.apiHit = 'no source: ' + e; }
+  session.addEventListener('select', (ev) => {
+    const pose = ev.frame.getPose(ev.inputSource.targetRaySpace, room.ref); if (!pose) return;
+    const o = [pose.transform.position.x, pose.transform.position.y, pose.transform.position.z], d = qrot(pose.transform.orientation, [0, 0, -1]);
+    balls.push({ p: add(o, mul(d, 0.1)), v: mul(d, 3.5), born: performance.now() }); if (balls.length > 24) balls.shift(); R.balls++;
+  });
+  session.addEventListener('end', () => { session = null; R.mode = null; report(); });
+  session.requestAnimationFrame(frame);
+  report();
+}
+document.getElementById('start').addEventListener('click', enter);
+
+const BALL = 0.06;
+function physics(dt) {
+  for (const b of balls) {
+    const before = b.p; b.v[1] -= 9.8 * dt; b.p = add(b.p, mul(b.v, dt));
+    for (const s of room.surfaces) {
+      const d0 = dot(sub(before, s.c), s.n), d1 = dot(sub(b.p, s.c), s.n), side = d0 >= 0 ? 1 : -1;
+      if (side * d1 >= BALL) continue;                              // still clear of it, on the side it came from
+      if (s.kind !== 'floor') { const r = sub(b.p, s.c); if (Math.abs(dot(r, s.u)) > s.hu + BALL || Math.abs(dot(r, s.v)) > s.hv + BALL) continue; if (Math.abs(d0) > 0.5) continue; }
+      const vn = dot(b.v, s.n);
+      if (side * vn < 0) { b.v = sub(b.v, mul(s.n, 1.6 * vn)); b.v = mul(b.v, 0.985); if (Math.abs(vn) > 0.4) R.bounces++; }
+      b.p = add(b.p, mul(s.n, side * BALL - d1));
+    }
+  }
+  const now = performance.now();
+  for (let i = balls.length - 1; i >= 0; i--) if (now - balls[i].born > 30000 || balls[i].p[1] < room.floorY - 3) balls.splice(i, 1);
+}
+
+function frame(t, f) {
+  if (!session) return;
+  session.requestAnimationFrame(frame);
+  room.update(f);
+  const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0); lastT = t;
+  const pose = f.getViewerPose(room.ref);
+  const layer = session.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+  gl.clearColor(0, 0, 0, session.environmentBlendMode === 'opaque' ? 1 : 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  if (!pose) return;
+  R.frames++; R.ready = room.ready; R.measured = room.measured; R.packets = room.packets; R.roomError = room.error;
+  const hp = pose.transform.position, head = [hp.x, hp.y, hp.z];
+  R.floorY = +room.floorY.toFixed(3); R.eyeHeight = +(hp.y - room.floorY).toFixed(3);
+  R.surfaces = room.surfaces.length; R.kinds = room.surfaces.map((s) => s.kind).join(',');
+  physics(dt);
+
+  V.length = 0;
+  // the floor: a grid of half-metre squares around the wearer, lying on it
+  const fy = room.floorY + 0.003, col = room.measured ? [0.1, 0.85, 0.4] : [0.9, 0.55, 0.1];
+  const gx = Math.round(head[0] * 2) / 2, gz = Math.round(head[2] * 2) / 2;
+  for (let i = -6; i <= 6; i++) { line([gx + i * 0.5, fy, gz - 3], [gx + i * 0.5, fy, gz + 3], col); line([gx - 3, fy, gz + i * 0.5], [gx + 3, fy, gz + i * 0.5], col); }
+  // table tops and walls: outline, and lines across so the surface reads as a surface
+  for (const s of room.surfaces) {
+    if (s.kind === 'floor') continue;
+    const c = s.kind === 'table' ? [0.2, 0.8, 1.0] : [1.0, 0.35, 0.85], k = s.corners;
+    for (let i = 0; i < 4; i++) line(k[i], k[(i + 1) % 4], c);
+    for (let i = 1; i < 4; i++) { const a = add(k[0], mul(sub(k[1], k[0]), i / 4)), b = add(k[3], mul(sub(k[2], k[3]), i / 4)); line(a, b, mul(c, 0.5)); }
+    for (let i = 1; i < 4; i++) { const a = add(k[0], mul(sub(k[3], k[0]), i / 4)), b = add(k[1], mul(sub(k[2], k[1]), i / 4)); line(a, b, mul(c, 0.5)); }
+  }
+  // where the wearer is looking, and where each hand points: a ring lying on whatever is there
+  const looking = room.raycast(head, qrot(pose.transform.orientation, [0, 0, -1]));
+  R.lookHit = looking ? { kind: looking.kind, y: +(looking.point[1] - room.floorY).toFixed(3), d: +looking.distance.toFixed(2) } : null;
+  const rings = looking ? [looking] : [];
+  for (const input of session.inputSources) {
+    const rp = f.getPose(input.targetRaySpace, room.ref); if (!rp) continue;
+    const o = [rp.transform.position.x, rp.transform.position.y, rp.transform.position.z], d = qrot(rp.transform.orientation, [0, 0, -1]);
+    const h = room.raycast(o, d); line(o, h ? h.point : add(o, mul(d, 3)), [0.55, 0.55, 0.6]); if (h) rings.push(h);
+  }
+  for (const h of rings) {
+    const n = h.normal, a = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let u = sub(a, mul(n, dot(a, n))); const l = Math.hypot(u[0], u[1], u[2]); u = mul(u, 1 / l);
+    const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]], c = add(h.point, mul(n, 0.004));
+    circle(c, u, v, 0.07, [1, 1, 1]); circle(c, u, v, 0.02, [1, 1, 1]); line(c, add(c, mul(n, 0.1)), [1, 1, 1]);
+  }
+  for (const b of balls) { circle(b.p, [1, 0, 0], [0, 1, 0], BALL, [1, 0.9, 0.2]); circle(b.p, [1, 0, 0], [0, 0, 1], BALL, [1, 0.9, 0.2]); circle(b.p, [0, 1, 0], [0, 0, 1], BALL, [1, 0.9, 0.2]); }
+
+  // the same question asked the standard way (WebXR hit test, planes, anchors), for the record
+  if (hitSource) {
+    try {
+      const res = f.getHitTestResults(hitSource);
+      const hpz = res.length ? res[0].getPose(room.ref) : null;
+      R.apiHit = hpz ? { y: +(hpz.transform.position.y - room.floorY).toFixed(3), x: +hpz.transform.position.x.toFixed(2), z: +hpz.transform.position.z.toFixed(2) } : null;
+      if (hpz && !anchor && R.frames > 60) { anchor = 'asked'; res[0].createAnchor().then((a) => { anchor = a; }, (e) => { R.apiAnchor = 'refused: ' + e; }); }
+      if (anchor && anchor.anchorSpace) { const ap = f.getPose(anchor.anchorSpace, room.ref); R.apiAnchor = ap ? { y: +(ap.transform.position.y - room.floorY).toFixed(3), tracked: f.trackedAnchors.has(anchor) } : 'no pose'; }
+      const planes = f.detectedPlanes; R.apiPlanes = [];
+      planes.forEach((p) => { const pp = f.getPose(p.planeSpace, room.ref); R.apiPlanes.push({ label: p.semanticLabel, orientation: p.orientation, points: p.polygon.length, y: pp ? +(pp.transform.position.y - room.floorY).toFixed(3) : null }); });
+    } catch (e) { R.apiHit = 'error: ' + e; }
+  }
+
+  gl.useProgram(prog); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(V), gl.DYNAMIC_DRAW);
+  const ap = gl.getAttribLocation(prog, 'p'), ac = gl.getAttribLocation(prog, 'c');
+  gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap, 3, gl.FLOAT, false, 24, 0);
+  gl.enableVertexAttribArray(ac); gl.vertexAttribPointer(ac, 3, gl.FLOAT, false, 24, 12);
+  gl.disable(gl.DEPTH_TEST); gl.lineWidth(2);
+  for (const view of pose.views) {
+    const vp = layer.getViewport(view); gl.viewport(vp.x, vp.y, vp.width, vp.height);
+    const a = view.projectionMatrix, b = view.transform.inverse.matrix, m = new Float32Array(16);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + j] * b[i * 4 + k]; m[i * 4 + j] = s; }
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'm'), false, m);
+    // lines are one pixel wide on this GPU whatever is asked: drawn four times, a pixel apart, they are two wide
+    const ol = gl.getUniformLocation(prog, 'o'), px = 2 / vp.width, py = 2 / vp.height;
+    for (const [ox, oy] of [[0, 0], [px, 0], [0, py], [px, py]]) { gl.uniform2f(ol, ox, oy); gl.drawArrays(gl.LINES, 0, V.length / 6); }
+  }
+}
+report();
+</script>
+</body>
+</html>

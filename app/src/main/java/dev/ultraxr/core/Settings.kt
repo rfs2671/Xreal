@@ -21,6 +21,8 @@ class Settings(context: Context) {
     /** Multiplies the display field of view; tune until virtual objects stay fixed against the room. */
     var fovScale: Float get() = p.getFloat("fovScale", 1f); set(v) = p.edit().putFloat("fovScale", v).apply()
     var standingHeightM: Float get() = p.getFloat("height", 1.6f); set(v) = p.edit().putFloat("height", v).apply()
+    /** Find the floor, table tops and walls with the tracking cameras. */
+    var roomScan: Boolean get() = p.getBoolean("room_scan", true); set(v) = p.edit().putBoolean("room_scan", v).apply()
     /** How hands reach OpenXR applications: "auto" (by application), "hands" (joints only) or "controllers" (joints and Touch-shaped controllers). */
     /**
      * Whether to try the glasses' half-width 3D mode. Off by default: on the Pixel 10 the glasses fall back to 2D

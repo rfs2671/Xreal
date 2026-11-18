@@ -16,7 +16,8 @@ class GameLibraryTest {
 
     @Test fun theShippedListParsesAndClaimsNothingItHasNot() {
         assertTrue(shipped.size >= 4)
-        for (g in shipped) { assertTrue(g.url.startsWith("https://")); assertTrue(g.name.isNotBlank()); assertTrue(g.needs.isNotBlank()) }
+        // a page is on the web (https) or served by the app itself on this phone
+        for (g in shipped) { assertTrue(g.url, g.url.startsWith("https://") || g.url.startsWith("http://localhost:8765/")); assertTrue(g.name.isNotBlank()); assertTrue(g.needs.isNotBlank()) }
         // "verified" is only for a game its owner has played on the glasses: one so far, and its note must say when
         val verified = shipped.filter { it.state == WebGame.State.VERIFIED }
         assertEquals(listOf("Ball shooter (three.js)"), verified.map { it.name })

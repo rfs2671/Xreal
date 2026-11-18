@@ -154,7 +154,13 @@ object XrHost : OpenXrGlassesLayer.Host {
                 try { Thread.sleep(100) } catch (_: InterruptedException) { break }
             }
         }
-        if (Looper.myLooper() == Looper.getMainLooper()) openShell()
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            // Another window of ours may be on its way off the glasses (the home view, when a game is started from
+            // it); Android refuses a second one until it is gone. A few tries, a fifth of a second apart.
+            var tries = 0
+            while (!openShell() && glassesDisplay() != null && ++tries < 8) try { Thread.sleep(200) } catch (_: InterruptedException) { break }
+            if (tries > 0) Tracking.log("OpenXR: the glasses window " + (if (shell != null) "opened" else "did not open") + " after " + (tries + 1) + " tries")
+        }
         else {
             val latch = java.util.concurrent.CountDownLatch(1)
             main.post { openShell(); latch.countDown() }
@@ -202,6 +208,7 @@ object XrHost : OpenXrGlassesLayer.Host {
         journal = dev.ultraxr.core.SessionJournal(OpenXrGlassesLayer.clientPackage, if (!onGlasses) "phone screen" else if (stereoAtStart) "glasses, one view per eye" else "glasses, one picture (2D)",
             if (handsOnly) "joints" else "joints and controllers", System.currentTimeMillis())
         Tracking.recenter()
+        floorApplied = Float.NaN
         try {
             val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
             @Suppress("DEPRECATION")
@@ -257,6 +264,37 @@ object XrHost : OpenXrGlassesLayer.Host {
         }
     }
 
+    // ---- the floor
+    /** How high the fed world's origin is above the application's floor, as last told to the runtime. */
+    val originHeight: Float get() = if (floorApplied.isNaN()) Tracking.settings.standingHeightM else floorApplied
+    @Volatile private var floorApplied = Float.NaN; private var floorWorld = -1; private var floorKnown = false; private var floorNs = 0L
+    /** How the running session's floor is placed: "measured" once the cameras have found it, else "from the height setting". */
+    @Volatile var floorSource = "from the height setting"; private set
+
+    /**
+     * Tells the runtime how high the app world's origin is above the floor, so that an application's floor (the
+     * STAGE and LOCAL_FLOOR spaces, a web page's "local-floor") is the real one. Until the cameras have found the
+     * floor it is the wearer's height setting below where the head was at the last recentre. A found floor is
+     * taken at once; after that it is followed slowly, so nothing in a game jumps.
+     */
+    private fun applyFloor(nowNs: Long) {
+        if (nowNs - floorNs < 50_000_000L) return
+        val dt = ((nowNs - floorNs) * 1e-9f).coerceAtMost(0.2f); floorNs = nowNs
+        val fy = Tracking.floorY
+        val known = !fy.isNaN() && -fy > 0.6 && -fy < 2.4
+        val want = if (known) (-fy).toFloat() else Tracking.settings.standingHeightM
+        val version = Tracking.head.worldVersion
+        val snap = floorApplied.isNaN() || version != floorWorld || known != floorKnown
+        val next = if (snap) want else floorApplied + (want - floorApplied).coerceIn(-0.04f * dt, 0.04f * dt)
+        if (known != floorKnown || floorApplied.isNaN()) {
+            floorSource = if (known) "measured" else "from the height setting"
+            Tracking.log("OpenXR: floor " + dev.ultraxr.core.Fmt.f(want.toDouble(), 2) + " m below the world's origin, " + floorSource)
+        }
+        floorKnown = known; floorWorld = version
+        if (floorApplied.isNaN() || Math.abs(next - floorApplied) > 0.001f) { UltraXrFeed.setOriginOffset(0f, next, 0f); floorApplied = next }
+        journal?.floor(known, next.toDouble())
+    }
+
     @Volatile private var recentreRequested = false
     /** Recentre the running session (the touchpad's volume-up key). */
     fun recentreNow() { recentreRequested = true }
@@ -286,6 +324,7 @@ object XrHost : OpenXrGlassesLayer.Host {
                 val hands = now - lastHandNs > 33_000_000L
                 SimWearer.feed(now, hands, controllers = !handsOnly); if (hands) lastHandNs = now
                 if (!recentred) recentred = UltraXrFeed.recenter()
+                if (Tracking.roomFindings != null) applyFloor(now)      // a made-up room was set by a test
                 continue
             }
             val head = Tracking.head
@@ -301,6 +340,7 @@ object XrHost : OpenXrGlassesLayer.Host {
             UltraXrFeed.head(t, p[0].toFloat(), p[1].toFloat(), p[2].toFloat(), q[0].toFloat(), q[1].toFloat(), q[2].toFloat(), q[3].toFloat(),
                 (w[0] * k).toFloat(), (w[1] * k).toFloat(), (w[2] * k).toFloat(), v[0].toFloat(), v[1].toFloat(), v[2].toFloat(), s.mode == HeadTracker.Mode.SIX_DOF)
             if (!recentred) { recentred = UltraXrFeed.recenter() }
+            applyFloor(System.nanoTime())
             journal?.let { j ->
                 j.head(s.mode == HeadTracker.Mode.SIX_DOF, p)
                 if (t - vioTickNs > 1_000_000_000L) { vioTickNs = t; if (Tracking.vioLandmarks >= 0) { j.vioSamples++; j.stereoMatchesSum += Tracking.vioStereoMatches; j.landmarksSum += Tracking.vioLandmarks } }

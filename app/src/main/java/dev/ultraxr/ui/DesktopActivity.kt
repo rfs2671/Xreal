@@ -96,8 +96,16 @@ class DesktopActivity : Activity() {
                 val browser = dev.ultraxr.xr.XrRuntime.browser(this)
                 if (browser == null) toast("The WebXR browser is not installed on this phone")
                 else {
-                    dev.ultraxr.xr.XrRuntime.launchUrl(this, browser, item.url, false)
-                    if (Tracking.settings.autoEnter) dev.ultraxr.xr.XrHost.autoEnter(item.enter)
+                    // The glasses can hold one window of ours. The home view's has to be gone before the game's
+                    // runtime asks for its own, or Android refuses that one and the game is drawn on the phone
+                    // (seen on the Pixel: the picture in the glasses froze). So: take the home view down, then start.
+                    handedOver = true
+                    dismissGlasses()
+                    Tracking.noteGraphics("desktop left the glasses for " + item.url)
+                    ui.postDelayed({
+                        dev.ultraxr.xr.XrRuntime.launchUrl(this, browser, item.url, false)
+                        if (Tracking.settings.autoEnter) dev.ultraxr.xr.XrHost.autoEnter(item.enter)
+                    }, 300)
                 }
             }
         }
@@ -118,6 +126,7 @@ class DesktopActivity : Activity() {
         super.onResume()
         active = true
         displays.registerDisplayListener(displayListener, ui)
+        handedOver = false
         session.resume(); refreshStage()
         Choreographer.getInstance().postFrameCallback(frame)
     }
@@ -134,8 +143,11 @@ class DesktopActivity : Activity() {
     // ---- where the scene is shown: the glasses when attached, otherwise the preview on this screen
     private fun external(): Display? = displays.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull { it.name?.startsWith("ultraxr-window-") != true }
 
+    /** A game was started from here and owns the glasses until this screen is in front again. */
+    private var handedOver = false
+
     private fun refreshStage() {
-        if (isFinishing || isDestroyed) return
+        if (isFinishing || isDestroyed || handedOver) return
         val d = external()
         if (d != null) {
             if (glasses?.display?.displayId == d.displayId) return

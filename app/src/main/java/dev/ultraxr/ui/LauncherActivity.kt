@@ -67,7 +67,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
             if (i?.hasExtra("force_half_stereo") == true) Tracking.forceHalfStereo = i.getBooleanExtra("force_half_stereo", false)
             if (i?.hasExtra("sim_wearer") == true) Tracking.simulateWearer = i.getBooleanExtra("sim_wearer", false)
             if (i?.getBooleanExtra("dump_egl", false) == true) dumpEglConfigs()
-            if (i?.getBooleanExtra("test_site", false) == true) dev.ultraxr.xr.TestSiteServer.start(applicationContext)
+            if (i?.getBooleanExtra("test_site", false) == true) { dev.ultraxr.xr.LocalSite.testFiles = true; dev.ultraxr.xr.LocalSite.start(applicationContext) }
             // "--ez diag3d true": one bounded, logged experiment with the glasses' half-width 3D mode (GlassesLink.diag3d).
             if (i?.getBooleanExtra("diag3d", false) == true) Thread { Thread.sleep(3000); Tracking.link?.diag3d() ?: Tracking.log("diag3d: tracking is not running") }.start()
             if (i?.hasExtra("pace_by_display") == true) Tracking.settings.paceByDisplay = i.getBooleanExtra("pace_by_display", false)

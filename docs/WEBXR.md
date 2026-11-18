@@ -268,17 +268,47 @@ millimetres and in finger lengths, frames held through a loss).
 
 The touchpad does not depend on any of this.
 
+## The room: floor, table tops and walls
+
+The browser has no hit testing, plane detection or anchors, and Ultra XR had no idea where the floor was: a game's
+floor was the height setting below wherever the head was when the game started. From 18 November 2026:
+
+- **The cameras find surfaces** (`core/StereoPoints.kt`, `core/RoomModel.kt`, the room thread in
+  `tracking/Tracking.kt`). Three times a second corners of the left picture are found in the right one along the
+  line the calibration allows, placed in the room with the head position of that picture, and dropped into 5 cm
+  boxes; a box counts once two pictures hit it. The floor is the lowest height with boxes spread over 0.75 m2 and
+  at least 0.95 m under the highest the head has been; table tops are other heights that stand out; walls are
+  upright sheets of boxes with little beside them.
+- **The floor goes to the runtime** (`XrHost.applyFloor`): the origin offset is set so that STAGE, LOCAL_FLOOR and
+  a page's `local-floor` have the measured floor at zero. Taken at once when first found, then followed slowly.
+- **Pages get the room** from `http://localhost:8765/room.json` (`xr/LocalSite.kt`), and `ultraxr-room.js` (served
+  there too) lines it up with the page's own space from the head pose, offers ray casts, and answers the standard
+  `hit-test`, `plane-detection` and `anchors` calls itself. A page on another site gets the script by being opened
+  as `http://localhost:8765/p/https/HOST/PATH` (only for sites in the game list).
+
+What was measured, and where:
+
+| What | Result | Where |
+|---|---|---|
+| Stereo points from rendered pictures | distance off by 0.4 % in the middle, 1.6 % at the 90th percentile | unit test, made-up scene |
+| Floor, table top and wall of a made-up room with wrong matches mixed in | floor within 3 cm, top and wall within 3-4 cm | unit test |
+| The owner's 240 s recording (standing at a counter, never looking down on purpose) | counter top found after 10 s; floor found after about 60 s at 1.44 to 1.52 m below the head (1.36 to 1.41 m with the same code on the laptop) | Pixel replay; laptop |
+| Cost on the Pixel | 66 ms a picture in the middle, 144 ms at the 95th percentile, three pictures a second | Pixel replay |
+| Live, glasses worn | floor reported 1.15 to 1.23 m below the cameras within 25 s of a game starting | Pixel log, one session, not checked against a tape measure |
+| A running page's floor follows a measured floor | 1.60 m to 1.15 m mid-session | emulator, `webxr_test.py` |
+| Room page: floor, table, wall, ray casts, standard hit test, planes, anchor, bouncing balls | 18 of 18 checks | emulator with a made-up room, `room_test.py` |
+| three.js `webxr_ar_hittest` unchanged, through `/p/` | its ring lies on the made-up table and a pinch places its cylinder | emulator, by picture |
+
+Not known: how close the measured floor is to the real one (nobody has compared it through the glasses), how it
+does on a plain floor without texture, and whether walls are found in an ordinary room (in the recording only a
+cabinet front was, on and off). Any page on the phone can read `room.json` while a game runs.
+
 ## Not working
 
 - **The Gecko engine** could not be run on the emulator (it crashes in graphics setup under arm
   translation), so only the Chromium engine has been exercised.
-- **Hit testing** (placing objects on real surfaces). The browser's XR device does not offer the
-  feature at all, and nothing in Ultra XR detects surfaces. Games that place objects where the
-  hand points (three.js AR cones) work without it; games that need a detected floor or wall do not.
-- **Spatial anchors.** Not implemented and not advertised by Ultra XR. (Wolvic's device code lists
-  anchors as supported without anything behind it; pages that rely on it will not get working anchors.)
-- A session that asks for hit testing or anchors makes Wolvic 1.4 end the page ("Environment
-  integration is not supported"), so the test page does not ask for them.
+- **Spatial anchors that outlive a session.** An anchor made through `ultraxr-room.js` (below) is a place in the
+  room for as long as the session and the tracking's world last; nothing is stored.
 - **Bluetooth gamepads as XR input.** Android delivers gamepad events to the focused app, which
   is the browser, not Ultra XR. Pages can read a gamepad through the browser's Gamepad API; the
   runtime cannot turn one into an XR controller. A gamepad has no position and none is invented.
@@ -314,7 +344,7 @@ The touchpad does not depend on any of this.
 - Simulated wearer (`xr/SimWearer.kt`), switched on by the launcher's test flags in debuggable
   builds, steered with `adb shell setprop debug.ultraxr.<name>`: `sim_motion`, `sim_look`,
   `sim_aim`, `sim_tap`, `sim_auto`.
-- Test pages are served by the app on the device's localhost (`xr/TestSiteServer.kt`), because
+- Test pages are served by the app on the device's localhost (`xr/LocalSite.kt`), because
   WebXR is hidden from plain http origins and forwarding a port froze the emulator's adb.
 - Emulator notes: 4 GB of memory; stop the browser and wait before stopping Ultra XR, or the
   emulator hangs.

@@ -21,6 +21,48 @@
     ]
   },
   {
+    "name": "Room check (Ultra XR)",
+    "url": "http://localhost:8765/room.html",
+    "needs": "Shows the floor, table tops and walls the cameras found; pinch or tap throws a ball that bounces off them",
+    "status": "Emulator with a made-up room: the page gets the floor, a table top and a wall, ray casts and thrown balls meet them. Pixel: the cameras found the floor of a recorded room within 0.1 m. Not yet seen in the glasses.",
+    "state": "tested",
+    "enter": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        -0.1
+      ],
+      [
+        0.0,
+        0.1
+      ]
+    ]
+  },
+  {
+    "name": "Place on your floor (three.js hit test)",
+    "url": "http://localhost:8765/p/https/threejs.org/examples/webxr_ar_hittest.html",
+    "needs": "Hands or the touchpad: a ring follows the surface you look at, a pinch or tap leaves a cylinder there",
+    "status": "A page written for phones' AR hit test, which the browser on the glasses lacks: Ultra XR answers it from the room the cameras found. Emulator only so far.",
+    "state": "tested",
+    "enter": [
+      [
+        0.0,
+        -0.15
+      ],
+      [
+        0.0,
+        -0.1
+      ],
+      [
+        0.0,
+        -0.2
+      ]
+    ]
+  },
+  {
     "name": "AR cones (three.js)",
     "url": "https://threejs.org/examples/webxr_ar_cones.html",
     "needs": "Hands: pinch to place cones in the room",

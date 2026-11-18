@@ -110,6 +110,11 @@ class SessionJournal(val client: String, val display: String, val handsAs: Strin
     }
     var stereoMatchesSum = 0L; var landmarksSum = 0L; var vioSamples = 0L
     var maxHeadTravelM = 0.0
+    /** The floor given to the application: whether the cameras had found it by the end, how far below the world's origin, and how often it was only the height setting. */
+    var floorMeasured = false; private set
+    var floorBelowOriginM = Double.NaN; private set
+    private var floorSamples = 0L; private var floorMeasuredSamples = 0L
+    fun floor(measured: Boolean, belowOriginM: Double) { floorMeasured = measured; floorBelowOriginM = belowOriginM; floorSamples++; if (measured) floorMeasuredSamples++ }
     private var origin: DoubleArray? = null
 
     fun head(positionIsTracked: Boolean, p: DoubleArray) {
@@ -129,6 +134,7 @@ class SessionJournal(val client: String, val display: String, val handsAs: Strin
         put("head_samples", headSamples)
         put("position_tracked_fraction", if (headSamples > 0) positionTracked.toDouble() / headSamples else 0.0)
         put("max_head_travel_m", maxHeadTravelM)
+        if (floorSamples > 0) { put("floor_measured", floorMeasured); put("floor_below_origin_m", floorBelowOriginM); put("floor_measured_fraction", floorMeasuredSamples.toDouble() / floorSamples) }
         put("left_hand_frames", handFrames[0]); put("right_hand_frames", handFrames[1])
         put("left_pinches", pinches[0]); put("right_pinches", pinches[1])
         put("recenters", recenters)

@@ -15,6 +15,7 @@ import kotlin.math.sqrt
  *                  thumb-tip to index-tip distance, the wrist's distance from the camera and its place in the view
  *   TAG-app.csv    one line per position state: what the application was given (head position in its world), and
  *                  whether the glasses were judged to be lying still and the estimator's position was used
+ *   TAG-room.csv   one line per look at the room: points placed, and the floor, table tops and walls found so far
  *   TAG-notes.txt  resets and the closing summary
  *
  * Times are seconds from the start of the recording, so runs with different settings line up.
@@ -26,6 +27,8 @@ class ReplayLog(dir: File, tag: String) {
     /** Every found hand's 26 joint poses as the tracker gave them (its camera frame): what steadiness is measured on. */
     private val joints = PrintWriter(File(dir, "$tag-joints.csv")).also { it.println("t,side,26 x (px,py,pz,qx,qy,qz,qw)") }
     private val app = PrintWriter(File(dir, "$tag-app.csv")).also { it.println("t,hx,hy,hz,lying,used") }
+    /** The room model as it grew: one line per analysis. */
+    private val room = PrintWriter(File(dir, "$tag-room.csv")).also { it.println("t,points_in_picture,find_ms,boxes,confirmed,head_y,floor_y,floor_below_head,floor_support,tables,walls") }
     var handResults = 0; private set
     val handFound = intArrayOf(0, 0)
 
@@ -69,11 +72,16 @@ class ReplayLog(dir: File, tag: String) {
         app.println(String.format(Locale.US, "%.3f,%.4f,%.4f,%.4f,%d,%d", t, head[0], head[1], head[2], if (lying) 1 else 0, if (used) 1 else 0))
     }
 
+    @Synchronized fun room(t: Double, points: Int, findMs: Double, headY: Double, f: dev.ultraxr.core.RoomFindings) {
+        room.println(String.format(Locale.US, "%.3f,%d,%.1f,%d,%d,%.3f,%.3f,%.3f,%d,%d,%d", t, points, findMs, f.voxels, f.confirmed, headY, f.floorY, headY - f.floorY, f.floorSupport,
+            f.surfaces.count { it.kind == dev.ultraxr.core.RoomSurface.Kind.TABLE }, f.surfaces.count { it.kind == dev.ultraxr.core.RoomSurface.Kind.WALL }))
+    }
+
     @Synchronized fun note(t: Double, text: String) { notes.println(String.format(Locale.US, "%.3f %s", t, text)); notes.flush() }
 
     @Synchronized fun close(summary: String) {
         notes.println(summary)
         notes.println("hand results $handResults, left found ${handFound[0]}, right found ${handFound[1]}")
-        vio.close(); hands.close(); notes.close(); app.close(); joints.close()
+        vio.close(); hands.close(); notes.close(); app.close(); joints.close(); room.close()
     }
 }

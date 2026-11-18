@@ -56,6 +56,22 @@ object SimWearer {
             // (Android does not pass injected key presses to an accessibility service, so a test cannot press the real key.)
             val ph = prop("ptr_hold", "0") == "1"
             if (ph != pointerHeld) { pointerHeld = ph; dev.ultraxr.core.PointerInput.hold(nowNs, 1, ph) }
+            // sim_floor <metres>: how far the floor is below where the head started; each change is given to the runtime
+            val fl = prop("sim_floor", "")
+            if (fl != lastFloor) { lastFloor = fl; fl.toFloatOrNull()?.let { UltraXrFeed.setOriginOffset(0f, it, 0f); dev.ultraxr.tracking.Tracking.log("sim: floor " + it + " m below the tracking origin") } }
+            headUp = prop("sim_head_y", "").toDoubleOrNull() ?: 0.0
+            // sim_room <metres>: a made-up room as if the cameras had found it: the floor that far below where the
+            // head started, a table top 0.75 m above it one metre ahead, and a wall 2.5 m ahead. Empty: no room.
+            val rm = prop("sim_room", "")
+            if (rm != lastRoom) {
+                lastRoom = rm
+                val down = rm.toDoubleOrNull()
+                dev.ultraxr.tracking.Tracking.setRoomForTest(if (down == null) null else dev.ultraxr.core.RoomFindings(-down, 100, listOf(
+                    dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.FLOOR, 0.0, -down, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 2.0, 2.0, 100),
+                    dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.TABLE, 0.0, -down + 0.75, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.6, 0.35, 80),
+                    dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.WALL, 0.0, -down + 1.2, -2.5, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.5, 1.0, 120)), 1000, 800))
+                dev.ultraxr.tracking.Tracking.log("sim: room " + (if (down == null) "removed" else "with the floor $down m below the start"))
+            }
             val tap = prop("sim_tap", "")
             if (tap != lastTap) { if (lastTap != null && tap.isNotEmpty()) tapUntilNs = nowNs + 220_000_000L; lastTap = tap }
         }
@@ -66,6 +82,7 @@ object SimWearer {
     private var moveRight = doubleArrayOf(0.0, 0.0, 0.0); private var moveLeft = doubleArrayOf(0.0, 0.0, 0.0)
     private fun triple(name: String): DoubleArray { val p = prop(name, "").split(","); return DoubleArray(3) { p.getOrNull(it)?.trim()?.toDoubleOrNull() ?: 0.0 } }
     private var pointerHeld = false
+    private var lastFloor = ""; private var headUp = 0.0; private var lastRoom = ""
     private var autoPinch = true; private var lastTap: String? = null; private var tapUntilNs = 0L
     private fun prop(name: String, default: String): String = try {
         Class.forName("android.os.SystemProperties").getMethod("get", String::class.java, String::class.java).invoke(null, "debug.ultraxr.$name", default) as String
@@ -85,7 +102,7 @@ object SimWearer {
         val yaw = yawAt(m); val yawRate = k * YAW_AMPLITUDE * w * cos(w * m)
         val q = Q.mul(Q.axisAngle(0.0, 1.0, 0.0, yaw + lookYaw), Q.axisAngle(1.0, 0.0, 0.0, lookPitch))
         val px = SWAY_M * sin(w * m); val vx = k * SWAY_M * w * cos(w * m)
-        val py = 0.02 * sin(2 * w * m); val vy = k * 0.02 * 2 * w * cos(2 * w * m)
+        val py = headUp + 0.02 * sin(2 * w * m); val vy = k * 0.02 * 2 * w * cos(2 * w * m)
         UltraXrFeed.head(nowNs, px.toFloat(), py.toFloat(), 0f, q[0].toFloat(), q[1].toFloat(), q[2].toFloat(), q[3].toFloat(),
             0f, yawRate.toFloat(), 0f, vx.toFloat(), vy.toFloat(), 0f, true)
         if (!withHands) return
