@@ -73,6 +73,7 @@ class PointerService : AccessibilityService() {
     private fun show() {
         val v = Pad(this)
         v.onLeave = { leave() }
+        v.onFloor = { step -> XrHost.nudgeFloor(step) }
         val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.OPAQUE)
@@ -116,6 +117,10 @@ class PointerService : AccessibilityService() {
         private val metresPerPixel = 0.7 / minOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels).coerceAtLeast(1)
         init { setBackgroundColor(0xFF05070A.toInt()); keepScreenOn = true }
         var onLeave: (() -> Unit)? = null
+        /** The Floor buttons: called with metres to move the floor down (negative: up). */
+        var onFloor: ((Float) -> Unit)? = null
+        private fun inFloorUp(ux: Float, uy: Float, w: Int, h: Int) = ux > w * 0.08f && ux < w * 0.48f && uy > h * 0.66f && uy < h * 0.75f
+        private fun inFloorDown(ux: Float, uy: Float, w: Int, h: Int) = ux > w * 0.52f && ux < w * 0.92f && uy > h * 0.66f && uy < h * 0.75f
         /** Where the Leave button is, as fractions of the upright page: across its middle, near the bottom. */
         private fun inLeave(ux: Float, uy: Float, w: Int, h: Int) = ux > w * 0.2f && ux < w * 0.8f && uy > h * 0.80f && uy < h * 0.89f
         /** A place on the screen as a place on the upright page that [onDraw] draws (the inverse of its turning). */
@@ -172,7 +177,17 @@ class PointerService : AccessibilityService() {
             paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f * density; paint.color = 0xFF9FB0C4.toInt()
             canvas.drawRoundRect(width * 0.2f, height * 0.80f, width * 0.8f, height * 0.89f, 24 * density, 24 * density, paint)
             paint.style = Paint.Style.FILL; paint.textSize = 18f * density; paint.color = 0xFFE8F0FA.toInt(); paint.textAlign = Paint.Align.CENTER
-            canvas.drawText("Leave the game", width / 2f, height * 0.845f + 6 * density, paint)
+            canvas.drawText("Hold to leave the game", width / 2f, height * 0.845f + 6 * density, paint)
+            // the floor, for when a game's floor is not on the real one: 3 cm a press, remembered
+            paint.style = Paint.Style.STROKE; paint.color = 0xFF9FB0C4.toInt()
+            canvas.drawRoundRect(width * 0.08f, height * 0.66f, width * 0.48f, height * 0.75f, 24 * density, 24 * density, paint)
+            canvas.drawRoundRect(width * 0.52f, height * 0.66f, width * 0.92f, height * 0.75f, 24 * density, 24 * density, paint)
+            paint.style = Paint.Style.FILL; paint.color = 0xFFE8F0FA.toInt(); paint.textSize = 17f * density
+            canvas.drawText("Hold: floor up", width * 0.28f, height * 0.705f + 6 * density, paint)
+            canvas.drawText("Hold: floor down", width * 0.72f, height * 0.705f + 6 * density, paint)
+            paint.textSize = 13f * density; paint.color = 0xFF9FB0C4.toInt()
+            val cm = Math.round(XrHost.floorTrimM * 100)
+            canvas.drawText("Floor " + XrHost.floorSource + (if (cm == 0) "" else ", moved " + Math.abs(cm) + " cm " + (if (cm > 0) "down" else "up")), width / 2f, height * 0.78f, paint)
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -192,11 +207,18 @@ class PointerService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     PointerInput.hold(now, 0, false)
-                    if (e.actionMasked == MotionEvent.ACTION_UP && !many && now - downNs < 600_000_000L && travelled < 24 * density) {
-                        toPage(e.x, e.y, page)
-                        val t = turn(); val w = if (t == 1 || t == 3) height else width; val h = if (t == 1 || t == 3) width else height
-                        if (inLeave(page[0], page[1], w, h)) { onLeave?.invoke(); return true }
-                        if (now - downNs < 300_000_000L) PointerInput.tap(now)
+                    if (e.actionMasked == MotionEvent.ACTION_UP && !many && travelled < 24 * density) {
+                        val held = now - downNs
+                        // A quick tap is a select wherever it lands: the touchpad is used without looking at it. The
+                        // buttons answer only to a finger held on them for over half a second.
+                        if (held < 300_000_000L) PointerInput.tap(now)
+                        else if (held > 550_000_000L && held < 4_000_000_000L) {
+                            toPage(e.x, e.y, page)
+                            val t = turn(); val w = if (t == 1 || t == 3) height else width; val h = if (t == 1 || t == 3) width else height
+                            if (inLeave(page[0], page[1], w, h)) { onLeave?.invoke(); return true }
+                            if (inFloorUp(page[0], page[1], w, h)) onFloor?.invoke(-0.03f)
+                            if (inFloorDown(page[0], page[1], w, h)) onFloor?.invoke(0.03f)
+                        }
                     }
                 }
             }

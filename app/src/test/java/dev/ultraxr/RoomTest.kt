@@ -118,16 +118,16 @@ class RoomTest {
 
     @Test fun theFloorOfAMadeUpRoomIsFoundWithinThreeCentimetres() {
         val m = RoomModel(); madeUpRoom(m)
-        m.analyse(0.0); val f = m.analyse(0.0)
+        m.analyse(0.0); m.analyse(0.0); val f = m.analyse(0.0)
         assertEquals(-1.45, f.floorY, 0.03)
         assertNotNull(f.surfaces.firstOrNull { it.kind == RoomSurface.Kind.FLOOR })
     }
 
     @Test fun theCounterTopAndTheWallAreFound() {
         val m = RoomModel(); madeUpRoom(m)
-        // a table top or wall is reported the third time it is found
+        // a wall is reported the third time it is found, a table top the fourth
         assertTrue(m.analyse(0.0).surfaces.none { it.kind != RoomSurface.Kind.FLOOR })
-        m.analyse(0.0); val f = m.analyse(0.0)
+        m.analyse(0.0); m.analyse(0.0); val f = m.analyse(0.0)
         val top = f.surfaces.firstOrNull { it.kind == RoomSurface.Kind.TABLE }
         assertNotNull("surfaces: " + f.surfaces.map { it.kind.toString() + " at " + it.cy }, top)
         assertEquals(-0.55, top!!.cy, 0.03)
@@ -155,13 +155,13 @@ class RoomTest {
         f = m.analyse(-0.5); f = m.analyse(-0.5)
         assertTrue(f.floorY.isNaN())
         madeUpRoom(m)
-        repeat(3) { f = m.analyse(0.0) }
+        repeat(4) { f = m.analyse(0.0) }
         assertEquals("the real floor, once seen", -1.45, f.floorY, 0.03)
     }
 
     @Test fun aRecentreMovesTheRoomAlong() {
         val m = RoomModel(); madeUpRoom(m)
-        m.analyse(0.0); m.analyse(0.0); m.analyse(0.0)
+        repeat(4) { m.analyse(0.0) }
         // the wearer sat down 0.4 m and turned a quarter turn, then recentred: the world's origin is the head again
         m.transform(Pose(doubleArrayOf(0.0, 0.4, 0.0), Q.axisAngle(0.0, 1.0, 0.0, Math.PI / 2)))
         val f = m.analyse(0.0)
@@ -175,7 +175,7 @@ class RoomTest {
         // not reported any more (the estimator's errors add up, so they would be shown in the wrong place); the floor,
         // which is the same floor, stays.
         val m = RoomModel(); madeUpRoom(m)
-        repeat(3) { m.analyse(0.0) }
+        repeat(4) { m.analyse(0.0) }
         val r = Random(9); val pts = FloatArray(3 * 150)
         for (f in 40 until 40 + RoomModel.WINDOW + 30) {
             for (i in 0 until 150) { pts[i * 3] = (10 + 4 * r.nextDouble()).toFloat(); pts[i * 3 + 1] = (-1.45 + r.nextGaussian() * 0.015).toFloat(); pts[i * 3 + 2] = (-3 + 4 * r.nextDouble()).toFloat() }
@@ -223,11 +223,20 @@ class RoomTest {
         val rec = System.getenv("UXR_ROOM_RECORDING"); val vioCsv = System.getenv("UXR_ROOM_VIO"); val calib = System.getenv("UXR_ROOM_CALIB")
         assumeTrue(rec != null && vioCsv != null && calib != null)
         val every = (System.getenv("UXR_ROOM_EVERY") ?: "0.33").toDouble()
-        val r = StereoRig.fromBasalt(File(calib!!).readText()); val sp = StereoPoints(r); val model = RoomModel()
+        // UXR_ROOM_ROTFIX="x,y,z": the right camera turned by that many degrees first (what a calibration error would look like)
+        val r0 = StereoRig.fromBasalt(File(calib!!).readText())
+        val fixDeg = System.getenv("UXR_ROOM_ROTFIX")?.split(",")?.map { it.trim().toDouble() }
+        val r = if (fixDeg == null) r0 else {
+            val x = Math.toRadians(fixDeg[0]); val y = Math.toRadians(fixDeg[1]); val z = Math.toRadians(fixDeg[2]); val ang = sqrt(x * x + y * y + z * z)
+            StereoRig(r0.k0, r0.k1, r0.cam0InImu, Pose(r0.cam1InImu.p, Q.normalize(Q.mul(r0.cam1InImu.q, Q.conj(Q.axisAngle(x / ang, y / ang, z / ang, ang))))))
+        }
+        val sp = StereoPoints(r); val model = RoomModel()
         val rows = File(vioCsv!!).readLines().drop(1).map { it.split(",") }.filter { it.size >= 18 }
         val vt = DoubleArray(rows.size) { rows[it][0].toDouble() }
         val raw = ByteArray(CameraDecoder.IMAGE_BYTES); val left = ByteArray(EyeImage.OUT_BYTES); val right = ByteArray(EyeImage.OUT_BYTES)
         val pts = FloatArray(3 * 400); val world = FloatArray(3 * 400)
+        // UXR_ROOM_DUMP=file: every placed point as time, metres below the camera, distance, and its place in the camera's frame
+        val dump = System.getenv("UXR_ROOM_DUMP")?.let { java.io.PrintWriter(File(it)) }
         var first = -1L; var pendCounter = -1; var lastUsed = -1e9; var frame = 0; var nextPrint = 10.0; var placed = 0L; var ms = 0L; var epoch = -1
         DataInputStream(File(rec!!).inputStream().buffered(1 shl 20)).use { inp ->
             val head = ByteArray(7); inp.readFully(head)
@@ -261,6 +270,7 @@ class RoomTest {
                     if (d > 4.5) continue
                     val wp = camInWorld.apply(doubleArrayOf(pts[j * 3].toDouble(), pts[j * 3 + 1].toDouble(), pts[j * 3 + 2].toDouble()))
                     world[k * 3] = wp[0].toFloat(); world[k * 3 + 1] = wp[1].toFloat(); world[k * 3 + 2] = wp[2].toFloat(); k++
+                    dump?.println("%.2f,%.4f,%.4f,%.4f,%.4f,%.4f".format(java.util.Locale.US, s, camInWorld.p[1] - wp[1], d, pts[j * 3], pts[j * 3 + 1], pts[j * 3 + 2]))
                 }
                 model.add(world, k, frame++); placed += k
                 val headY = camInWorld.p[1]
@@ -275,5 +285,6 @@ class RoomTest {
                 }
             }
         }
+        dump?.close()
     }
 }

@@ -44,7 +44,7 @@ class RoomFindings(val floorY: Double, val floorSupport: Int, val surfaces: List
  * boxes that count, [analyse] finds
  *
  *   the floor     the lowest height at which boxes are spread over at least three quarters of a square metre,
- *                 and at least 0.95 m under the highest the head has been (so a counter is never the floor)
+ *                 and at least 1.05 m under the highest the head has been (so a counter is never the floor)
  *   table tops    other heights that stand out, where the boxes form a patch at least 30 cm wide
  *   walls         upright planes with boxes over at least 0.8 m along and 0.6 m up
  *
@@ -179,7 +179,7 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         // height has to be found three times running before it replaces the one held.
         if (!found.isNaN()) {
             if (floorHeld.isNaN() || abs(found - floorHeld) < 0.06) {
-                floorHeld = if (floorHeld.isNaN()) { floorPendingCount++; if (floorPendingCount >= 2) found else Double.NaN } else floorHeld + 0.25 * (found - floorHeld)
+                floorHeld = if (floorHeld.isNaN()) { floorPendingCount++; if (floorPendingCount >= 3) found else Double.NaN } else floorHeld + 0.10 * (found - floorHeld)
                 if (!floorHeld.isNaN()) { floorPending = Double.NaN; floorPendingCount = 0 }
             } else if (!floorPending.isNaN() && abs(found - floorPending) < 0.06) {
                 if (++floorPendingCount >= 3) { floorHeld = found; floorPending = Double.NaN; floorPendingCount = 0 }
@@ -212,12 +212,15 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
             val patch = largestPatch(inSlab(t).filter { it !in used && recent(it) }) ?: continue
             var sum = 0.0; for (b in patch) sum += b.y
             val r = rectangle(patch, RoomSurface.Kind.TABLE, sum / patch.size) ?: continue
-            if (r.halfV < 0.15 || r.halfU * r.halfV * 4 < 0.12) continue        // a line of boxes is an edge, not a top
+            if (r.halfV < 0.18 || r.halfU * r.halfV * 4 < 0.20) continue        // a line of boxes is an edge, and a small thing is a thing, not a top
+            // a top is flat: its boxes lie within a couple of centimetres of one height
+            var dev = 0.0; for (b in patch) dev += (b.y - r.cy) * (b.y - r.cy)
+            if (sqrt(dev / patch.size) > 0.022) continue
             if (r.halfU > 1.5 || r.halfV > 1.0) continue                         // bigger than any table: a level slice through a cluttered room
             if (!near(r, headX, headZ)) continue
             // a top is covered with boxes, not just framed by a few: half of its 20 cm squares must hold one
             val sq = HashSet<Long>(); for (b in patch) sq.add((floor(b.x / 0.2).toLong() shl 32) xor (floor(b.z / 0.2).toLong() and 0xFFFFFFFFL))
-            if (sq.size < 0.5 * (r.halfU * 2 * r.halfV * 2) / 0.04) continue
+            if (sq.size < 0.6 * (r.halfU * 2 * r.halfV * 2) / 0.04) continue
             found2.add(r); used.addAll(patch)
         }
 
@@ -253,7 +256,8 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
             k.s = RoomSurface(o.kind, (o.cx + m.cx) / 2, (o.cy + m.cy) / 2, (o.cz + m.cz) / 2, m.ux, m.uy, m.uz, m.vx, m.vy, m.vz, (o.halfU + m.halfU) / 2, (o.halfV + m.halfV) / 2, m.support)
         }
         for (f in free) kept.add(Kept(f, 1, 0))
-        return kept.filter { it.seen >= 3 }.map { it.s }
+        // a wall is believed the third time, a table top the fourth: things on furniture make up tops more easily
+        return kept.filter { it.seen >= (if (it.s.kind == RoomSurface.Kind.TABLE) 4 else 3) }.map { it.s }
     }
 
     /** The biggest group of boxes that touch each other on a 20 cm grid seen from above. */
@@ -342,7 +346,7 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
             // filled, not a line of boxes along one shelf edge: boxes in enough different 20 cm squares of the wall
             val squares = HashSet<Long>()
             for (b in on) squares.add((floor(((b.x - mx) * ux + (b.z - mz) * uz) / 0.2).toLong() shl 32) xor (floor(b.y / 0.2).toLong() and 0xFFFFFFFFL))
-            if (squares.size < 0.4 * ((a1 - a0) * (y1 - y0)) / 0.04) continue
+            if (squares.size < 0.33 * ((a1 - a0) * (y1 - y0)) / 0.04) continue
             val ca = (a0 + a1) / 2
             return RoomSurface(RoomSurface.Kind.WALL, mx + ca * ux, (y0 + y1) / 2, mz + ca * uz, ux, 0.0, uz, 0.0, 1.0, 0.0, (a1 - a0) / 2, (y1 - y0) / 2, on.size) to on
         }
@@ -354,11 +358,11 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         const val MIN_HITS = 2
         private const val BIN = 0.025
         /** Nobody's eyes are closer to the floor than this, sitting or standing; a counter or a desk is. */
-        const val MIN_BELOW_HEAD = 0.95
+        const val MIN_BELOW_HEAD = 1.05
         private const val FLOOR_MIN_BOXES = 36
         private const val FLOOR_MIN_CELLS = 12
-        private const val TABLE_MIN_BOXES = 20
-        private const val WALL_MIN_BOXES = 90
+        private const val TABLE_MIN_BOXES = 32
+        private const val WALL_MIN_BOXES = 70
         /** Pictures that count: about 20 s at three a second. */
         const val WINDOW = 60
         /** Table tops and walls further from the wearer than this are not reported: too far to place well. */

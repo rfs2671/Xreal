@@ -277,14 +277,29 @@ object XrHost : OpenXrGlassesLayer.Host {
      * floor it is the wearer's height setting below where the head was at the last recentre. A found floor is
      * taken at once; after that it is followed slowly, so nothing in a game jumps.
      */
+    @Volatile private var floorTrim = Float.NaN; private var floorTrimApplied = 0f
+    /** Moves the floor a step down (positive) or up for the owner, who is looking at it; kept for next time. */
+    fun nudgeFloor(stepM: Float) {
+        val t = ((if (floorTrim.isNaN()) Tracking.settings.floorTrimM else floorTrim) + stepM).coerceIn(-0.4f, 0.4f)
+        floorTrim = t; Tracking.settings.floorTrimM = t
+        val fy = Tracking.floorY
+        Tracking.log("OpenXR: floor moved by the owner to " + dev.ultraxr.core.Fmt.f(t * 100.0, 0) + " cm below what was " + (if (fy.isNaN()) "set as height" else "measured (" + dev.ultraxr.core.Fmt.f(-fy, 2) + " m below the origin)"))
+    }
+    /** The owner's floor correction in metres, for showing. */
+    val floorTrimM: Float get() = if (floorTrim.isNaN()) 0f else floorTrim
+
     private fun applyFloor(nowNs: Long) {
+        if (floorTrim.isNaN()) floorTrim = Tracking.settings.floorTrimM
         if (nowNs - floorNs < 50_000_000L) return
         val dt = ((nowNs - floorNs) * 1e-9f).coerceAtMost(0.2f); floorNs = nowNs
         val fy = Tracking.floorY
         val known = !fy.isNaN() && -fy > 0.6 && -fy < 2.4
-        val want = if (known) (-fy).toFloat() else Tracking.settings.standingHeightM
+        // the owner's own correction (the touchpad's Floor buttons) is added to what the cameras or the height setting say
+        val trim = floorTrim
+        val want = (if (known) (-fy).toFloat() else Tracking.settings.standingHeightM) + trim
         val version = Tracking.head.worldVersion
-        val snap = floorApplied.isNaN() || version != floorWorld || known != floorKnown
+        val snap = floorApplied.isNaN() || version != floorWorld || known != floorKnown || trim != floorTrimApplied
+        floorTrimApplied = trim
         val next = if (snap) want else floorApplied + (want - floorApplied).coerceIn(-0.04f * dt, 0.04f * dt)
         if (known != floorKnown || floorApplied.isNaN()) {
             floorSource = if (known) "measured" else "from the height setting"

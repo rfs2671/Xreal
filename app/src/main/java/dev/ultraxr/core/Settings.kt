@@ -23,6 +23,8 @@ class Settings(context: Context) {
     var standingHeightM: Float get() = p.getFloat("height", 1.6f); set(v) = p.edit().putFloat("height", v).apply()
     /** Find the floor, table tops and walls with the tracking cameras. */
     var roomScan: Boolean get() = p.getBoolean("room_scan", true); set(v) = p.edit().putBoolean("room_scan", v).apply()
+    /** How far the owner has moved the measured floor down (metres; negative is up), with the touchpad's Floor buttons. */
+    var floorTrimM: Float get() = p.getFloat("floor_trim", 0f); set(v) = p.edit().putFloat("floor_trim", v.coerceIn(-0.4f, 0.4f)).apply()
     /** How hands reach OpenXR applications: "auto" (by application), "hands" (joints only) or "controllers" (joints and Touch-shaped controllers). */
     /**
      * Whether to try the glasses' half-width 3D mode. Off by default: on the Pixel 10 the glasses fall back to 2D

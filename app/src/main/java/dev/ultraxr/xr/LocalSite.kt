@@ -156,7 +156,7 @@ object LocalSite {
         sb.append(",\"tracked\":").append(tracked)
         val r = Tracking.roomFindings
         val measured = r != null && !r.floorY.isNaN()
-        sb.append(",\"floor\":{\"measured\":").append(measured).append(",\"y\":").append(f(if (measured) r!!.floorY + h else 0.0)).append("}")
+        sb.append(",\"floor\":{\"measured\":").append(measured).append(",\"y\":").append(f(if (measured) r!!.floorY - XrHost.floorTrimM + h else 0.0)).append("}")
         sb.append(",\"surfaces\":[")
         var n = 0
         if (r != null) for (s in r.surfaces) {

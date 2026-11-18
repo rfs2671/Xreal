@@ -318,6 +318,30 @@ passed for walls. Changed the same day, not yet seen again:
 What this does not fix: the estimator losing the wearer while walking. Until that holds, surfaces are right near
 where the wearer stands and looks, and not a map of the home.
 
+**Second look (owner, same day):** "wall tracking was great, but only recognized a single wall. Floor too high
+still, raised objects drifting and still made up surfaces. Table was pretty good at staying at the same area but
+lost accuracy as I go." The floor read 1.43 to 1.63 m below the cameras during that walk (about 1.52 m in the
+middle); the owner's height is not known to the app, so how much too high is not known either. One possible cause
+was measured and not settled: turning the right camera by 0.17 degrees in the calibration moves the measured floor
+by 8 cm (1.39 m to 1.47 m on the recording), and the correction measured earlier from real stereo pairs
+(`tools/tracking/stereo_check.py`) is of that size and in that direction; the recording has too much clutter near
+the floor to tell from the floor's flatness. No calibration was changed. Instead:
+
+- the touchpad has **Hold: floor up / floor down** (3 cm a press, kept in the settings, added to whatever the
+  cameras or the height setting say). Its value after the owner has set it by eye is the measurement that was missing;
+- the floor follows new readings more slowly (a tenth a second instead of a quarter) and is first believed the
+  third time, at least 1.05 m under the head;
+- a table top must be flat within about 2 cm, 60 % covered, at least 0.2 m2, made of 32 boxes, and found four
+  times; walls need 70 boxes and a third of their area covered (was 90 and 40 %), still with few boxes beside them.
+
+On the recording this leaves one counter top where there were sometimes two, and the floor as before. Whether it
+removes the made-up surfaces in the owner's rooms has not been seen. Table tops losing their place as the wearer
+walks is the position estimator's drift, which none of this changes.
+
+The touchpad's buttons (leave, floor up, floor down) answer only to a finger held for over half a second: a quick
+tap anywhere is a select, because the touchpad is used without looking at it. (With plain taps, a test's tap moved
+the floor.)
+
 Not known: how close the measured floor is to the real one (nobody has compared it through the glasses), how it
 does on a plain floor without texture, and whether walls are found in an ordinary room (in the recording only a
 cabinet front was, on and off). Any page on the phone can read `room.json` while a game runs.
