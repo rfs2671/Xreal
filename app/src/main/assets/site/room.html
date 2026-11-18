@@ -17,9 +17,11 @@
 <body>
 <button id="start">
   <h1>Room check</h1>
-  <p>Shows what the glasses' cameras have found of your room: a grid on the floor, outlines on table tops and walls.
-     The grid is <b>green</b> once the floor is measured and <b>amber</b> while it is only your height setting.</p>
-  <p>Look down at the floor for a few seconds, then around. Pinch or tap to throw a ball: it bounces off what was found.</p>
+  <p>A grid on the floor and three posts that stay where they are in your room: walk around them. The number low in
+     the picture is how many metres you are from where you started. A <b>red</b> frame means the cameras have lost
+     where you are: until it goes, the picture only follows which way you face.</p>
+  <p>The grid is <b>green</b> once the floor is measured and <b>amber</b> while it is only your height setting. Table
+     tops and walls the cameras found are outlined. Pinch or tap to throw a ball: it bounces off what was found.</p>
   <p id="state">Tap anywhere to start.</p>
 </button>
 <canvas id="c"></canvas>
@@ -27,12 +29,23 @@
 'use strict';
 // What the page saw, for the automated test (posted to the app in test builds; ignored otherwise).
 const R = { page: 'room', hasXR: !!navigator.xr, mode: null, error: null, frames: 0, ready: false, measured: null, floorY: null, eyeHeight: null,
-  surfaces: null, kinds: null, packets: 0, roomError: null, lookHit: null, apiHit: null, apiPlanes: null, apiAnchor: null, balls: 0, bounces: 0, features: null, fingerMarks: 0, points: 0 };
+  surfaces: null, kinds: null, packets: 0, roomError: null, lookHit: null, apiHit: null, apiPlanes: null, apiAnchor: null, balls: 0, bounces: 0, features: null, fingerMarks: 0, points: 0, tracked: null, fromStart: null, lost: 0 };
 const state = document.getElementById('state');
 function report() { state.textContent = R.error ? R.error : R.mode ? 'Running in the glasses.' : 'Tap anywhere to start.'; fetch('/report', { method: 'POST', body: JSON.stringify(R) }).catch(() => {}); }
 setInterval(report, 1000);
 
 let session = null, gl = null, room = null, prog = null, buf = null, hitSource = null, anchor = null, lastT = 0;
+let start = null, wasTracked = null;           // where the head was when the session began (in the page's space)
+const SHOW_POINTS = new URLSearchParams(location.search).get('points') === '1';
+// the seven strokes of a digit: top, top right, bottom right, bottom, bottom left, top left, middle
+const SEG = { 0: 'abcdef', 1: 'bc', 2: 'abged', 3: 'abgcd', 4: 'fgbc', 5: 'afgcd', 6: 'afgedc', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg' };
+const STROKE = { a: [0, 2, 1, 2], b: [1, 2, 1, 1], c: [1, 1, 1, 0], d: [0, 0, 1, 0], e: [0, 0, 0, 1], f: [0, 1, 0, 2], g: [0, 1, 1, 1] };
+/** A box of lines standing on the floor: centre of its foot, half its width, its height. */
+function post(x, z, y, half, h, col) {
+  const k = [[x - half, z - half], [x + half, z - half], [x + half, z + half], [x - half, z + half]];
+  for (let i = 0; i < 4; i++) { const a = k[i], b = k[(i + 1) % 4]; line([a[0], y, a[1]], [b[0], y, b[1]], col); line([a[0], y + h, a[1]], [b[0], y + h, b[1]], col); line([a[0], y, a[1]], [a[0], y + h, a[1]], col); }
+  line([k[0][0], y + h, k[0][1]], [k[2][0], y + h, k[2][1]], col); line([k[1][0], y + h, k[1][1]], [k[3][0], y + h, k[3][1]], col);
+}
 const balls = [];
 const V = [];                                  // line vertices: x, y, z, r, g, b
 function line(a, b, c) { V.push(a[0], a[1], a[2], c[0], c[1], c[2], b[0], b[1], b[2], c[0], c[1], c[2]); }
@@ -103,11 +116,39 @@ function frame(t, f) {
   R.surfaces = room.surfaces.length; R.kinds = room.surfaces.map((s) => s.kind).join(',');
   physics(dt);
 
+  // Position: what the page itself is given. "tracked" is the cameras knowing where the head is; without it the
+  // head's place is held and only its direction changes, so nothing here can be walked around.
+  const tracked = room.tracked && !pose.emulatedPosition;
+  if (!start) start = head.slice();
+  if (wasTracked === true && !tracked) R.lost++;
+  wasTracked = tracked;
+  const fromStart = Math.hypot(head[0] - start[0], head[2] - start[2]);
+  R.tracked = tracked; R.fromStart = +fromStart.toFixed(2);
+
   V.length = 0;
-  // the floor: a grid of half-metre squares around the wearer, lying on it
+  // The floor: half-metre squares over ten metres by ten, fixed in the room around where the session began (it
+  // does not come along with the wearer), every second line brighter, and a cross where the wearer started.
   const fy = room.floorY + 0.003, col = room.measured ? [0.1, 0.85, 0.4] : [0.9, 0.55, 0.1];
-  const gx = Math.round(head[0] * 2) / 2, gz = Math.round(head[2] * 2) / 2;
-  for (let i = -6; i <= 6; i++) { line([gx + i * 0.5, fy, gz - 3], [gx + i * 0.5, fy, gz + 3], col); line([gx - 3, fy, gz + i * 0.5], [gx + 3, fy, gz + i * 0.5], col); }
+  const ox = Math.round(start[0] * 2) / 2, oz = Math.round(start[2] * 2) / 2;
+  for (let i = -10; i <= 10; i++) { const k = i % 2 ? mul(col, 0.45) : col; line([ox + i * 0.5, fy, oz - 5], [ox + i * 0.5, fy, oz + 5], k); line([ox - 5, fy, oz + i * 0.5], [ox + 5, fy, oz + i * 0.5], k); }
+  line([start[0] - 0.2, fy, start[2] - 0.2], [start[0] + 0.2, fy, start[2] + 0.2], [1, 1, 1]); line([start[0] - 0.2, fy, start[2] + 0.2], [start[0] + 0.2, fy, start[2] - 0.2], [1, 1, 1]);
+  // Three posts standing on the floor, fixed in the room: a tall one a metre and a half ahead of the start, two
+  // short ones further on to the left and right. With position tracked they stay put and can be walked around.
+  post(start[0], start[2] - 1.5, fy, 0.15, 1.2, [1.0, 0.8, 0.2]);
+  post(start[0] - 1.5, start[2] - 3.0, fy, 0.12, 0.6, [0.3, 0.7, 1.0]);
+  post(start[0] + 1.5, start[2] - 3.0, fy, 0.12, 0.6, [1.0, 0.4, 0.4]);
+  // Fixed to the head, low in the picture: metres from the start (one decimal), and a red frame while position is lost.
+  {
+    const q = pose.transform.orientation, at = (x, y) => add(head, qrot(q, [x, y, -1.5]));
+    const hc = tracked ? [0.75, 0.95, 0.8] : [1.0, 0.25, 0.2], txt = Math.min(99.9, fromStart).toFixed(1), w = 0.022, gap = 0.012, y0 = -0.27;
+    let x = -((txt.length - 1) * (w + gap) + gap) / 2;
+    for (const ch of txt) {
+      if (ch === '.') { line(at(x, y0), at(x + 0.004, y0 + 0.004), hc); x += gap; continue; }
+      for (const g of SEG[ch]) { const t = STROKE[g]; line(at(x + t[0] * w, y0 + t[1] * w), at(x + t[2] * w, y0 + t[3] * w), hc); }
+      x += w + gap;
+    }
+    if (!tracked) { const a = 0.52, b = 0.29; line(at(-a, -b), at(a, -b), hc); line(at(a, -b), at(a, b), hc); line(at(a, b), at(-a, b), hc); line(at(-a, b), at(-a, -b), hc); }
+  }
   // table tops and walls: outline, and lines across so the surface reads as a surface
   for (const s of room.surfaces) {
     if (s.kind === 'floor') continue;
@@ -131,11 +172,10 @@ function frame(t, f) {
     const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]], c = add(h.point, mul(n, 0.004));
     circle(c, u, v, 0.07, [1, 1, 1]); circle(c, u, v, 0.02, [1, 1, 1]); line(c, add(c, mul(n, 0.1)), [1, 1, 1]);
   }
-  // A yellow cross on every place the cameras have measured several times over: corners of things, edges, marks on
-  // the floor. They stay where they are from one look to the next. If the picture in the glasses is lined up with the world, each cross sits on the thing it was
-  // measured on (one eye closed). Crosses that all float above their things are the picture sitting too high.
+  // With ?points=1: a yellow cross on every place the cameras have measured several times over. Off otherwise: about
+  // a hundred of them over everything told the owner nothing (18 November).
   R.points = room.points.length;
-  for (const c of room.points) {
+  if (SHOW_POINTS) for (const c of room.points) {
     let n = sub(head, c); const l = Math.hypot(n[0], n[1], n[2]) || 1; n = mul(n, 1 / l);
     let u = [n[2], 0, -n[0]]; const ul = Math.hypot(u[0], u[1], u[2]) || 1; u = mul(u, 1 / ul);
     const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]], r = 0.012 * l;

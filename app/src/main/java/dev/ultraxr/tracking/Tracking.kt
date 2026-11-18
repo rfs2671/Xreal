@@ -121,6 +121,16 @@ object Tracking : GlassesLink.Listener {
     fun log(msg: String) {
         synchronized(logLines) { logLines.addLast("%tT %s".format(System.currentTimeMillis(), msg)); while (logLines.size > 400) logLines.removeFirst() }
         android.util.Log.i("UltraXR", msg)
+        // Also kept in a file (log.txt beside the journal, the one before it as log.1.txt): the system's log is gone
+        // when the phone restarts, as it did on 18 November right after a session.
+        try {
+            val dir = appContext?.getExternalFilesDir(null) ?: return
+            synchronized(logLines) {
+                val f = java.io.File(dir, "log.txt")
+                if (f.length() > 1_500_000L) { val old = java.io.File(dir, "log.1.txt"); old.delete(); f.renameTo(old) }
+                f.appendText(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS ", java.util.Locale.US).format(java.util.Date()) + msg + 10.toChar())
+            }
+        } catch (_: Throwable) {}
     }
     fun logText(): String = synchronized(logLines) { logLines.joinToString("\n") }
 
@@ -464,7 +474,9 @@ object Tracking : GlassesLink.Listener {
                     val lying = holdWhenStill && stillness.still
                     var restarted = false
                     if (lying != wasLying) {
-                        wasLying = lying; log(if (lying) "6DoF: the glasses are lying still, position held" else "6DoF: moving again")
+                        wasLying = lying
+                        if (lying) lyingSinceNs = now else lainNs = now - lyingSinceNs
+                        log(if (lying) "6DoF: the glasses are lying still, position held" else "6DoF: moving again after " + dev.ultraxr.core.Fmt.f(lainNs / 1e9, 1) + " s")
                         if (lying) lyingAt = p.copyOf()
                         // Picked up again: if the estimator wandered while nothing moved, what it holds now is wrong
                         // (it has run away by metres in replays). Start it afresh rather than hand that to a game.
@@ -477,7 +489,10 @@ object Tracking : GlassesLink.Listener {
                     // Picked up and tracking again: while the glasses lay still their position was held at the table,
                     // and the way up to the face is not tracked (the estimator is starting afresh). So the world is
                     // recentred on the wearer once position has been good for a second, as when a game starts.
-                    if (wasLying != lyingBefore && !lying) recentreDueNs = -1L
+                    // Only after the glasses really lay there: a wearer who stands very still for a second or two
+                    // can pass for glasses on a table, and recentring then would carry the whole world along with
+                    // them every time they pause. Held still for a short while, nothing has moved and nothing is redone.
+                    if (wasLying != lyingBefore && !lying && lainNs >= LYING_RECENTRE_AFTER_NS) recentreDueNs = -1L
                     lyingBefore = lying
                     if (recentreDueNs == -1L && use) recentreDueNs = now + 1_000_000_000L
                     if (recentreDueNs > 0L && !use) recentreDueNs = -1L
@@ -523,6 +538,8 @@ object Tracking : GlassesLink.Listener {
     val stillness = dev.ultraxr.core.StillnessDetector()
     /** Hold position while they are. On unless files/vio_options.txt says "hold_when_still=0" (for A/B replays). */
     @Volatile var holdWhenStill = true
+    private var lyingSinceNs = 0L; private var lainNs = 0L
+    private const val LYING_RECENTRE_AFTER_NS = 8_000_000_000L
     private var wasLying = false
     private var wasUsing = false
     private var lyingAt: DoubleArray? = null

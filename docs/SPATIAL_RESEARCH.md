@@ -150,3 +150,33 @@ long enough to be compared with the thing under it.
 
 Changed: a cross is now drawn only on a place measured at least four times and seen in the last ten seconds
 (the room model's own 5 cm boxes), within 3 m. Those stay where they are from one look to the next.
+
+### The test of 18 November, 18:21: "everything moves with me"
+
+The owner: about a hundred crosses, on nothing in particular; the floor right this time (10 degrees of tilt, measured
+floor, nothing lowered); a wall came and went; a table drifted after two seconds; and above all nothing stayed in
+its place while walking: "low end 3 dof".
+
+What is known of that session is little, because the phone itself restarted at 18:25 (its power controller's
+firmware: "CPM Panic: LPM HW timeout", nothing an app does) and took the system log with it:
+
+- the tracker's own trace of the last 20 seconds shows a walk of about 3.5 m tracked, then a knock of 3.6 g (the
+  glasses coming off), then the estimate sliding away at 1 m/s with the glasses lying still, and a 5 m jump. That
+  runaway was after the glasses were off the head.
+- walls and table tops are only given to a page while position is tracked, so a wall that comes and goes is
+  position coming and going. Sessions on this phone have had position for 27 %, 33 %, 96 % and 99 % of their time.
+  While it is gone the head's place is held and the picture follows direction only: everything moves with the wearer.
+- a wearer standing very still could pass for glasses lying on a table, and on moving again the view was recentred
+  on them: the world carried along at every pause. Not proven to have happened; removed all the same.
+
+Changed:
+
+- the view is recentred on "picked up" only after the glasses lay still for 8 seconds;
+- Room check draws things fixed in the room (a 10 m floor grid around the starting point, three posts), the
+  distance from the start as a number low in the picture, and a red frame whenever position is lost. So the next
+  look says which it is: position lost (red frame, number stuck), or position kept and the picture still wrong;
+- the crosses are off unless the page is opened with ?points=1;
+- the app's log is also written to log.txt beside the journal, so a restart of the phone no longer loses it.
+
+Not changed: how often position is lost. That is the tracker finding too few points with both cameras, and it is
+the thing between this and a world that stays put.

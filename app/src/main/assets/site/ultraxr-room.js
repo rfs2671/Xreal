@@ -7,6 +7,7 @@
 //
 //   const room = await UltraXRRoom.attach(session)   // room.ref is a 'local-floor' reference space
 //   room.update(frame)                                // once a frame, before using it
+//   room.tracked                                      // whether the cameras know where the head is right now
 //   room.floorY, room.measured, room.surfaces         // in room.ref: y of the floor, whether cameras measured it,
 //                                                     // and rectangles { kind, c, u, v, n, hu, hv, corners }
 //   room.raycast(origin, direction)                   // -> { point, normal, distance, kind, surface } or null
@@ -50,7 +51,7 @@
       this.session = session; this.ref = null;
       this.ready = false;          // lined up with the page's space at least once
       this.measured = false;       // the cameras have found the floor (otherwise it is the height setting)
-      this.floorY = 0; this.surfaces = []; this.points = [];
+      this.floorY = 0; this.surfaces = []; this.points = []; this.tracked = false;
       this.yaw = 0; this.shift = [0, 0, 0];
       this._data = null; this._fresh = null; this._lastHead = null; this._ended = false; this.packets = 0; this.error = null;
       session.addEventListener('end', () => { this._ended = true; });
@@ -107,6 +108,7 @@
       if (!data || !this.ready || data === this._shown && this._shownYaw === this.yaw && this._shownShift === this.shift) return;
       this._shown = data; this._shownYaw = this.yaw; this._shownShift = this.shift;
       this.measured = !!(data.floor && data.floor.measured);
+      this.tracked = !!data.tracked;       // the cameras know where the head is (otherwise the glasses only know which way it faces)
       this.floorY = this._toRef([0, data.floor ? data.floor.y : 0, 0])[1];
       // where the cameras measured things in their newest picture (room.points: [x, y, z] each, in room.ref)
       this.points = []; const dp = data.points || [];

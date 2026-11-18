@@ -66,24 +66,19 @@ own DisplayPort driver log for those seconds. The picture will blank and may sta
 end; if it does, unplug the glasses and plug them in again. **Question 0: at any point during
 that minute, did you see a picture that was different in each eye?**
 
-## The session (about two minutes): crosses on the things, grid on the floor
+## The session (about two minutes): walk around the posts
 
-The picture is turned 10 degrees down (from the owner's floor answer of 18 November) and the floor is what the
-cameras measure. Room check draws a small yellow cross on every place the cameras measured in their newest
-picture: corners, edges, marks. The crosses do not depend on the hand tracker, which saw no hand in the second
-test of 18 November.
+Room check draws a floor grid ten metres across and three posts, all fixed in the room, a number low in the
+picture (metres from where you started), and a red frame whenever the cameras have lost where you are.
 
-**Before:** a lit room with things in it (a table with objects, shelves, a patterned floor), glasses plugged
-straight into the phone. Open Ultra XR, open the home view in the glasses, look at **Room check**, tap the phone.
+**Before:** a lit room, glasses plugged straight into the phone, the phone charged. Open Ultra XR, open the home
+view in the glasses, choose **Room check**, tap the phone. Start a few steps back from open floor.
 
-1. **One eye closed, stand still and look at things one to two metres away.** Each yellow cross should sit on a
-   corner or edge of a real thing. If the crosses all sit above their things hold **picture down**, if below hold
-   **picture up** (one degree a hold), until they are on. **Answer 1: the degrees the phone shows**, or "the
-   crosses are not on anything whichever way".
-2. **Look down at the floor until the grid is green.** **Answer 2: is the grid on the floor: yes / too high /
-   too low**, and the "Cameras: floor N m" the phone shows.
-3. **Look at crosses near the left or right edge of the picture.** **Answer 3: are they on their things too?**
-   (If only the middle ones are, the picture is also the wrong size.)
+1. **Walk to the tall yellow post (1.5 m ahead) and around it.** **Answer 1: does it stay in its place: yes / it
+   comes along with me / it jumps.**
+2. **Walk about three metres and back.** **Answer 2: what the number showed at the far end, and whether the red
+   frame came on (never / now and then / most of the time).**
+3. **Look down.** **Answer 3: is the grid on the floor, and do its lines stay on the floor as you walk?**
 
 Then leave with **Hold to leave the game**. Volume-up recentres the view and the pointer at any time.
 
