@@ -70,6 +70,8 @@ object SimWearer {
                     dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.FLOOR, 0.0, -down, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 2.0, 2.0, 100),
                     dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.TABLE, 0.0, -down + 0.75, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.6, 0.35, 80),
                     dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.WALL, 0.0, -down + 1.2, -2.5, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.5, 1.0, 120)), 1000, 800))
+                // three measured places: on the table top's far edge, its middle and on the floor
+                dev.ultraxr.tracking.Tracking.setRoomPointsForTest(if (down == null) FloatArray(0) else floatArrayOf(0f, (-down + 0.75).toFloat(), -1.35f, 0f, (-down + 0.75).toFloat(), -1f, 0.3f, (-down).toFloat(), -1.5f))
                 dev.ultraxr.tracking.Tracking.log("sim: room " + (if (down == null) "removed" else "with the floor $down m below the start"))
             }
             // sim_tilt <degrees>: the owner's picture correction, as the touchpad's Picture buttons set it

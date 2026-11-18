@@ -117,3 +117,22 @@ gives 755 and 914, and a ray straight ahead meets the wall 0.441 m higher (2.5 m
 that tilt is the right reading. The fingertip rings decide it (`ACCEPTANCE.md`): the hand is placed by the same
 cameras, so rings that sit on the fingertips at the same setting that puts the grid on the floor mean tilt; rings
 that need a different setting than the floor mean size or tracking.
+
+### The second test of 18 November (14:53), from the phone's log
+
+The owner: "no fingers, floor too high unless I lower it". The log of that minute:
+
+- the hand tracker saw no hand in any frame, so no ring was drawn. The rings cannot be the test.
+- the first floor the cameras believed was 0.75 to 0.98 m under them (1.10 m under where the head started): a
+  raised surface, seen before the real floor had been. The real floor (1.48 to 1.53 m under the cameras) replaced
+  it 15 seconds later. For those 15 seconds the grid was half a metre too high, whatever the picture's tilt.
+- no picture button was pressed; position was lost after 60 s, when the glasses moved fast.
+
+So that test says nothing about the tilt. Changed on it:
+
+- **A level far from where a floor is expected** (more than 35 cm from the height setting, under the highest the
+  head has been) **has to be found 40 times running**, about half a minute, before it is the floor; one near it
+  still three times. A seated wearer gets the measured floor after that half minute, the height setting until then.
+- **Room check draws a yellow cross on each place the cameras measured** in their newest picture, in place of
+  relying on the rings. The same reasoning holds: the crosses come from the cameras, so where they sit against
+  the real corners they were measured on is the picture's error, and the picture buttons move them.

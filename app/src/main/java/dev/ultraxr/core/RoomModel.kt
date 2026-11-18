@@ -61,6 +61,12 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
     private val boxes = HashMap<Long, Box>()
     private var floorHeld = Double.NaN; private var floorPending = Double.NaN; private var floorPendingCount = 0
     var pointsAdded = 0L; private set
+    /**
+     * How far under the standing head the floor is expected (the wearer's height setting). A level about there is
+     * believed the third time it is found. One far from it (a bed, a sofa or a low table seen before the floor has
+     * been, or the real floor for a wearer who sits) has to be found [FAR_FLOOR_FINDS] times running, about half a minute.
+     */
+    @Volatile var expectedBelowHead = 1.6
     /** The highest the head has been: the floor is looked for well below that, wherever the head is now. */
     private var headTop = Double.NaN
     /** The newest picture's number: only what was seen in the last [WINDOW] pictures (about 20 s) counts. */
@@ -178,11 +184,14 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         // A floor is not believed at once and does not jump about: small changes are followed slowly, a different
         // height has to be found three times running before it replaces the one held.
         if (!found.isNaN()) {
-            if (floorHeld.isNaN() || abs(found - floorHeld) < 0.06) {
-                floorHeld = if (floorHeld.isNaN()) { floorPendingCount++; if (floorPendingCount >= 3) found else Double.NaN } else floorHeld + 0.10 * (found - floorHeld)
-                if (!floorHeld.isNaN()) { floorPending = Double.NaN; floorPendingCount = 0 }
+            val need = if (headTop.isNaN() || abs((headTop - found) - expectedBelowHead) < FLOOR_NEAR_EXPECTED_M) 3 else FAR_FLOOR_FINDS
+            if (floorHeld.isNaN() && (floorPending.isNaN() || abs(found - floorPending) < 0.06)) {
+                floorPending = found
+                if (++floorPendingCount >= need) { floorHeld = found; floorPending = Double.NaN; floorPendingCount = 0 }
+            } else if (!floorHeld.isNaN() && abs(found - floorHeld) < 0.06) {
+                floorHeld += 0.10 * (found - floorHeld); floorPending = Double.NaN; floorPendingCount = 0
             } else if (!floorPending.isNaN() && abs(found - floorPending) < 0.06) {
-                if (++floorPendingCount >= 3) { floorHeld = found; floorPending = Double.NaN; floorPendingCount = 0 }
+                if (++floorPendingCount >= need) { floorHeld = found; floorPending = Double.NaN; floorPendingCount = 0 }
             } else { floorPending = found; floorPendingCount = 1 }
         }
         val surfaces = ArrayList<RoomSurface>()
@@ -357,6 +366,8 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         private const val OFF = 1L shl 20
         const val MIN_HITS = 2
         private const val BIN = 0.025
+        const val FLOOR_NEAR_EXPECTED_M = 0.35
+        const val FAR_FLOOR_FINDS = 40
         /** Nobody's eyes are closer to the floor than this, sitting or standing; a counter or a desk is. */
         const val MIN_BELOW_HEAD = 1.05
         private const val FLOOR_MIN_BOXES = 36

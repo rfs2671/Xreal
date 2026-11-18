@@ -27,7 +27,7 @@
 'use strict';
 // What the page saw, for the automated test (posted to the app in test builds; ignored otherwise).
 const R = { page: 'room', hasXR: !!navigator.xr, mode: null, error: null, frames: 0, ready: false, measured: null, floorY: null, eyeHeight: null,
-  surfaces: null, kinds: null, packets: 0, roomError: null, lookHit: null, apiHit: null, apiPlanes: null, apiAnchor: null, balls: 0, bounces: 0, features: null, fingerMarks: 0 };
+  surfaces: null, kinds: null, packets: 0, roomError: null, lookHit: null, apiHit: null, apiPlanes: null, apiAnchor: null, balls: 0, bounces: 0, features: null, fingerMarks: 0, points: 0 };
 const state = document.getElementById('state');
 function report() { state.textContent = R.error ? R.error : R.mode ? 'Running in the glasses.' : 'Tap anywhere to start.'; fetch('/report', { method: 'POST', body: JSON.stringify(R) }).catch(() => {}); }
 setInterval(report, 1000);
@@ -130,6 +130,16 @@ function frame(t, f) {
     let u = sub(a, mul(n, dot(a, n))); const l = Math.hypot(u[0], u[1], u[2]); u = mul(u, 1 / l);
     const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]], c = add(h.point, mul(n, 0.004));
     circle(c, u, v, 0.07, [1, 1, 1]); circle(c, u, v, 0.02, [1, 1, 1]); line(c, add(c, mul(n, 0.1)), [1, 1, 1]);
+  }
+  // A yellow cross on every place the cameras measured in their newest picture: corners of things, edges, marks on
+  // the floor. If the picture in the glasses is lined up with the world, each cross sits on the thing it was
+  // measured on (one eye closed). Crosses that all float above their things are the picture sitting too high.
+  R.points = room.points.length;
+  for (const c of room.points) {
+    let n = sub(head, c); const l = Math.hypot(n[0], n[1], n[2]) || 1; n = mul(n, 1 / l);
+    let u = [n[2], 0, -n[0]]; const ul = Math.hypot(u[0], u[1], u[2]) || 1; u = mul(u, 1 / ul);
+    const v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]], r = 0.012 * l;
+    line(add(c, mul(u, -r)), add(c, mul(u, r)), [1, 0.95, 0.2]); line(add(c, mul(v, -r)), add(c, mul(v, r)), [1, 0.95, 0.2]);
   }
   // A small ring on each tracked index fingertip and thumb tip. The cameras that track the hand sit beside the eyes,
   // so if the picture in the glasses is lined up with the world, each ring sits on its fingertip (with one eye

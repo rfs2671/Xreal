@@ -66,22 +66,24 @@ own DisplayPort driver log for those seconds. The picture will blank and may sta
 end; if it does, unplug the glasses and plug them in again. **Question 0: at any point during
 that minute, did you see a picture that was different in each eye?**
 
-## The session (about two minutes): rings on the fingertips, grid on the floor
+## The session (about two minutes): crosses on the things, grid on the floor
 
-On 18 November the owner had to draw the floor 85 cm below the measured one for it to look right, with measuring
-and drawing both checked (`SPATIAL_RESEARCH.md`). That is now a picture correction of 10 degrees, set once from
-that answer, and the floor is back at what the cameras measure.
+The picture is turned 10 degrees down (from the owner's floor answer of 18 November) and the floor is what the
+cameras measure. Room check draws a small yellow cross on every place the cameras measured in their newest
+picture: corners, edges, marks. The crosses do not depend on the hand tracker, which saw no hand in the second
+test of 18 November.
 
-**Before:** a lit room, glasses plugged straight into the phone. Open Ultra XR, open the home view in the
-glasses, look at **Room check** and tap the phone. The phone shows "Picture turned 10 degrees down".
+**Before:** a lit room with things in it (a table with objects, shelves, a patterned floor), glasses plugged
+straight into the phone. Open Ultra XR, open the home view in the glasses, look at **Room check**, tap the phone.
 
-1. **One eye closed, hold a hand up at arm's length.** A red ring is drawn on the index fingertip and the thumb tip.
-   If the rings sit above the fingertips hold **picture down**, if below hold **picture up** (one degree a hold),
-   until they are on. **Answer 1: the degrees the phone shows.**
-2. **Without touching the buttons again, look down at the floor.** **Answer 2: is the green grid on the floor:
-   yes / too high / too low.**
-3. **Move the hand to the left or right edge of the picture.** **Answer 3: is the ring still on the fingertip?**
-   (If not, the picture is also the wrong size.)
+1. **One eye closed, stand still and look at things one to two metres away.** Each yellow cross should sit on a
+   corner or edge of a real thing. If the crosses all sit above their things hold **picture down**, if below hold
+   **picture up** (one degree a hold), until they are on. **Answer 1: the degrees the phone shows**, or "the
+   crosses are not on anything whichever way".
+2. **Look down at the floor until the grid is green.** **Answer 2: is the grid on the floor: yes / too high /
+   too low**, and the "Cameras: floor N m" the phone shows.
+3. **Look at crosses near the left or right edge of the picture.** **Answer 3: are they on their things too?**
+   (If only the middle ones are, the picture is also the wrong size.)
 
 Then leave with **Hold to leave the game**. Volume-up recentres the view and the pointer at any time.
 

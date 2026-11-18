@@ -50,7 +50,7 @@
       this.session = session; this.ref = null;
       this.ready = false;          // lined up with the page's space at least once
       this.measured = false;       // the cameras have found the floor (otherwise it is the height setting)
-      this.floorY = 0; this.surfaces = [];
+      this.floorY = 0; this.surfaces = []; this.points = [];
       this.yaw = 0; this.shift = [0, 0, 0];
       this._data = null; this._fresh = null; this._lastHead = null; this._ended = false; this.packets = 0; this.error = null;
       session.addEventListener('end', () => { this._ended = true; });
@@ -108,6 +108,9 @@
       this._shown = data; this._shownYaw = this.yaw; this._shownShift = this.shift;
       this.measured = !!(data.floor && data.floor.measured);
       this.floorY = this._toRef([0, data.floor ? data.floor.y : 0, 0])[1];
+      // where the cameras measured things in their newest picture (room.points: [x, y, z] each, in room.ref)
+      this.points = []; const dp = data.points || [];
+      for (let i = 0; i + 2 < dp.length; i += 3) this.points.push(this._toRef([dp[i], dp[i + 1], dp[i + 2]]));
       this.surfaces = (data.surfaces || []).map((s, i) => {
         const c = this._toRef(s.c), u = this._dirToRef(s.u), v = this._dirToRef(s.v), n = this._dirToRef(s.n);
         const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => add(add(c, mul(u, a * s.hu)), mul(v, b * s.hv)));

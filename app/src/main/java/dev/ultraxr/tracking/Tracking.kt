@@ -90,6 +90,10 @@ object Tracking : GlassesLink.Listener {
     private var roomThread: Thread? = null
     /** Test builds on an emulator: a made-up room given to the room model's users instead of one from cameras. */
     fun setRoomForTest(f: dev.ultraxr.core.RoomFindings?) { roomFindings = f }
+    /** The places the cameras measured in their newest picture (x, y, z in the app's world, up to 160 of them) and when. */
+    @Volatile var roomPoints = FloatArray(0); private set
+    @Volatile var roomPointsNs = 0L; private set
+    fun setRoomPointsForTest(p: FloatArray) { roomPoints = p; roomPointsNs = System.nanoTime() }
 
     // --- thermal governor
     /** 0 = full rate; higher values skip more hand-tracking frames. */
@@ -604,7 +608,9 @@ object Tracking : GlassesLink.Listener {
                     world[k * 3] = w[0].toFloat(); world[k * 3 + 1] = w[1].toFloat(); world[k * 3 + 2] = w[2].toFloat(); k++
                 }
                 if (version != head.worldVersion) continue           // recentred meanwhile: these points are in the old world
+                room.expectedBelowHead = settings.standingHeightM.toDouble()
                 room.add(world, k, frame++); roomPictures++
+                roomPoints = world.copyOf(minOf(k, 160) * 3); roomPointsNs = System.nanoTime()
                 if (frame % 2 != 0) continue
                 val f = room.analyse(cam.p[1], cam.p[0], cam.p[2])
                 if (version != head.worldVersion) continue

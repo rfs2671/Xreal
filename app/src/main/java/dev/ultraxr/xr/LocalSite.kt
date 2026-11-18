@@ -169,6 +169,14 @@ object LocalSite {
                 .append("],\"n\":[").append(f(s.nx)).append(',').append(f(s.ny)).append(',').append(f(s.nz))
                 .append("],\"hu\":").append(f(s.halfU)).append(",\"hv\":").append(f(s.halfV)).append(",\"support\":").append(s.support).append('}')
         }
-        return sb.append("]}").toString()
+        sb.append("]")
+        // where the cameras measured things in their newest picture, while it is fresh: a page can draw them on the things
+        val pts = Tracking.roomPoints
+        if (tracked && pts.isNotEmpty() && (Tracking.simulateWearer || System.nanoTime() - Tracking.roomPointsNs < 1_500_000_000L)) {
+            sb.append(",\"points\":[")
+            for (i in 0 until pts.size / 3) { if (i > 0) sb.append(','); sb.append(f(pts[i * 3].toDouble())).append(',').append(f(pts[i * 3 + 1] + h)).append(',').append(f(pts[i * 3 + 2].toDouble())) }
+            sb.append("]")
+        }
+        return sb.append("}").toString()
     }
 }
