@@ -544,7 +544,7 @@ object Tracking : GlassesLink.Listener {
             val mask = try { Native.handsProcess(h, t, l, r, 480, 640, out, out26) } catch (e: Throwable) { handsError = e.toString(); -1 }
             handsProcessMs = (System.nanoTime() - t0) / 1e6
             handsFrames++
-            replayLog?.hands(link?.replaySeconds ?: 0.0, mask, out, handsProcessMs)
+            replayLog?.let { it.hands(link?.replaySeconds ?: 0.0, mask, out, handsProcessMs); it.joints(link?.replaySeconds ?: 0.0, mask, out26) }
             if (mask < 0) continue
             val body = head.bodyInApp(t)
             val found = ArrayList<Hand>(2); val states = ArrayList<HandState>(2)

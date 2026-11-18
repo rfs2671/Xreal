@@ -23,6 +23,8 @@ class ReplayLog(dir: File, tag: String) {
     private val vio = PrintWriter(File(dir.apply { mkdirs() }, "$tag-vio.csv"))
     private val hands = PrintWriter(File(dir, "$tag-hands.csv"))
     private val notes = PrintWriter(File(dir, "$tag-notes.txt"))
+    /** Every found hand's 26 joint poses as the tracker gave them (its camera frame): what steadiness is measured on. */
+    private val joints = PrintWriter(File(dir, "$tag-joints.csv")).also { it.println("t,side,26 x (px,py,pz,qx,qy,qz,qw)") }
     private val app = PrintWriter(File(dir, "$tag-app.csv")).also { it.println("t,hx,hy,hz,lying,used") }
     var handResults = 0; private set
     val handFound = intArrayOf(0, 0)
@@ -53,6 +55,15 @@ class ReplayLog(dir: File, tag: String) {
         if (handResults % 60 == 0) { hands.flush(); vio.flush() }
     }
 
+    @Synchronized fun joints(t: Double, mask: Int, out26: FloatArray) {
+        for (side in 0..1) {
+            if (mask < 0 || mask and (1 shl side) == 0) continue
+            val sb = StringBuilder(String.format(Locale.US, "%.3f,%d", t, side))
+            for (k in side * 182 until side * 182 + 182) sb.append(',').append(String.format(Locale.US, "%.5f", out26[k]))
+            joints.println(sb)
+        }
+    }
+
     /** What the application is given: the head's position in the app's world, whether the glasses were judged to be lying still, and whether the estimator's position was used. */
     @Synchronized fun app(t: Double, head: DoubleArray, lying: Boolean, used: Boolean) {
         app.println(String.format(Locale.US, "%.3f,%.4f,%.4f,%.4f,%d,%d", t, head[0], head[1], head[2], if (lying) 1 else 0, if (used) 1 else 0))
@@ -63,6 +74,6 @@ class ReplayLog(dir: File, tag: String) {
     @Synchronized fun close(summary: String) {
         notes.println(summary)
         notes.println("hand results $handResults, left found ${handFound[0]}, right found ${handFound[1]}")
-        vio.close(); hands.close(); notes.close(); app.close()
+        vio.close(); hands.close(); notes.close(); app.close(); joints.close()
     }
 }

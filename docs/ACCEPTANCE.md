@@ -5,16 +5,34 @@ This is the part that needs your eyes and the glasses. It is written for the bui
 first live runs of 17 November 2026, which showed what works on the Pixel and what does not
 (`docs/PIXEL_RESULTS.md`).
 
-What that build is, plainly:
+## Where version 1.0 stands (18 November 2026)
 
-- **One picture, no depth.** The glasses do not hold their 3D mode from this phone, and trying it
-  left them black. It is no longer tried unless you switch it on in Settings.
-- **The phone is the controller.** Its screen becomes a touchpad in a game, so nothing depends on
-  hand tracking. Hands still work when they are tracked.
-- **Position tracking** while worn is the same as in the live runs (it came back to within 3 cm,
-  8 cm at worst, in the recording). What is new: put down or bumped, it can no longer run away
-  (it reached 158 m in replays; now it holds and restarts).
-- **Hands** have a more forgiving pinch rule and a steadier pointer. Untested on a real hand.
+| Part | State | Seen where |
+|---|---|---|
+| A WebXR game played start to finish with the phone as the controller (Ball shooter) | works | Pixel and glasses, by the owner |
+| The scene stays in place while walking | works, "a bit shaky from walking" | Pixel and glasses, by the owner |
+| Position tracking comes back to within 3 cm (8 cm at worst) when worn | measured, repeatable | Pixel, replay of a recording |
+| Put down or bumped, tracking holds and restarts instead of running away | measured, and seen once live | Pixel |
+| A pinch selects | works; aiming was "off" | Pixel and glasses, by the owner |
+| Aiming after the fix that gives the browser hand joints only | not yet seen | - |
+| A steadier hand ray (turn filter, below) | measured on a recording only | Pixel, replay |
+| Home view in the glasses, round icons, look and pinch / tap / dwell | drawn and operated | emulator only |
+| Phone screen in the same style | drawn; installed on the Pixel | emulator screenshots |
+| AR cones, Hand cubes, Hand tracking showcase, Moon Rider | start and run immersive | Pixel, without the owner looking |
+| XR dragging | does not run: the browser's GPU process loses its context on this page | Pixel |
+| One picture per eye (depth) | blocked: the glasses leave their 3D mode about two seconds after this phone starts sending a picture, and show black | Pixel and glasses |
+
+What stands between this and calling it 1.0 is in the next session below: the home view and the
+hand ray have to be seen through the glasses once. Depth is not part of 1.0 on this phone.
+
+What the hands recording showed about aiming (`tools/tracking/hand_steady.py`): a hand held
+still is reported turned 1.2 to 4.5 degrees about its average, which moves the far end of a two
+metre ray by 4 to 15 cm; the wobble of the hand's place adds under 1 cm. The build therefore
+smooths which way the hand is turned (`core/HandTurnSteady`), which cut that wobble in all four
+measured hands (by 8 to 37 %), at the cost of trailing a fast turn by 3 to 4 degrees. The same
+recording replayed three times found the right hand in 78, 105 and 358 results: the tracker
+loses and refinds a hand differently on each run, so this recording cannot rank finer settings,
+and the hand is in view of the tracker far less of the time than it looks.
 
 ## Once, before the first game (about two minutes)
 
@@ -47,18 +65,15 @@ that minute, did you see a picture that was different in each eye?**
 **Before:** a lit room with things in it, two steps of clear floor, glasses plugged straight
 into the phone.
 
-1. **Start.** Tap **XR dragging**. Look straight ahead and hold still for about fifteen seconds
-   while the page loads; Ultra XR presses the page's start button for you. Coloured shapes
-   appear in your room. If they do not, point at **START XR** with the touchpad and tap.
-2. **Move.** Take two steps to one side, then back.
-   **Question 1: do the shapes stay where they are in the room while you move?**
-3. **Grab.** Drag on the phone until the pointer line is on a shape. Hold volume-down (or put a
-   second finger on the screen), drag to carry the shape, let go.
-   **Question 2: did the shape come along and stay where you let go?**
-4. **Hands, if you like.** Hold a hand up for ten seconds, pinch a few times at a shape.
-   **Question 3: did a pinch pick a shape up?** (A "no" is useful: the phone records how close
-   your fingertips came, which is what the pinch rule is tuned on.)
-5. **Leave.** Press Back on the phone, unplug the glasses.
+1. **Home.** Open Ultra XR and tap **Open home in the glasses**. Round icons float in front of you.
+   **Question 1: are the icons and their names easy to read, and a comfortable size?**
+2. **Open a game by looking.** Look at **Ball shooter** and tap the phone's screen (or hold a
+   hand up and pinch, or just keep looking for two seconds).
+   **Question 2: did the game open from the look?**
+3. **Aim with a hand.** In the game, hold a hand up in front of your face, point at something
+   and pinch a few times.
+   **Question 3: does the ball go where you were pointing?**
+4. **Leave.** Press Back on the phone, unplug the glasses.
 
 Volume-up recentres the view and the pointer at any time.
 

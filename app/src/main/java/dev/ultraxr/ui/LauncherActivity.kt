@@ -273,7 +273,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
             col.setPadding(Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14))
             col.background = Ui.pressable(this, Ui.rounded(0x00000000, 22f, this))
             col.isClickable = true
-            col.contentDescription = "Play ${g.name}. " + g.detail
+            col.contentDescription = "Play ${g.name}"
             col.setOnClickListener {
                 library.edit().putString("recent", dev.ultraxr.core.GameLibrary.played(recent(), g.url).joinToString("\u0001")).apply()
                 play(g.name) { stereo ->

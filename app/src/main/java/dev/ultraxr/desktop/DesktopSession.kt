@@ -462,13 +462,17 @@ class DesktopSession(private val activity: Activity) {
         val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
         val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER
         val apps = HomeApps.all; val tile = bw / apps.size.toFloat()
+        // One glass bar with the same round icons as the home view. Where each app sits is unchanged (Rail.dockTile).
+        val bar = RectF(3f, 3f, bw - 3f, bh - 3f)
+        p.style = Paint.Style.FILL
+        p.shader = android.graphics.LinearGradient(0f, bar.top, 0f, bar.bottom, 0x2CFFFFFF, 0x12FFFFFF, android.graphics.Shader.TileMode.CLAMP)
+        c.drawRoundRect(bar, 70f, 70f, p)
+        p.shader = android.graphics.LinearGradient(0f, bar.top, 0f, bar.bottom, 0x8CFFFFFF.toInt(), 0x24FFFFFF, android.graphics.Shader.TileMode.CLAMP)
+        p.style = Paint.Style.STROKE; p.strokeWidth = 2.5f; c.drawRoundRect(bar, 70f, 70f, p); p.shader = null; p.style = Paint.Style.FILL
         for ((i, a) in apps.withIndex()) {
             val x = tile * (i + 0.5f)
-            p.style = Paint.Style.STROKE; p.strokeWidth = 5f; p.color = Ink.WHITE_INT
-            c.drawCircle(x, 78f, 50f, p)
-            p.style = Paint.Style.FILL; p.typeface = bold; p.textSize = 52f
-            c.drawText(a.title.take(1), x, 97f, p)
-            p.typeface = regular; p.textSize = 38f; p.color = Ink.WHITE_INT
+            HomeIcon.draw(c, p, x, 84f, 56f, a.color, false, a.title.take(1), false, false)
+            p.textAlign = Paint.Align.CENTER; p.typeface = regular; p.textSize = 34f; p.color = Ink.WHITE_INT
             c.drawText(a.title, x, 190f, p)
         }
         return b

@@ -10,10 +10,11 @@ package dev.ultraxr.core
  *   press_mm=33        thumb-tip to index-tip distance below which a pinch starts (measured, see PinchState)
  *   release_mm=46      distance above which it ends
  *   steady=1           smooth the hand's place and keep the pointer where it was while a pinch lands (core/HandSteady)
+ *   steady_turn=1      smooth which way the hand is turned as well (core/HandTurnSteady)
  *   snap=1             while pinching, hand the application a hand whose two fingertips touch, so an
  *                      application with a tighter threshold of its own (a browser) sees the pinch too
  */
-data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean? = null, val pressM: Float = PinchState.PRESS_M, val releaseM: Float = PinchState.RELEASE_M, val snap: Boolean = true, val steady: Boolean = true) {
+data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean? = null, val pressM: Float = PinchState.PRESS_M, val releaseM: Float = PinchState.RELEASE_M, val snap: Boolean = true, val steady: Boolean = true, val steadyTurn: Boolean = true) {
     companion object {
         fun parse(text: String?): HandOptions {
             var o = HandOptions()
@@ -27,6 +28,7 @@ data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean?
                     "release_mm" -> v.toFloatOrNull()?.takeIf { it in 8f..90f }?.let { o.copy(releaseM = it / 1000f) } ?: o
                     "snap" -> o.copy(snap = v == "1")
                     "steady" -> o.copy(steady = v == "1")
+                    "steady_turn" -> o.copy(steadyTurn = v == "1")
                     else -> o
                 }
             }

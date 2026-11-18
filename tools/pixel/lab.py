@@ -105,7 +105,7 @@ def replay(dev, name, out, runs):
             log = sh(dev, "logcat -d | grep -E 'UltraXR *: (replay finished|replayed|replay stopped|hand options|6DoF settings changed)' | tail -4")
             if "replay finished" in log or "replay stopped" in log: done = log; break
         print("%s: %s" % (tag, (done.splitlines()[-1].split("UltraXR :")[-1].strip() if done else "no end message after 7 minutes")), flush=True)
-        for kind in ("vio.csv", "hands.csv", "app.csv", "notes.txt"):
+        for kind in ("vio.csv", "hands.csv", "app.csv", "joints.csv", "notes.txt"):
             run(["adb", "-s", dev, "pull", "%s/replay/%s-%s" % (FILES, tag, kind), os.path.join(out, "%s-%s" % (tag, kind))], 120)
         temp = re.search(r"temperature: (\d+)", sh(dev, "dumpsys battery"))
         if temp and int(temp.group(1)) > 420: print("battery at %.1f C: pausing two minutes" % (int(temp.group(1)) / 10)); time.sleep(120)

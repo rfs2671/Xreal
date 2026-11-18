@@ -274,6 +274,7 @@ object XrHost : OpenXrGlassesLayer.Host {
         val heldJoints = arrayOf(FloatArray(UltraXrFeed.HAND_FLOATS), FloatArray(UltraXrFeed.HAND_FLOATS))
         val heldSinceNs = longArrayOf(0L, 0L); val haveHeld = booleanArrayOf(false, false)
         val steady = arrayOf(dev.ultraxr.core.HandSteady(), dev.ultraxr.core.HandSteady()); val palm = DoubleArray(3); val off = DoubleArray(3)
+        val turn = arrayOf(dev.ultraxr.core.HandTurnSteady(), dev.ultraxr.core.HandTurnSteady()); val turned = FloatArray(UltraXrFeed.Joint.COUNT * 7)
         val recenter = dev.ultraxr.core.RecenterGesture()
         var vioTickNs = 0L
         while (feeding) {
@@ -327,16 +328,30 @@ object XrHost : OpenXrGlassesLayer.Host {
             for (side in 0..1) {
                 if (side == 1 && pointer) continue
                 val hand = hands.firstOrNull { it.isRight == (side == 1) && it.timestampNs == newest }
-                val poses = Tracking.handPoses26(side)
-                if (hand == null || poses == null) {
+                val tracked = Tracking.handPoses26(side)
+                if (hand == null || tracked == null) {
                     // Lost for a moment (fingers hiding each other in a pinch, the hand at the edge of the view): the
                     // application keeps the hand where it was, pinch included, for a quarter of a second.
                     if (haveHeld[side]) {
                         if (heldSinceNs[side] == 0L) heldSinceNs[side] = nowNs
                         if (nowNs - heldSinceNs[side] <= 250_000_000L) { pinch[side].lost(nowNs); UltraXrFeed.hand(side, newest, heldJoints[side], true); journal?.let { j -> j.heldFrames[side]++ }; continue }
                     }
-                    haveHeld[side] = false; heldSinceNs[side] = 0L; steady[side].reset()
+                    haveHeld[side] = false; heldSinceNs[side] = 0L; steady[side].reset(); turn[side].reset()
                     UltraXrFeed.hand(side, newest, null, false); pressed[side] = false; pinch[side].lost(); continue
+                }
+                // The whole hand is turned about its palm by one rotation: which way it points steadied, its shape untouched.
+                val poses: FloatArray = if (!ho.steadyTurn) tracked else {
+                    val pj = UltraXrFeed.Joint.PALM * 7
+                    val fix = turn[side].correction(hand.timestampNs, doubleArrayOf(tracked[pj + 3].toDouble(), tracked[pj + 4].toDouble(), tracked[pj + 5].toDouble(), tracked[pj + 6].toDouble()))
+                    val cx = tracked[pj]; val cy = tracked[pj + 1]; val cz = tracked[pj + 2]
+                    for (j in 0 until UltraXrFeed.Joint.COUNT) {
+                        val o = j * 7
+                        val v = Q.rotate(fix, doubleArrayOf((tracked[o] - cx).toDouble(), (tracked[o + 1] - cy).toDouble(), (tracked[o + 2] - cz).toDouble()))
+                        val r = Q.mul(fix, doubleArrayOf(tracked[o + 3].toDouble(), tracked[o + 4].toDouble(), tracked[o + 5].toDouble(), tracked[o + 6].toDouble()))
+                        turned[o] = cx + v[0].toFloat(); turned[o + 1] = cy + v[1].toFloat(); turned[o + 2] = cz + v[2].toFloat()
+                        turned[o + 3] = r[0].toFloat(); turned[o + 4] = r[1].toFloat(); turned[o + 5] = r[2].toFloat(); turned[o + 6] = r[3].toFloat()
+                    }
+                    turned
                 }
                 val tt = hand.joint(Hand.THUMB_TIP); val it2 = hand.joint(Hand.INDEX_TIP)
                 val gap = sqrt((tt[0] - it2[0]) * (tt[0] - it2[0]) + (tt[1] - it2[1]) * (tt[1] - it2[1]) + (tt[2] - it2[2]) * (tt[2] - it2[2])).toFloat()

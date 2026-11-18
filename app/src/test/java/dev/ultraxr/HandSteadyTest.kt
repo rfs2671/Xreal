@@ -64,4 +64,45 @@ class HandSteadyTest {
         val q = steadied(s, 30 * frame + 2_000_000_000L, doubleArrayOf(0.3, 0.1, -0.5))
         assertEquals(0.3, q[0], 1e-9); assertEquals(0.1, q[1], 1e-9)
     }
+
+    // ---- which way the hand is turned
+    private fun aboutY(deg: Double): DoubleArray { val h = Math.toRadians(deg) / 2; return doubleArrayOf(0.0, Math.sin(h), 0.0, Math.cos(h)) }
+    /** The angle, in degrees, of the hand's forward axis from straight ahead after [fix] is applied to a hand turned [q]. */
+    private fun heading(fix: DoubleArray, q: DoubleArray): Double {
+        val f = dev.ultraxr.core.Q.rotate(dev.ultraxr.core.Q.mul(fix, q), doubleArrayOf(0.0, 0.0, -1.0))
+        return Math.toDegrees(Math.atan2(-f[0], -f[2]))
+    }
+
+    @Test fun aStillHandWhoseTurnJittersPointsMuchMoreSteadily() {
+        // 3 degrees of wobble is what the Pixel's recording showed for a hand held still
+        val s = dev.ultraxr.core.HandTurnSteady(); val r = Random(7); val raw = ArrayList<Double>(); val out = ArrayList<Double>()
+        for (i in 0 until 150) {
+            val a = 20 + 3 * r.nextGaussian(); val q = aboutY(a)
+            val h = heading(s.correction(i * frame, q), q)
+            if (i > 30) { raw += a; out += h }
+        }
+        assertTrue("wobble " + rms(raw) + " -> " + rms(out) + " degrees", rms(out) < rms(raw) / 2)
+        assertEquals("and it still points where the hand does on average", 20.0, out.average(), 1.0)
+    }
+
+    @Test fun aDeliberateTurnIsFollowed() {
+        // 120 degrees a second: a quick sweep across the room. The steadied hand may trail, but by under 8 degrees,
+        // and it arrives within 2 degrees a third of a second after the hand stops.
+        val s = dev.ultraxr.core.HandTurnSteady(); var worst = 0.0; var last = 0.0
+        for (i in 0 until 75) {
+            val a = when { i < 15 -> 0.0; i < 45 -> 120.0 * (i - 15) * frame * 1e-9; else -> 120.0 * 30 * frame * 1e-9 }
+            val q = aboutY(a); val h = heading(s.correction(i * frame, q), q)
+            if (i in 20..45) worst = maxOf(worst, abs(a - h))
+            if (i == 55) last = abs(a - h)
+        }
+        assertTrue("trails by $worst degrees", worst < 8.0)
+        assertTrue("settles to $last degrees", last < 2.0)
+    }
+
+    @Test fun aHandThatWasAwayStartsFromWhereItIsNow() {
+        val s = dev.ultraxr.core.HandTurnSteady()
+        for (i in 0 until 30) s.correction(i * frame, aboutY(0.0))
+        val q = aboutY(90.0); val h = heading(s.correction(30 * frame + 2_000_000_000L, q), q)
+        assertEquals(90.0, h, 0.01)
+    }
 }
