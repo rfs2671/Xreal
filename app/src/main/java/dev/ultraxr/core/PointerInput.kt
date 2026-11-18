@@ -15,6 +15,7 @@ object PointerInput {
     const val MAX_X = 0.55; const val MIN_Y = -0.30; const val MAX_Y = 0.55
 
     private var lastNs = 0L
+    private var movedNs = 0L
     private var x = 0.0; private var y = 0.0
     private var holds = 0            // bit 0: fingers, bit 1: key, bit 2: mouse button
     private var tapUntilNs = 0L
@@ -26,7 +27,7 @@ object PointerInput {
 
     /** The pointer is carried by ([dxM], [dyM]) metres: right and up are positive. */
     @Synchronized fun move(nowNs: Long, dxM: Double, dyM: Double) {
-        x = (x + dxM).coerceIn(-MAX_X, MAX_X); y = (y + dyM).coerceIn(MIN_Y, MAX_Y); lastNs = nowNs
+        x = (x + dxM).coerceIn(-MAX_X, MAX_X); y = (y + dyM).coerceIn(MIN_Y, MAX_Y); lastNs = nowNs; movedNs = nowNs
     }
     /** One short press: a click. */
     @Synchronized fun tap(nowNs: Long) { tapUntilNs = nowNs + TAP_NS; lastNs = nowNs; clicks++ }
@@ -39,6 +40,12 @@ object PointerInput {
         lastNs = nowNs
     }
     /** Back to the middle, released. */
-    @Synchronized fun center(nowNs: Long) { x = 0.0; y = 0.0; holds = 0; tapUntilNs = 0; lastNs = nowNs }
-    @Synchronized fun reset() { x = 0.0; y = 0.0; holds = 0; tapUntilNs = 0; lastNs = 0; clicks = 0 }
+    @Synchronized fun center(nowNs: Long) { x = 0.0; y = 0.0; holds = 0; tapUntilNs = 0; lastNs = nowNs; movedNs = nowNs }
+    /**
+     * Whether the finger moved the pointer within the last [ns]. The pointing hand is carried along with the head
+     * only while it is being moved: left alone, or during a tap or a press, it stays where it is in the room, so
+     * the ordinary small movements of a head do not turn a tap into a drag or pull the pointer off its target.
+     */
+    @Synchronized fun movedWithin(nowNs: Long, ns: Long): Boolean = movedNs != 0L && nowNs - movedNs < ns
+    @Synchronized fun reset() { x = 0.0; y = 0.0; holds = 0; tapUntilNs = 0; lastNs = 0; movedNs = 0; clicks = 0 }
 }

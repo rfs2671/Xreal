@@ -33,6 +33,12 @@ permission for that site is. Cost, stated plainly: any other permission Wolvic h
 also follows the site's XR permission instead of being always denied. It is a few bytes of bytecode
 in a dex file (found with baksmali, patched in place, dex checksum and signature recomputed).
 
+Third change, phone variant only: Chromium's Vulkan path is switched off. On the Pixel 10 (PowerVR) the browser's
+GPU process lost its graphics context about two seconds after every start and again a few seconds into a WebXR
+session, which froze the game (17 November 2026: 11 of 12 starts). Wolvic's source already disables Vulkan for its
+x86-64 builds, which is why the emulator never showed it; the same switch is applied to the phone build here by
+editing the --disable-features text. See docs/PIXEL_RESULTS.md for the before and after counts.
+
 A proper source build is the better long-term route, but Wolvic's engines need their own patched
 builds of GeckoView or Chromium, which this Windows machine cannot produce.
 """
@@ -87,6 +93,15 @@ def patch_dex(d, kind):
     if len(ms) != 1: return len(ms)
     a, b = ms[0].span(1)
     d[a:b] = new + bytes(b - a - len(new))      # the rest becomes no-ops, falling through to the normal path
+    if kind == "phone":
+        # Third change, phone only: the engine's Vulkan graphics path is switched off, as Wolvic's own source already
+        # does for x86-64 builds (RuntimeImpl.initBrowserProcess: disableFeatures += ",Vulkan"). The text constant
+        # passed as --disable-features is edited in place. It must keep its length and its place in the file's sorted
+        # string table, so "AndroidUseCorrectWindowBounds" becomes "AndroidUseCorrectWindo,Vulkan": Vulkan off, and
+        # the first name no longer matches anything (that feature only affected how one video site sizes fullscreen).
+        old = b"\x1dAndroidUseCorrectWindowBounds\x00"; new = b"\x1dAndroidUseCorrectWindo,Vulkan\x00"
+        if bytes(d).count(old) != 1: raise SystemExit("the disable-features constant was not found exactly once: nothing changed")
+        i = bytes(d).index(old); d[i:i + len(old)] = new
     d[12:32] = hashlib.sha1(bytes(d[32:])).digest()
     import zlib
     struct.pack_into("<I", d, 8, zlib.adler32(bytes(d[12:])) & 0xFFFFFFFF)

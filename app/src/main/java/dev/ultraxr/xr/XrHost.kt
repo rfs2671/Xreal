@@ -262,6 +262,7 @@ object XrHost : OpenXrGlassesLayer.Host {
     private fun feedLoop() {
         var lastHandNs = 0L
         var pointerFedNs = 0L; var pointerSaid = false
+        var anchorP: DoubleArray? = null; var anchorQ: DoubleArray? = null
         var recentred = false
         val pressed = booleanArrayOf(false, false)
         val joints = FloatArray(UltraXrFeed.HAND_FLOATS)
@@ -305,9 +306,13 @@ object XrHost : OpenXrGlassesLayer.Host {
             // The touchpad pointer stands in for the right hand while it is in use, tracked hand or not.
             val nowNs = System.nanoTime()
             val pointer = dev.ultraxr.core.PointerInput.active(nowNs)
+            if (!pointer) anchorP = null
             if (pointer && nowNs - pointerFedNs > 16_000_000L) {
                 pointerFedNs = nowNs
-                SimWearer.feedHand(1, t, p, q, dev.ultraxr.core.PointerInput.offset(), 0.0, 0.0, dev.ultraxr.core.PointerInput.pressed(nowNs), controllers = false)
+                // The pointing hand goes where the head is only while the finger is moving it (and at the first use);
+                // otherwise it stays put in the room, so a tap is a tap however the head sways.
+                if (anchorP == null || dev.ultraxr.core.PointerInput.movedWithin(nowNs, 150_000_000L)) { anchorP = p.copyOf(); anchorQ = q.copyOf() }
+                SimWearer.feedHand(1, t, anchorP!!, anchorQ!!, dev.ultraxr.core.PointerInput.offset(), 0.0, 0.0, dev.ultraxr.core.PointerInput.pressed(nowNs), controllers = false)
                 if (!pointerSaid) { pointerSaid = true; Tracking.log("OpenXR: the touchpad pointer is the right hand") }
                 journal?.let { j -> val c = dev.ultraxr.core.PointerInput.clicks; if (c > j.pointerSelections) j.pointerSelections = c }
             }

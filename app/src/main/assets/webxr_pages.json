@@ -1,30 +1,9 @@
 [
   {
-    "name": "XR dragging (three.js)",
-    "url": "https://threejs.org/examples/webxr_xr_dragging.html",
-    "needs": "Hands: point and pinch to pick shapes up",
-    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
-    "state": "tested",
-    "enter": [
-      [
-        0.0,
-        -0.15
-      ],
-      [
-        0.0,
-        -0.1
-      ],
-      [
-        0.0,
-        -0.2
-      ]
-    ]
-  },
-  {
     "name": "Ball shooter (three.js)",
     "url": "https://threejs.org/examples/webxr_xr_ballshooter.html",
     "needs": "Hands: pinch to shoot balls that bounce",
-    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
+    "status": "Pixel: an immersive session ran for 40 s with frames arriving steadily (started from the laptop, glasses not attached). Not yet seen in the glasses.",
     "state": "tested",
     "enter": [
       [
@@ -45,7 +24,28 @@
     "name": "AR cones (three.js)",
     "url": "https://threejs.org/examples/webxr_ar_cones.html",
     "needs": "Hands: pinch to place cones in the room",
-    "status": "Emulator: AR session, both eyes, head motion, both hands and pinches reached the page. Not tried on the glasses.",
+    "status": "Pixel: an immersive session ran for 40 s with frames arriving steadily (started from the laptop, glasses not attached). Not yet seen in the glasses.",
+    "state": "tested",
+    "enter": [
+      [
+        0.0,
+        -0.15
+      ],
+      [
+        0.0,
+        -0.1
+      ],
+      [
+        0.0,
+        -0.2
+      ]
+    ]
+  },
+  {
+    "name": "Hand cubes (three.js)",
+    "url": "https://threejs.org/examples/webxr_vr_handinput_cubes.html",
+    "needs": "Hands with finger joints, as a required feature",
+    "status": "Pixel: an immersive session ran for 40 s (it requires hand tracking; started from the laptop, glasses not attached). Whether cubes appear at the fingertips has not been seen.",
     "state": "tested",
     "enter": [
       [
@@ -77,11 +77,11 @@
     "state": "tested"
   },
   {
-    "name": "Hand cubes (three.js)",
-    "url": "https://threejs.org/examples/webxr_vr_handinput_cubes.html",
-    "needs": "Hands with finger joints, as a required feature",
-    "status": "Emulator: VR session starts now (it requires hand tracking); both eyes, both hands with joints and pinches reached the page. The picture showed the pointing lines only; whether cubes appear at the fingertips was not seen. Not tried on the glasses.",
-    "state": "tested",
+    "name": "XR dragging (three.js)",
+    "url": "https://threejs.org/examples/webxr_xr_dragging.html",
+    "needs": "Hands: point and pinch to pick shapes up",
+    "status": "Does not run on the Pixel 10 yet: on this page the browser's graphics process loses its context (seen in about half of all starts and six seconds into the game), which freezes the picture. Works on the emulator.",
+    "state": "blocked",
     "enter": [
       [
         0.0,

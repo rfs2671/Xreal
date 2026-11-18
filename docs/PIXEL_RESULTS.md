@@ -249,3 +249,82 @@ connected and worn:
 
 Until one of these says otherwise, the product stays as it is: 2D by default, the 3D attempt a
 switch in Settings, bounded, and a session that loses 3D drops to one picture at once.
+
+## 17 November 2026, evening: 3D experiment, first game session, and the browser's graphics crash
+
+### The 3D experiment (worn, one minute)
+
+`tools/pixel/lab.py diag3d`, with the phone's DisplayPort driver log for the same seconds:
+
+- 3D asked for at 0 s: accepted; the glasses reported mode 8 at 0.19 s; link down at 0.4 s and back
+  at 2.0 s. Driver: `RECEIVER CAPS 12 06 84`, `LINK TRAINING DONE: rate=0 lanes=4` in one pass,
+  `ENABLE MODE 1920x1080 60 148500`, `tu = 44`. No error, no interrupt from the glasses.
+- The glasses reported mode 1 again at 4.08 s, 2.1 s after the picture was enabled.
+- Asked again at 13.75 s with their screen already on: the same, mode 1 again 2.1 s after enable.
+- The owner saw black only, never a picture.
+
+So asking again once the screen is on does not help, the phone's side is clean both times, and
+no picture has been seen in mode 8 from this phone. With firmware and kernel off the table,
+stereo is blocked on this pair of devices. The one thing left that could add information is
+the same sequence with a PC as the source, which would say whether these glasses ever hold
+mode 8 while worn; it would not change what this phone can do.
+
+### First game session on the hardware
+
+- Browser window, page and touchpad pointer all visible and working; the owner accepted the
+  browser's terms with the touchpad.
+- His tap on the page's START XR did not start the game. The pointer was attached to the head,
+  so it moved with every small head movement and a tap became a drag. Changed: the pointer now
+  stays where it is in the room unless the finger is moving it.
+- Started from the laptop instead (developer tools, a real user-gesture click on the page's own
+  button), the page entered `immersive-ar` with additive blending, two views, and the touchpad
+  pointer as its right hand. That is the first WebXR session on the Pixel and the glasses.
+- Six seconds later the picture froze as a half-drawn frame that moved with the head.
+
+### Why it froze: the browser's graphics process loses its context
+
+Wolvic's Chromium GPU process reports its graphics context lost and restarts. In the logs of
+every session that day this happened about two seconds after the browser started on the XR
+dragging page, and again a few seconds into the immersive session, which is what froze it.
+
+What was tried, all on the phone without the glasses, 20 s per start:
+
+| Change | Context lost |
+|---|---|
+| as it was | 5 of 6 starts |
+| compositor's GPU queue priority lowered to medium (confirmed in the log) | 6 of 6 |
+| Chromium's Vulkan path off (confirmed: GPU process in GL mode) | 4 of 5; the driver now names Chromium's own context guilty (`GL_GUILTY_CONTEXT_RESET_KHR`) |
+
+So neither the runtime's priority nor Vulkan is the cause. It depends on the page:
+
+| Page (browser with Vulkan off) | Context lost at start |
+|---|---|
+| example.com (no WebGL) | 0 of 4 |
+| three.js cube (plain WebGL) | 0 of 2 |
+| three.js shadow map | 0 of 2 |
+| three.js AR cones | 0 of 2 |
+| three.js ball shooter | 0 of 1 |
+| three.js hand input cubes | 0 of 1 |
+| three.js XR dragging | 2 of 3 |
+
+XR dragging is the only page that does it. What in that page the PowerVR driver objects to is
+not known (it is not shadows alone, and not WebXR alone).
+
+Then the pages that start cleanly, in immersive sessions on the phone (started from the laptop,
+glasses not attached, 40 s each, frame counts read from the page every 10 s):
+
+| Page | Session | Frames at 10 / 20 / 30 / 40 s |
+|---|---|---|
+| AR cones | immersive-ar, additive | 805 / 1642 / 2553 / 3398 |
+| Ball shooter | immersive-ar, additive | 726 / 1470 / 2228 / 2975 |
+| Hand input cubes (requires hand tracking) | immersive-vr | 803 / 1633 / 2585 / 3414 |
+
+Frames kept arriving for the whole 40 s in all three. One context loss was logged in each of
+those three runs and none in a fourth (ball shooter, 32 s), so the loss is not gone, but these
+pages keep running through it. What the picture looks like in these sessions has not been
+seen: the phone had locked its screen, and nobody was wearing the glasses.
+
+Changes: Vulkan stays off in the phone's browser (the browser's own source does the same for
+its x86 builds, and it turned an anonymous context loss into one the driver attributes); the
+launcher now leads with ball shooter and AR cones and marks XR dragging as not running on the
+Pixel yet; the touchpad reads upright while the browser holds the screen in landscape.

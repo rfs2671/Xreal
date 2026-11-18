@@ -36,6 +36,44 @@ index 8c56af307..691c0473a 100644
  	try {
  		auto loadedClass = classLoader.loadClass(std::string(clazz_name));
  		if (loadedClass.isNull()) {
+diff --git a/src/xrt/auxiliary/vk/vk_bundle_init.c b/src/xrt/auxiliary/vk/vk_bundle_init.c
+index d8d86af45..7fd959efc 100644
+--- a/src/xrt/auxiliary/vk/vk_bundle_init.c
++++ b/src/xrt/auxiliary/vk/vk_bundle_init.c
+@@ -16,6 +16,10 @@
+  * @ingroup aux_vk
+  */
+ 
++#include <stdlib.h>
++#if defined(__ANDROID__)
++#include <sys/system_properties.h>
++#endif
+ #include "xrt/xrt_config_os.h"
+ 
+ #include "util/u_pretty_print.h"
+@@ -903,6 +907,22 @@ select_queue_priorities(struct vk_bundle *vk,
+ 	try_realtime = try_realtime && u_win_grant_inc_base_priorty_base_privileges(vk->log_level);
+ #endif
+ 
++#ifdef XRT_OS_ANDROID
++	// Ultra XR: on the Pixel 10 (PowerVR) a browser's own GPU process loses its context seconds after the
++	// compositor starts. To find out whether the compositor's raised queue priority starves it, the priority
++	// can be left at the default: property debug.xrt.ULTRAXR_GPU_PRIORITY or environment ULTRAXR_GPU_PRIORITY
++	// set to "medium".
++	{
++		char prop[PROP_VALUE_MAX] = {0};
++		const char *env = getenv("ULTRAXR_GPU_PRIORITY");
++		__system_property_get("debug.xrt.ULTRAXR_GPU_PRIORITY", prop);
++		if ((env != NULL && env[0] == 'm') || prop[0] == 'm') {
++			try_realtime = false;
++			VK_INFO(vk, "Ultra XR: compositor GPU queue priority left at medium");
++		}
++	}
++#endif
++
+ 	if (try_realtime) {
+ 		*out_prios = realtime_prios;
+ 		*out_prio_count = ARRAY_SIZE(realtime_prios);
 diff --git a/src/xrt/compositor/client/comp_egl_client.c b/src/xrt/compositor/client/comp_egl_client.c
 index f4b024b78..7c57954c8 100644
 --- a/src/xrt/compositor/client/comp_egl_client.c

@@ -75,11 +75,41 @@ class PointerService : AccessibilityService() {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private var lastX = 0f; private var lastY = 0f; private var downNs = 0L; private var travelled = 0f; private var many = false
         private val density = resources.displayMetrics.density
-        // A swipe across the phone's width carries the pointing hand about 0.7 m: across the whole view.
-        private val metresPerPixel = 0.7 / resources.displayMetrics.widthPixels.coerceAtLeast(1)
+        // A swipe across the phone's short side carries the pointing hand about 0.7 m: across the whole view.
+        private val metresPerPixel = 0.7 / minOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels).coerceAtLeast(1)
         init { setBackgroundColor(0xFF05070A.toInt()); keepScreenOn = true }
 
+        /**
+         * The browser holds the phone's screen in landscape, but the phone is held upright. The touchpad therefore
+         * reads and works upright whatever way the screen is turned: 0 for an upright screen, 1 when the screen is
+         * turned so its top is at the phone's left (Surface.ROTATION_90), 3 for the other way.
+         */
+        private fun turn(): Int = try { (display?.rotation ?: 0) } catch (_: Throwable) { 0 }
+
+        /** A finger's movement on the screen as right and up for someone holding the phone upright, in pixels. */
+        private fun upright(dx: Float, dy: Float, out: FloatArray) {
+            when (turn()) {
+                1 -> { out[0] = -dy; out[1] = -dx }
+                3 -> { out[0] = dy; out[1] = dx }
+                2 -> { out[0] = -dx; out[1] = dy }
+                else -> { out[0] = dx; out[1] = -dy }
+            }
+        }
+        private val moved = FloatArray(2)
+
         override fun onDraw(canvas: Canvas) {
+            val t = turn()
+            canvas.save()
+            // Draw as on an upright phone: turn the page about its middle, so the text reads from the phone's bottom edge.
+            val w = if (t == 1 || t == 3) height else width; val h = if (t == 1 || t == 3) width else height
+            canvas.translate(width / 2f, height / 2f)
+            canvas.rotate(when (t) { 1 -> -90f; 3 -> 90f; 2 -> 180f; else -> 0f })
+            canvas.translate(-w / 2f, -h / 2f)
+            drawPad(canvas, w, h)
+            canvas.restore()
+        }
+
+        private fun drawPad(canvas: Canvas, width: Int, height: Int) {
             val lines = listOf("Touchpad" to 26f, "" to 10f, "Drag: move the pointer" to 17f, "Tap: select" to 17f, "Two fingers, or hold volume-down:" to 17f, "grab and carry" to 17f,
                 "Volume-up: recentre" to 17f, "Back: leave the game" to 17f, "" to 10f, "Selections so far: " + PointerInput.clicks to 14f)
             var y = height * 0.30f
@@ -99,7 +129,8 @@ class PointerService : AccessibilityService() {
                 MotionEvent.ACTION_POINTER_DOWN -> { many = true; PointerInput.hold(now, 0, true) }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.x - lastX; val dy = e.y - lastY; lastX = e.x; lastY = e.y; travelled += abs(dx) + abs(dy)
-                    PointerInput.move(now, dx * metresPerPixel, -dy * metresPerPixel)
+                    upright(dx, dy, moved)
+                    PointerInput.move(now, moved[0] * metresPerPixel, moved[1] * metresPerPixel)
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
                     // the finger that stays becomes the reference, so the pointer does not jump
@@ -111,7 +142,7 @@ class PointerService : AccessibilityService() {
                     if (e.actionMasked == MotionEvent.ACTION_UP && !many && now - downNs < 300_000_000L && travelled < 24 * density) PointerInput.tap(now)
                 }
             }
-            invalidate()
+            invalidate(); postInvalidateDelayed(260)      // and once more when a tap's short press is over
             return true
         }
 
@@ -121,6 +152,7 @@ class PointerService : AccessibilityService() {
             val now = System.nanoTime()
             when (e.actionMasked) {
                 MotionEvent.ACTION_HOVER_ENTER -> { lastX = e.x; lastY = e.y }
+                // A mouse pointer moves with the screen as it is turned, not with the phone: no turning here.
                 MotionEvent.ACTION_HOVER_MOVE -> { PointerInput.move(now, (e.x - lastX) * metresPerPixel, -(e.y - lastY) * metresPerPixel); lastX = e.x; lastY = e.y }
                 MotionEvent.ACTION_BUTTON_PRESS -> PointerInput.hold(now, 2, true)
                 MotionEvent.ACTION_BUTTON_RELEASE -> PointerInput.hold(now, 2, false)

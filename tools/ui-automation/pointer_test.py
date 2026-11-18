@@ -36,9 +36,24 @@ def size():
     im = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
     return im.shape[1], im.shape[0]
 
+TURN = [None]
+def turn():
+    """Which way the phone's screen is turned (0 upright, 1 top at the phone's left, 3 the other way)."""
+    if TURN[0] is None:
+        out = uia.sh("dumpsys window displays")
+        import re
+        # the phone's own screen is display 0; other displays (the stand-in for the glasses) are listed too
+        m = re.search(r"mDisplayId=0\b.*?mRotation=ROTATION_(\d+)", out, re.S); v = int(m.group(1)) if m else 0
+        TURN[0] = {0: 0, 90: 1, 180: 2, 270: 3}.get(v, 0)
+    return TURN[0]
+
 def drag(dx_m, dy_m, w, h, ms=400):
-    """Carry the pointer by metres (right, up): the touchpad maps the screen's width to 0.7 m."""
-    px = int(dx_m / 0.7 * w); py = int(-dy_m / 0.7 * w)
+    """Carry the pointer by metres (right, up) as someone holding the phone upright would: the touchpad maps the
+    screen's short side to 0.7 m and reads upright whichever way the browser has turned the screen."""
+    k = min(w, h) / 0.7; right = dx_m * k; up = dy_m * k
+    t = turn()
+    px, py = {0: (right, -up), 1: (-up, -right), 3: (up, right), 2: (-right, up)}[t]
+    px = int(px); py = int(py)
     x0 = w // 2 - px // 2; y0 = h // 2 - py // 2
     uia.sh("input swipe %d %d %d %d %d" % (x0, y0, x0 + px, y0 + py, ms)); time.sleep(0.5)
 
