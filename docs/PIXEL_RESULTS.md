@@ -356,3 +356,17 @@ One thing went wrong first and was my doing: the touchpad did not appear, becaus
 switches an app's accessibility service off when the app is force-stopped, and the crash tests
 had force-stopped Ultra XR repeatedly. He switched it on again. `tools/pixel/lab.py` no longer
 force-stops the app.
+
+## Half-width 3D from a Windows laptop (18 November 2026)
+
+`tools/ultra-diag/ultra_mode_test.py`, glasses plugged into the laptop alone. Windows had the Air 2 Ultra as an
+active DisplayPort monitor at 1920x1080@60, mirroring the laptop screen.
+
+- 0.0 s: "set display mode 8" accepted (status 0)
+- 0.3 s: the glasses report mode 8
+- 3.8 s: the glasses report mode 1 again, without being asked
+- the owner saw black
+
+So the glasses leave half-width 3D by themselves with a PC as the source too. The Pixel's signal is not what they
+reject; this firmware does not keep mode 8. Not established: whether the stock (unpatched) firmware keeps it, and
+whether the full-width mode (3840x1080), which the Pixel cannot send, is kept from a PC.
