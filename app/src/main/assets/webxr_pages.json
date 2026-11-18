@@ -3,8 +3,8 @@
     "name": "Ball shooter (three.js)",
     "url": "https://threejs.org/examples/webxr_xr_ballshooter.html",
     "needs": "Hands: pinch to shoot balls that bounce",
-    "status": "Pixel: an immersive session ran for 40 s with frames arriving steadily (started from the laptop, glasses not attached). Not yet seen in the glasses.",
-    "state": "tested",
+    "status": "Played on the Pixel 10 Pro XL with the glasses on 17 November 2026: started with the touchpad, a tap shoots, the balls and floor stay in place when walking (a little shaky), the picture is smooth. One picture for both eyes, no depth. The page draws its pointing line thin and white, which is hard to see against its grid.",
+    "state": "verified",
     "enter": [
       [
         0.0,

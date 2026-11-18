@@ -328,3 +328,31 @@ Changes: Vulkan stays off in the phone's browser (the browser's own source does 
 its x86 builds, and it turned an anonymous context loss into one the driver attributes); the
 launcher now leads with ball shooter and AR cones and marks XR dragging as not running on the
 Pixel yet; the touchpad reads upright while the browser holds the screen in landscape.
+
+### First game played on the hardware: Ball shooter, 17 November 2026, 22:18
+
+The owner, wearing the glasses, with the build of commit 82606d0 and the phone as the touchpad:
+
+- tapped the Ball shooter card, moved the pointer onto the page's START XR with the touchpad
+  and tapped: the page entered its immersive see-through session (its button read STOP XR when
+  checked from the laptop; the picture sent to the glasses showed the game's balls on its floor
+  grid, black elsewhere);
+- a tap on the phone shoots a ball;
+- walking two steps and back, the balls and floor stayed in place, "a bit shaky from walking
+  but similar quality to Beam Pro";
+- the picture was smooth;
+- no graphics context loss in the log in more than two minutes of play.
+
+His one complaint: the direction of the shot is hard to see, because the page draws its
+pointing line thin and white like its grid lines. That line is the page's own.
+
+2D, one picture for both eyes: no depth. Hands were not tried.
+
+Also seen in that session, twice over: after the glasses were put down, the estimator wandered
+0.5 to 1.5 m every five seconds and was restarted each time, with the position given to the
+game held. That is the stillness rule doing on the real glasses what it did in the replays.
+
+One thing went wrong first and was my doing: the touchpad did not appear, because Android
+switches an app's accessibility service off when the app is force-stopped, and the crash tests
+had force-stopped Ultra XR repeatedly. He switched it on again. `tools/pixel/lab.py` no longer
+force-stops the app.

@@ -69,11 +69,17 @@ def put(dev, name, text):
     run(["adb", "-s", dev, "push", tmp, "/data/local/tmp/" + name], 60)
     sh(dev, "cp /data/local/tmp/%s %s && rm /data/local/tmp/%s" % (name, path, name))
 
+def restart_app(dev):
+    """Ends Ultra XR's process so settings files are read afresh, WITHOUT "am force-stop": Android switches off an
+    app's accessibility service (the touchpad) whenever the app is force-stopped, and the owner then has to switch
+    it on again by hand. Going Home and killing the background process leaves the service enabled; Android restarts it."""
+    sh(dev, "input keyevent KEYCODE_HOME"); time.sleep(1); sh(dev, "am kill " + PKG); time.sleep(2)
+
 def glasses_attached(dev): return "Air 2 Ultra" in sh(dev, "dumpsys display | grep -c 'Air 2 Ultra' ; dumpsys display | grep -m1 'Air 2 Ultra'")
 
 def restore(dev):
     put(dev, "vio_options.txt", ""); put(dev, "hand_options.txt", ""); put(dev, "stereo_rotation_fix.txt", "")
-    sh(dev, "am force-stop com.igalia.wolvic.vanilla"); time.sleep(6); sh(dev, "am force-stop " + PKG)
+    sh(dev, "am force-stop com.igalia.wolvic.vanilla"); time.sleep(6)
     for p in ("sim_motion", "sim_auto"): sh(dev, "setprop debug.ultraxr.%s 0" % p)
     sh(dev, "setprop debug.xrt.ULTRAXR_DISPLAY_TIMING 0"); sh(dev, "input keyevent KEYCODE_HOME")
     print("restored: test settings removed; screen timeout " + sh(dev, "settings get system screen_off_timeout") + " ms, stay-awake " + sh(dev, "settings get global stay_on_while_plugged_in"))
@@ -85,7 +91,7 @@ def replay(dev, name, out, runs):
     for tag in runs:
         vio, hands = RUNS[tag][0], RUNS[tag][1]
         put(dev, "vio_options.txt", vio); put(dev, "hand_options.txt", hands); put(dev, "stereo_rotation_fix.txt", RUNS[tag][2] if len(RUNS[tag]) > 2 else "")
-        sh(dev, "am force-stop " + PKG); time.sleep(2); sh(dev, "logcat -c")
+        restart_app(dev); sh(dev, "logcat -c")
         sh(dev, "input keyevent KEYCODE_WAKEUP")
         sh(dev, "am start -n %s/.ui.LauncherActivity --es replay %s --es replay_tag %s" % (PKG, name, tag))
         t0 = time.time(); done = ""
@@ -107,7 +113,7 @@ def pacing(dev, out):
     uia.SERIAL = dev; os.makedirs(out, exist_ok=True); results = {}
     if glasses_attached(dev): print("The glasses are plugged in: this measurement is made on the phone's own screen. Nothing was run."); return 1
     for mode in ("own", "display"):
-        sh(dev, "am force-stop " + PKG); time.sleep(2)
+        restart_app(dev)
         sh(dev, "input keyevent KEYCODE_WAKEUP")
         sh(dev, "setprop debug.xrt.ULTRAXR_DISPLAY_TIMING %d" % (1 if mode == "display" else 0))
         sh(dev, "setprop debug.xrt.XRT_COMPOSITOR_LOG warn"); sh(dev, "setprop debug.ultraxr.sim_motion 1"); sh(dev, "setprop debug.ultraxr.sim_auto 0")

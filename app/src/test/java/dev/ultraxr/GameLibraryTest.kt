@@ -17,8 +17,10 @@ class GameLibraryTest {
     @Test fun theShippedListParsesAndClaimsNothingItHasNot() {
         assertTrue(shipped.size >= 4)
         for (g in shipped) { assertTrue(g.url.startsWith("https://")); assertTrue(g.name.isNotBlank()); assertTrue(g.needs.isNotBlank()) }
-        // nothing has been played on the glasses yet, so nothing may say so
-        assertTrue(shipped.none { it.state == WebGame.State.VERIFIED })
+        // "verified" is only for a game its owner has played on the glasses: one so far, and its note must say when
+        val verified = shipped.filter { it.state == WebGame.State.VERIFIED }
+        assertEquals(listOf("Ball shooter (three.js)"), verified.map { it.name })
+        assertTrue(verified.all { it.detail.contains("Played on the Pixel") && it.detail.contains("2026") })
         assertTrue(shipped.none { it.state == WebGame.State.UNKNOWN })
     }
 
