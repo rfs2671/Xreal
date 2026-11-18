@@ -146,6 +146,7 @@ class DesktopActivity : Activity() {
     /** A game was started from here and owns the glasses until this screen is in front again. */
     private var handedOver = false
 
+    private var stageTries = 0
     private fun refreshStage() {
         if (isFinishing || isDestroyed || handedOver) return
         val d = external()
@@ -159,7 +160,12 @@ class DesktopActivity : Activity() {
                 session.renderers = listOf(r)
                 previewHint.text = "Showing on the glasses"; previewHint.visibility = View.VISIBLE
                 Tracking.noteGraphics("desktop shown on glasses display ${d.displayId}")
-            } catch (e: Exception) { Tracking.noteGraphics("desktop could not open on the glasses: $e"); showPreview() }
+                stageTries = 0
+            } catch (e: Exception) {
+                Tracking.noteGraphics("desktop could not open on the glasses: $e"); showPreview()
+                // a game that was just left may still hold the glasses for a moment: try again
+                if (++stageTries <= 12) window.decorView.postDelayed({ refreshStage() }, 700)
+            }
         } else { dismissGlasses(); showPreview() }
     }
 

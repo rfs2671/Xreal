@@ -89,6 +89,17 @@ class PointerService : AccessibilityService() {
         Tracking.log("pointer: Leave pressed, touchpad put away and the phone sent to its home screen")
         gameInFront = false; hide()
         try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (t: Throwable) { Tracking.log("pointer: could not go home: $t") }
+        // The game is now in the background but keeps its session with the runtime, and with it the window on the
+        // glasses: Android then refuses every other window there, and the home view and the next game end up on the
+        // phone's screen. Android does not let one app end another, and the runtime cannot give a running session a
+        // new window. What is known to work is a runtime that starts afresh (as after every update of this app): the
+        // game finds the runtime gone and starts a new session next time. So this app's process ends here, a moment
+        // after the phone has gone to its home screen; Android starts it again at once for the touchpad service.
+        if (XrHost.applicationConnected) handler.postDelayed({
+            Tracking.log("pointer: the game was left with its session open; Ultra XR starts afresh so the glasses are free")
+            try { XrHost.onApplicationDisconnected() } catch (_: Throwable) {}
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, 500)
     }
 
     private fun hide() {

@@ -66,6 +66,7 @@ class GlassesStage(private val activity: Activity, private val previewHost: View
     private fun external(): Display? = displays.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull()
         ?: displays.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY && it.isValid }
 
+    private var tries = 0
     private fun refresh() {
         if (!active || activity.isFinishing || activity.isDestroyed) return
         val d = external()
@@ -84,11 +85,13 @@ class GlassesStage(private val activity: Activity, private val previewHost: View
             r.periodNs = (1e9 / (mode?.refreshRate ?: d.refreshRate)).toLong()
             val p = StagePresentation(activity, d, mode?.modeId ?: 0, mode?.refreshRate ?: 0f, r)
             p.show()
-            presentation = p; renderer = r
+            presentation = p; renderer = r; tries = 0
             Tracking.noteGraphics("window shown on glasses display ${d.displayId}: $displayInfo, requested mode " + (mode?.let { dev.ultraxr.glasses.DisplayDiagnostics.mode(it) } ?: "none (no 3840x1080 mode offered)") + ", " + (if (wide) "two-eye" else "single-view") + " rendering, display state " + dev.ultraxr.glasses.DisplayDiagnostics.stateName(d.state))
         } catch (e: Exception) {
             Tracking.noteGraphics("could not open a window on the glasses: $e")
             showPreview()
+            // a game that was just left may still hold the glasses for a moment: try again
+            if (++tries <= 12) ui.postDelayed({ refresh() }, 700)
         }
         onOutputChanged?.invoke()
     }

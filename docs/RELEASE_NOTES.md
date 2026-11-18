@@ -14,3 +14,14 @@ Ultra XR for Pixel + XREAL Air 2 Ultra.
 - The touchpad shows "Picture turned N degrees" and "Cameras: floor N m under the glasses" in white.
 - An earlier floor offset of more than 30 cm is turned into 10 degrees once, and cleared.
 - Not yet seen through the glasses.
+
+## Leaving a game frees the glasses (18 November 2026)
+
+- After "Hold to leave the game" the game kept its session and its window on the glasses, and Android refused
+  every other window there: the home view and the next game opened on the phone's screen and the touchpad did
+  nothing (seen by the owner at 15:11). Android does not let one app end another, and the runtime cannot move a
+  running session to a new window. Leave now ends Ultra XR's own process half a second after the phone has gone
+  home; Android starts it again at once for the touchpad service, and the next game starts a fresh session.
+- Emulator: enter a game from its card, hold Leave, enter again: 3 of 3 checks both times, the touchpad service
+  bound again after the restart. Not yet done on the phone.
+- The home view and the launcher's glasses picture try again for a few seconds when their window is refused.
