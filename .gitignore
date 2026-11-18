@@ -5,3 +5,6 @@ local.properties
 *.iml
 .idea/
 __pycache__/
+
+# emulator test output
+tools/ui-automation/out-*/
