@@ -157,7 +157,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         // How to play with hands: the same in every game.
         val hands = Ui.column(this, 18).apply { background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity) }
         hands.add(Ui.text(this, "Playing with your hands", 16f, bold = true))
-        for ((what, how) in listOf("Point" to "Hold a hand up: a thin line runs out through it. Move the hand to aim; turning the wrist does little.",
+        for ((what, how) in listOf("Point" to "Hold a hand up in front of your face, not at chest height: the cameras do not see it lower down. A thin line runs out through it. Move the hand to aim; turning the wrist does little.",
             "Select" to "Touch thumb and index finger together, briefly.",
             "Grab" to "Pinch and hold, move your hand, let go.",
             "Recentre" to "Pinch with both hands and hold for a second and a half.",
