@@ -90,6 +90,17 @@ class DesktopActivity : Activity() {
         session = DesktopSession(this)
         session.onChanged = { refreshChips() }
         session.onLookPress = { tick(heavy = false) }
+        // A game chosen in the home view starts in the XR browser, as it does from the launcher.
+        session.onLaunchGame = { item ->
+            runOnUiThread {
+                val browser = dev.ultraxr.xr.XrRuntime.browser(this)
+                if (browser == null) toast("The WebXR browser is not installed on this phone")
+                else {
+                    dev.ultraxr.xr.XrRuntime.launchUrl(this, browser, item.url, false)
+                    if (Tracking.settings.autoEnter) dev.ultraxr.xr.XrHost.autoEnter(item.enter)
+                }
+            }
+        }
         if (intent.getBooleanExtra(EXTRA_STEREO_PREVIEW, false) && applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) session.forceStereo = true
         build()
         session.start()

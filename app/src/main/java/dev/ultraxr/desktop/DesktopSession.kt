@@ -64,6 +64,30 @@ class DesktopSession(private val activity: Activity) {
     private val regular: Typeface = try { Typeface.createFromAsset(activity.assets, "fonts/AtkinsonHyperlegible-Regular.ttf") } catch (_: Exception) { Typeface.SANS_SERIF }
     private val bold: Typeface = try { Typeface.createFromAsset(activity.assets, "fonts/AtkinsonHyperlegible-Bold.ttf") } catch (_: Exception) { Typeface.DEFAULT_BOLD }
     private val dwell = Dwell()
+    private val homeDwell = Dwell(holdNs = 1_700_000_000L, armNs = 500_000_000L)
+
+    // ---- the home view: what it offers, and which icon is looked at
+    /** WebXR games that are not known to be broken, then the web apps. */
+    val homeItems: List<HomeItem> = run {
+        val games = try { dev.ultraxr.core.GameLibrary.parse(activity.assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { emptyList() }
+        val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
+        (games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
+            HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, tints[i % tints.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
+        } + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) }).take(HomeGrid.MAX)
+    }
+    @Volatile var homeHover = -1; private set
+    private var homeDrawnHover = -2
+    private var homeProgress = 0.0; private var homeDrawnStep = -1
+    private var homePinchWas = false
+    /** A game was chosen in the home view: the activity starts it in the XR browser. */
+    var onLaunchGame: ((HomeItem) -> Unit)? = null
+
+    /** Opens what the icon stands for. */
+    fun activateHome(i: Int) {
+        val item = homeItems.getOrNull(i) ?: return
+        if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else open(item.title, item.url, item.webKind)
+        onLookPress?.invoke()
+    }
     private var dockBitmap: Bitmap? = null
     private var ringYaw = 0.0; private var ringPitch = 0.0; private var ringDistance = 2.0; private var ringProgress = 0.0
     /** Called when something was pressed by looking, so the phone can give a haptic tick. */
@@ -152,7 +176,11 @@ class DesktopSession(private val activity: Activity) {
         c[0] = (c[0] + dx * 0.9).coerceIn(0.0, 1.0); c[1] = (c[1] + dy * 0.9 * w.aspect).coerceIn(0.0, 1.0)
         if (pressed) web[w.id]?.touch(MotionEvent.ACTION_MOVE, c[0], c[1])
     }
-    fun padTap() { padTouchNs = System.nanoTime(); val w = desktop.focused ?: return; val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }; web[w.id]?.tap(c[0], c[1]) }
+    fun padTap() {
+        padTouchNs = System.nanoTime()
+        if (desktop.visible.isEmpty()) { if (homeHover >= 0) activateHome(homeHover); return }
+        val w = desktop.focused ?: return; val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }; web[w.id]?.tap(c[0], c[1])
+    }
     fun padPress(down: Boolean) {
         val w = desktop.focused ?: return; val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
         if (down == pressed) return
@@ -193,23 +221,44 @@ class DesktopSession(private val activity: Activity) {
         }
         if (handGestures && !full) hands(nowNs, head, origin, anchor, tracked) else if (handDown) releaseHand()
 
-        // Look-to-press: the dock's apps and the title-bar buttons.
+        // The home view (shown when no window is open): the icon looked at is the one that a pinch, a tap on the
+        // phone, or a longer look opens.
+        val showHome = desktop.visible.isEmpty()
+        var hover = -1
+        if (showHome) {
+            val yaw = desktop.followAnchor.yaw
+            val h = Geometry.planeHit(origin, forward, Geometry.centre(anchor, yaw, 0.0, DesktopRenderer.HOME_DISTANCE), yaw, 0.0)
+            if (h != null) hover = HomeGrid.hit(h[0], h[1], homeItems.size) ?: -1
+        }
+        homeHover = hover
+        if (showHome && handGestures) {
+            val pinching = Tracking.hands.any { it.pinching }
+            if (pinching && !homePinchWas && hover >= 0) activateHome(hover)
+            homePinchWas = pinching
+        } else homePinchWas = false
+
+        // Look-to-press: the home's icons, the dock's apps and the title-bar buttons.
         var looked: String? = null
         if (lookToPress && !full && nowNs - padTouchNs > 700_000_000L && !handDown) {
-            val tile = Rail.dockTile(origin, forward, anchor, desktop.followAnchor.yaw, HomeApps.all.size)
-            if (tile != null) { looked = "dock:$tile"; ringDistance = Rail.DOCK_DISTANCE }
+            val tile = if (showHome) null else Rail.dockTile(origin, forward, anchor, desktop.followAnchor.yaw, HomeApps.all.size)
+            if (showHome && hover >= 0) { looked = "home:$hover"; ringDistance = DesktopRenderer.HOME_DISTANCE }
+            else if (tile != null) { looked = "dock:$tile"; ringDistance = Rail.DOCK_DISTANCE }
             else {
                 val g = desktop.hit(origin, forward, anchor)
                 // only the focused window shows its buttons, so only those can be pressed
                 if (g != null && g.barButton != null && g.window.id == desktop.focusedId) { looked = "bar:${g.window.id}:${g.barButton.name}"; ringDistance = g.distance }
             }
         }
-        val fire = dwell.update(nowNs, looked)
-        ringYaw = Geometry.yawOf(forward); ringPitch = Geometry.pitchOf(forward); ringProgress = if (looked != null) dwell.progress else 0.0
+        // An icon of the home opens on a pinch or a tap at once; by looking alone it takes two seconds, so that
+        // glancing across the home does not start things.
+        val onHome = looked?.startsWith("home:") == true
+        val fire = if (onHome) { dwell.update(nowNs, null); homeDwell.update(nowNs, looked) } else { homeDwell.update(nowNs, null); dwell.update(nowNs, looked) }
+        ringYaw = Geometry.yawOf(forward); ringPitch = Geometry.pitchOf(forward); ringProgress = if (looked == null || onHome) 0.0 else dwell.progress
+        homeProgress = if (onHome) homeDwell.progress else 0.0
         if (fire != null) {
-            if (fire.startsWith("dock:")) open(HomeApps.all[fire.substring(5).toInt()])
-            else { val p = fire.split(":"); barAction(p[1].toInt(), BarButton.valueOf(p[2])) }
-            onLookPress?.invoke()
+            if (fire.startsWith("home:")) activateHome(fire.substring(5).toInt())
+            else if (fire.startsWith("dock:")) { open(HomeApps.all[fire.substring(5).toInt()]); onLookPress?.invoke() }
+            else { val p = fire.split(":"); barAction(p[1].toInt(), BarButton.valueOf(p[2])); onLookPress?.invoke() }
         }
 
         if (desktop.revision != savedRevision && !handDown && !pressed) save()
@@ -286,13 +335,16 @@ class DesktopSession(private val activity: Activity) {
         val showHome = desktop.visible.isEmpty()
         if (showHome) {
             val minute = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-            if (homeBitmap == null || minute != homeMinute) { homeBitmap = drawHome(minute); homeMinute = minute; homeVersion++ }
+            val step = (homeProgress * 16).toInt()
+            if (homeBitmap == null || minute != homeMinute || homeHover != homeDrawnHover || step != homeDrawnStep) {
+                homeBitmap = drawHome(minute, homeHover, step / 16f); homeMinute = minute; homeDrawnHover = homeHover; homeDrawnStep = step; homeVersion++
+            }
         }
         if (dockBitmap == null) dockBitmap = drawDock()
         val f = desktop.focused?.takeIf { !it.minimized && full < 0 }
         val frame = RenderFrame(list, anchor, if (showHome) homeBitmap else null, homeVersion, desktop.followAnchor.yaw, positionOk, if (dimUnfocused) 0.55f else 1f,
-            dock = if (full < 0) dockBitmap else null, dockVersion = 1, dockYaw = desktop.followAnchor.yaw,
-            railYaw = if (f != null) desktop.worldYaw(f) else Double.NaN, railHalf = if (f != null) Math.atan(f.shownWidth() / 2 / f.shownDistance()) else 0.0, showRail = full < 0,
+            dock = if (full < 0 && !showHome) dockBitmap else null, dockVersion = 1, dockYaw = desktop.followAnchor.yaw,
+            railYaw = if (f != null) desktop.worldYaw(f) else Double.NaN, railHalf = if (f != null) Math.atan(f.shownWidth() / 2 / f.shownDistance()) else 0.0, showRail = full < 0 && !showHome,
             dwellYaw = ringYaw, dwellPitch = ringPitch, dwellDistance = ringDistance, dwellProgress = ringProgress)
         val sw = Tracking.link?.stereo
         val three = forceStereo || sw?.state == dev.ultraxr.glasses.StereoSwitch.State.ACTIVE
@@ -338,16 +390,95 @@ class DesktopSession(private val activity: Activity) {
     }
 
     /** The clock that stands on the rail when no window is open. */
-    private fun drawHome(minute: String): Bitmap {
-        val bw = 900; val bh = 420
+    /**
+     * The home view: round icons in staggered rows with their names, a small glass capsule above with the time and
+     * what the glasses are doing, and one below saying how to choose. Light on black: black is see-through.
+     */
+    private fun drawHome(minute: String, hover: Int, progress: Float): Bitmap {
+        val bw = HomeGrid.PX_W; val bh = HomeGrid.PX_H
         val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER
-        p.color = Ink.WHITE_INT; p.typeface = regular; p.textSize = 230f; p.letterSpacing = -0.02f
-        c.drawText(minute, bw / 2f, 250f, p)
-        p.letterSpacing = 0f; p.color = Ink.SLATE_INT; p.textSize = 46f
-        c.drawText(SimpleDateFormat("EEEE d MMMM", Locale.getDefault()).format(Date()), bw / 2f, 330f, p)
-        p.color = Ink.AMBER_INT; p.textSize = 34f
-        c.drawText("Look down to open an app", bw / 2f, 400f, p)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        val medium = Typeface.create("sans-serif-medium", Typeface.NORMAL); val plain = Typeface.create("sans-serif", Typeface.NORMAL)
+
+        // A capsule of "glass": a faint milky fill, brighter towards the top, and a thin bright rim.
+        fun capsule(cx: Float, cy: Float, w: Float, h: Float) {
+            val r = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+            p.style = Paint.Style.FILL
+            p.shader = android.graphics.LinearGradient(0f, r.top, 0f, r.bottom, 0x30FFFFFF, 0x14FFFFFF, android.graphics.Shader.TileMode.CLAMP)
+            c.drawRoundRect(r, h / 2, h / 2, p)
+            p.shader = android.graphics.LinearGradient(0f, r.top, 0f, r.bottom, 0x8CFFFFFF.toInt(), 0x24FFFFFF, android.graphics.Shader.TileMode.CLAMP)
+            p.style = Paint.Style.STROKE; p.strokeWidth = 2f
+            c.drawRoundRect(r, h / 2, h / 2, p)
+            p.shader = null; p.style = Paint.Style.FILL
+        }
+
+        // Above: the time, and in a quieter weight what the glasses are doing.
+        val mode = Tracking.head.predict(System.nanoTime()).mode
+        val state = when (mode) { HeadTracker.Mode.SIX_DOF -> "Room tracking on"; HeadTracker.Mode.ORIENTATION_ONLY -> "Turning only"; else -> "No tracking" }
+        p.typeface = medium; p.textSize = 34f; val tw = p.measureText(minute)
+        p.typeface = plain; p.textSize = 28f; val sw = p.measureText(state)
+        val capW = tw + sw + 96f
+        capsule(bw / 2f, 46f, capW, 60f)
+        p.textAlign = Paint.Align.LEFT
+        p.typeface = medium; p.textSize = 34f; p.color = 0xFFFFFFFF.toInt(); c.drawText(minute, bw / 2f - capW / 2 + 32f, 58f, p)
+        p.typeface = plain; p.textSize = 28f; p.color = 0xC8FFFFFF.toInt(); c.drawText(state, bw / 2f - capW / 2 + 32f + tw + 32f, 56f, p)
+
+        // The icons.
+        val centres = HomeGrid.centres(homeItems.size)
+        p.textAlign = Paint.Align.CENTER
+        for ((i, item) in homeItems.withIndex()) {
+            val cx = centres[i][0]; val cy = centres[i][1]; val on = i == hover
+            val r = HomeGrid.ICON_R * (if (on) 1.12f else 1f)
+            if (on) {      // the icon looked at lifts towards the viewer: larger, with a soft bright halo
+                p.shader = android.graphics.RadialGradient(cx, cy, r * 1.55f, intArrayOf(0x55FFFFFF, 0x22FFFFFF, 0x00FFFFFF), floatArrayOf(0.62f, 0.8f, 1f), android.graphics.Shader.TileMode.CLAMP)
+                c.drawCircle(cx, cy, r * 1.55f, p); p.shader = null
+            }
+            // body: the app's own colour, lighter at the upper left as if lit from there
+            val hsv = FloatArray(3); Color.colorToHSV(item.color, hsv)
+            val light = Color.HSVToColor(floatArrayOf(hsv[0], hsv[1] * 0.55f, minOf(1f, hsv[2] * 1.25f + 0.1f)))
+            val deep = Color.HSVToColor(floatArrayOf(hsv[0], minOf(1f, hsv[1] * 1.05f), hsv[2] * 0.72f))
+            p.shader = android.graphics.RadialGradient(cx - r * 0.35f, cy - r * 0.45f, r * 1.7f, intArrayOf(light, item.color, deep), floatArrayOf(0f, 0.55f, 1f), android.graphics.Shader.TileMode.CLAMP)
+            c.drawCircle(cx, cy, r, p); p.shader = null
+            // rim: bright at the top, fading out below
+            p.style = Paint.Style.STROKE; p.strokeWidth = if (on) 3.5f else 2.5f
+            p.shader = android.graphics.LinearGradient(0f, cy - r, 0f, cy + r, if (on) 0xFFFFFFFF.toInt() else 0xB4FFFFFF.toInt(), 0x1EFFFFFF, android.graphics.Shader.TileMode.CLAMP)
+            c.drawCircle(cx, cy, r - 1.5f, p); p.shader = null; p.style = Paint.Style.FILL
+            // the mark: the name's first letter, or a play triangle for a game
+            p.color = 0xFFFFFFFF.toInt()
+            if (item.kind == HomeItem.Kind.GAME) {
+                val t = r * 0.42f; val path = android.graphics.Path()
+                path.moveTo(cx - t * 0.62f, cy - t); path.lineTo(cx + t * 0.98f, cy); path.lineTo(cx - t * 0.62f, cy + t); path.close()
+                p.pathEffect = android.graphics.CornerPathEffect(r * 0.12f); c.drawPath(path, p); p.pathEffect = null
+            } else {
+                p.typeface = medium; p.textSize = r * 0.95f
+                c.drawText(item.title.take(1), cx, cy + r * 0.33f, p)
+            }
+            // a game played on the glasses by its owner carries a small tick
+            if (item.verified) {
+                val bx = cx + r * 0.68f; val by = cy - r * 0.68f
+                p.color = 0xFFFFFFFF.toInt(); c.drawCircle(bx, by, 17f, p)
+                p.color = deep; p.style = Paint.Style.STROKE; p.strokeWidth = 4.5f; p.strokeCap = Paint.Cap.ROUND
+                c.drawLine(bx - 7f, by + 1f, bx - 2f, by + 6f, p); c.drawLine(bx - 2f, by + 6f, bx + 8f, by - 6f, p)
+                p.style = Paint.Style.FILL; p.strokeCap = Paint.Cap.BUTT
+            }
+            // looking alone: a thin arc closes around the icon, and it opens when the circle is whole
+            if (on && progress > 0f) {
+                p.style = Paint.Style.STROKE; p.strokeWidth = 5f; p.strokeCap = Paint.Cap.ROUND; p.color = 0xFFFFFFFF.toInt()
+                val rr = r + 13f
+                c.drawArc(RectF(cx - rr, cy - rr, cx + rr, cy + rr), -90f, 360f * progress, false, p)
+                p.style = Paint.Style.FILL; p.strokeCap = Paint.Cap.BUTT
+            }
+            // the name, shortened with an ellipsis if it would run into its neighbour
+            p.typeface = if (on) medium else plain; p.textSize = 31f; p.color = if (on) 0xFFFFFFFF.toInt() else 0xE0FFFFFF.toInt()
+            val name = android.text.TextUtils.ellipsize(item.title, android.text.TextPaint(p), HomeGrid.PITCH_X - 22f, android.text.TextUtils.TruncateAt.END).toString()
+            c.drawText(name, cx, cy + HomeGrid.ICON_R + 46f, p)
+        }
+
+        // Below: how to choose.
+        val hint = if (hover >= 0) "Pinch, tap the phone, or keep looking to open " + homeItems[hover].title else "Look at an app, then pinch or tap the phone"
+        p.typeface = plain; p.textSize = 27f
+        capsule(bw / 2f, bh - 40f, p.measureText(hint) + 64f, 54f)
+        p.color = 0xD2FFFFFF.toInt(); p.textAlign = Paint.Align.CENTER; c.drawText(hint, bw / 2f, bh - 31f, p)
         return b
     }
 

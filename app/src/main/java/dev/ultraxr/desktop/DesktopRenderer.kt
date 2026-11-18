@@ -286,6 +286,6 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         private val RAIL_VISIBLE = Math.toRadians(62.0)
         private val UNIFORM_NAMES = arrayOf("uMvp", "uTex", "uSize", "uRadius", "uTint", "uAlpha", "uRing", "uSampler")
         const val HOME_DISTANCE = 2.0
-        const val HOME_WIDTH = 0.9
+        const val HOME_WIDTH = HomeGrid.WIDTH_M
     }
 }
