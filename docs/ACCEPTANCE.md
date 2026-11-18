@@ -11,8 +11,10 @@ What that build is, plainly:
   left them black. It is no longer tried unless you switch it on in Settings.
 - **The phone is the controller.** Its screen becomes a touchpad in a game, so nothing depends on
   hand tracking. Hands still work when they are tracked.
-- **Position tracking** is the same as in the live runs; a change to it is prepared but not yet
-  measured.
+- **Position tracking** while worn is the same as in the live runs (it came back to within 3 cm,
+  8 cm at worst, in the recording). What is new: put down or bumped, it can no longer run away
+  (it reached 158 m in replays; now it holds and restarts).
+- **Hands** have a more forgiving pinch rule and a steadier pointer. Untested on a real hand.
 
 ## Once, before the first game (about two minutes)
 
@@ -25,6 +27,20 @@ What that build is, plainly:
    **AGREE**, tap the phone once. This is yours to accept; the app never does it for you.
 3. **Let games start by themselves from now on.** Press Back, open Ultra XR's **Settings**, and
    switch on **Enter games automatically**.
+
+## First, one minute for the 3D question
+
+This part decides whether real stereo is possible on this phone at all, and it needs you to do
+nothing but wear the glasses. Plug them into the phone, put them on, phone unlocked on Wi-Fi,
+and say so. From the laptop:
+
+    python tools/pixel/lab.py diag3d C:/uvio/diag3d
+
+asks the glasses for their 3D mode once, watches what they report five times a second, asks once
+more after their screen has come on, then returns them to 2D, and afterwards reads the phone's
+own DisplayPort driver log for those seconds. The picture will blank and may stay black at the
+end; if it does, unplug the glasses and plug them in again. **Question 0: at any point during
+that minute, did you see a picture that was different in each eye?**
 
 ## The session (about three minutes)
 
