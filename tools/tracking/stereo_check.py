@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Does the calibration agree with what the two cameras actually see? (from a recording, on this machine)
 
-  python stereo_check.py RECORDING.uxrec BASALT_CALIB.json [--pairs N] [--out DIR]
+  python stereo_check.py RECORDING.uxrec BASALT_CALIB.json [--pairs N] [--from-to A,B] [--out DIR]
 
 The position estimator (Basalt) follows a point from the left camera into the right one and keeps it only if the
 two sight lines meet: the "epipolar error" must be under optical_flow_epipolar_error (0.005 in our configuration).
@@ -68,6 +68,8 @@ def main():
     a = sys.argv[1:]; npairs = 60; out = None
     if "--pairs" in a: i = a.index("--pairs"); npairs = int(a[i + 1]); del a[i:i + 2]
     if "--out" in a: i = a.index("--out"); out = a[i + 1]; del a[i:i + 2]
+    span = (0.0, 1e9)
+    if "--from-to" in a: i = a.index("--from-to"); span = tuple(float(v) for v in a[i + 1].split(",")); del a[i:i + 2]
     if len(a) != 2: print(__doc__); return 2
     c = json.load(open(a[1]))["value0"]
     k0 = c["intrinsics"][0]["intrinsics"]; k1 = c["intrinsics"][1]["intrinsics"]
@@ -76,10 +78,14 @@ def main():
     R10 = R1.T @ R0; t10 = R1.T @ (t0 - t1)          # camera 0 in camera 1
     base = float(np.linalg.norm(t10)); angle = float(np.degrees(np.arccos(np.clip((np.trace(R10) - 1) / 2, -1, 1))))
 
-    total = sum(1 for kind, _, _ in ar.records(a[0]) if kind == 1); step = max(1, (total // 2) // npairs)
+    first = None; inspan = 0
+    for kind, t, _ in ar.records(a[0]):
+        if first is None: first = t
+        if kind == 1 and span[0] <= (t - first) / 1e9 < span[1]: inspan += 1
+    step = max(1, (inspan // 2) // npairs)
     pend = {}; pairs = []; times = []; n = 0
     for kind, t, data in ar.records(a[0]):
-        if kind != 1: continue
+        if kind != 1 or not (span[0] <= (t - first) / 1e9 < span[1]): continue
         dev, counter, eye = ar.meta(data)
         if eye == 0:
             n += 1

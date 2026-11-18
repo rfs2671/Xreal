@@ -422,6 +422,55 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
         }
     }
 
+    // ---- one bounded look at what the glasses do with their half-width 3D mode
+    /**
+     * A scripted, bounded experiment for the question "why do the glasses leave half-width 3D": everything they
+     * report is logged five times a second with the time since the start. Three steps, each sent once:
+     *
+     *   A  ask for half-width 3D and watch for 12 s (the link restarts; on 17 Nov 2026 the glasses were back in 2D
+     *      about 2.3 s after the picture returned, while worn)
+     *   B  if they went back to 2D: ask for half-width 3D once more, now that their screen is already on, and watch
+     *      for 10 s (does a request made after the screen is on stick?)
+     *   C  ask for 2D and watch for 6 s
+     *
+     * It sends three mode commands in all and never loops. After it the glasses may show nothing until they are
+     * unplugged and plugged in again; the log says so. Started only by a test switch.
+     */
+    fun diag3d() {
+        handler.post {
+            val m = mcu ?: run { listener.onLog("diag3d: the glasses are not connected"); return@post }
+            val t0 = System.nanoTime()
+            fun at() = dev.ultraxr.core.Fmt.f((System.nanoTime() - t0) / 1e9, 2) + " s"
+            var last = m.getDisplayMode() ?: -1
+            listener.onLog("diag3d: start, the glasses report mode $last, display " + (try { externalDisplaySize?.invoke()?.joinToString("x") } catch (_: Throwable) { null } ?: "none"))
+            fun watch(label: String, seconds: Int) {
+                var lastSize = ""
+                for (i in 0 until seconds * 5) {
+                    m.drain(150)
+                    val now = m.getDisplayMode()
+                    if (now != null && now != last) { listener.onLog("diag3d: $label: mode $last -> $now at " + at()); last = now }
+                    val size = try { externalDisplaySize?.invoke()?.joinToString("x") } catch (_: Throwable) { null } ?: "none"
+                    if (size != lastSize) { listener.onLog("diag3d: $label: phone's display for the glasses is $size at " + at()); lastSize = size }
+                    try { Thread.sleep(50) } catch (_: InterruptedException) {}
+                }
+            }
+            var ok = m.setDisplayMode(McuProtocol.MODE_HALF_SBS)
+            listener.onLog("diag3d: A: asked for half-width 3D at " + at() + ": " + if (ok) "accepted" else "rejected or no answer")
+            watch("A", 12)
+            if (last != McuProtocol.MODE_HALF_SBS) {
+                ok = m.setDisplayMode(McuProtocol.MODE_HALF_SBS)
+                listener.onLog("diag3d: B: asked again with the screen already on at " + at() + ": " + if (ok) "accepted" else "rejected or no answer")
+                watch("B", 10)
+            } else listener.onLog("diag3d: B skipped: the glasses are still in half-width 3D after 12 s")
+            val held = last == McuProtocol.MODE_HALF_SBS
+            ok = m.setDisplayMode(McuProtocol.MODE_2D_60)
+            listener.onLog("diag3d: C: asked for 2D at " + at() + ": " + if (ok) "accepted" else "rejected or no answer")
+            watch("C", 6)
+            stats.displayMode = last; wantedDisplayMode = McuProtocol.MODE_2D_60
+            listener.onLog("diag3d: done at " + at() + "; half-width 3D " + (if (held) "was still held when 2D was asked for" else "was not held") + ". If the glasses show nothing now, unplug them and plug them in again.")
+        }
+    }
+
     // ---- replaying a recording (no glasses needed)
     @Volatile var replaying = false; private set
     @Volatile var replaySeconds = 0.0; private set

@@ -247,6 +247,28 @@ press with a drag carried a shape to a new place where it stayed (checked by eye
 captures). Not testable there: the volume keys, because Android keeps key presses injected by a
 test away from accessibility services. Not run on the phone.
 
+## Hands: what was changed after the first sessions
+
+No session has yet produced a pinch, and there is no recording with a tracked hand in it, so
+these are reasoned changes with unit tests, not measured ones. The session record now collects
+what is needed to measure them (each hand's finger length, the closest the fingertips came in
+millimetres and in finger lengths, frames held through a loss).
+
+- **Pinch judged against the hand** (`core/SessionTools.kt`, `PinchState`): fingertips count as
+  together under 18 mm or under 0.28 of the index finger's length, whichever is easier, and
+  apart again only over 32 mm and 0.48. A tracker that puts a hand a little too far away makes
+  it a little too large by the same factor; a rule in finger lengths survives that.
+- **Two results in a row** start or end a pinch, so one stray frame does neither.
+- **Brief loss is bridged**: a hand that disappears for up to a quarter of a second (fingers
+  hiding each other as they touch) is reported where it was, pinch included.
+- **Fingertips handed over touching** while Ultra XR's rule says "pinching", because a browser
+  applies its own, tighter distance.
+- **The pointer is steadied** (`core/HandSteady.kt`): a one-euro filter on the hand's place
+  (strong when it is still, weak when it moves), and for a quarter of a second from the start of
+  a pinch the hand is reported where it was just before, unless it is carried more than 3 cm.
+
+The touchpad does not depend on any of this.
+
 ## Not working
 
 - **The Gecko engine** could not be run on the emulator (it crashes in graphics setup under arm

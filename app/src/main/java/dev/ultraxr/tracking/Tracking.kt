@@ -210,6 +210,7 @@ object Tracking : GlassesLink.Listener {
             // shipped values, so a replay of a recording can compare settings over adb without a new build.
             try {
                 val lines = File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()
+                holdWhenStill = lines.none { it.replace(" ", "") == "hold_when_still=0" }
                 val changed = ArrayList<String>()
                 if (lines.isNotEmpty()) {
                     val root = JSONObject(config); val v0 = root.getJSONObject("value0")
@@ -239,6 +240,12 @@ object Tracking : GlassesLink.Listener {
             }
             activeFactoryJson = factoryJson
             log("calibration: $calibrationSource")
+            // A small correction to the right camera's rotation, measured from real stereo pairs
+            // (tools/tracking/stereo_check.py). "x,y,z" degrees in files/stereo_rotation_fix.txt, for replays.
+            try {
+                val fix = File(app.getExternalFilesDir(null), "stereo_rotation_fix.txt").takeIf { it.isFile }?.readText()?.trim()?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }
+                if (fix != null && fix.size == 3) { calib = applyStereoRotationFix(calib, fix[0], fix[1], fix[2]); log("calibration: right camera turned by " + fix.joinToString(", ") + " degrees (stereo_rotation_fix.txt)") }
+            } catch (e: Exception) { log("stereo_rotation_fix.txt ignored: $e") }
             // The exact calibration handed to the estimator, for offline analysis of captures.
             try { java.io.File(appContext?.getExternalFilesDir(null), "basalt_calib.json").writeText(calib) } catch (_: Exception) {}
             parseRig(calib)
@@ -297,6 +304,22 @@ object Tracking : GlassesLink.Listener {
         thread(name = "tracking-recalibrate") { startTrackers(app, json) }
     }
 
+    /**
+     * The calibration with the right camera turned by the rotation vector ([xDeg], [yDeg], [zDeg]) in its own frame:
+     * R(camera 0 in camera 1) becomes R(w) * R, which is R(imu from camera 1) * R(w) transposed.
+     */
+    fun applyStereoRotationFix(calibJson: String, xDeg: Double, yDeg: Double, zDeg: Double): String {
+        val root = JSONObject(calibJson); val c1 = root.getJSONObject("value0").getJSONArray("T_imu_cam").getJSONObject(1)
+        val q1 = doubleArrayOf(c1.getDouble("qx"), c1.getDouble("qy"), c1.getDouble("qz"), c1.getDouble("qw"))
+        val x = Math.toRadians(xDeg); val y = Math.toRadians(yDeg); val z = Math.toRadians(zDeg)
+        val angle = Math.sqrt(x * x + y * y + z * z)
+        if (angle < 1e-9) return calibJson
+        val w = Q.axisAngle(x / angle, y / angle, z / angle, angle)
+        val q = Q.normalize(Q.mul(q1, Q.conj(w)))
+        c1.put("qx", q[0]); c1.put("qy", q[1]); c1.put("qz", q[2]); c1.put("qw", q[3])
+        return root.toString()
+    }
+
     /** Camera and head geometry from the Basalt calibration (T_imu_cam). */
     private fun parseRig(calibJson: String) {
         val arr = JSONObject(calibJson).getJSONObject("value0").getJSONArray("T_imu_cam")
@@ -339,6 +362,7 @@ object Tracking : GlassesLink.Listener {
 
     override fun onImu(tNs: Long, gyro: FloatArray, accel: FloatArray) {
         head.onImu(tNs, gyro, accel)
+        stillness.onImu(tNs, gyro, accel)
         trace.onImu(gyro, accel)
         val v = vio
         if (v != 0L) Native.vioPushImu(v, tNs, gyro[0], gyro[1], gyro[2], accel[0], accel[1], accel[2])
@@ -399,11 +423,28 @@ object Tracking : GlassesLink.Listener {
                     val trusted = positionConfidence.update(now, vioLandmarks, vioStereoMatches)
                     if (trusted != wasTrusted) log(if (trusted) "6DoF position trusted ($vioLandmarks landmarks, $vioStereoMatches seen by both cameras)"
                         else "6DoF position not trusted ($vioLandmarks landmarks, $vioStereoMatches seen by both cameras): rotation only")
-                    if (supervisor.onState(now, out[0].toLong(), true, p, vel, vioFeatures)) resetVio(v)
-                    else if (trusted) head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13]))
-                    // Not trusted: the head keeps its last position and turns from the IMU. When trust
-                    // returns the estimator's world is re-aligned to where the head was held.
-                    else if (wasTrusted) head.onVioEpochReset()
+                    // Lying perfectly still (put down): the position is not changing, whatever the cameras make of
+                    // the table top. Held exactly like an untrusted position, and re-aligned when motion returns.
+                    val lying = holdWhenStill && stillness.still
+                    var restarted = false
+                    if (lying != wasLying) {
+                        wasLying = lying; log(if (lying) "6DoF: the glasses are lying still, position held" else "6DoF: moving again")
+                        if (lying) lyingAt = p.copyOf()
+                        // Picked up again: if the estimator wandered while nothing moved, what it holds now is wrong
+                        // (it has run away by metres in replays). Start it afresh rather than hand that to a game.
+                        else if (lyingAt != null && dist(p, lyingAt!!) > LYING_WANDER_ON_PICKUP_M) { restartVio(v, "it had wandered " + dev.ultraxr.core.Fmt.f(dist(p, lyingAt!!), 2) + " m while the glasses lay still"); restarted = true }
+                    } else if (lying && lyingAt != null && dist(p, lyingAt!!) > LYING_WANDER_M && now - lyingRestartNs > 5_000_000_000L) {
+                        // Still lying there and the estimator is walking off: restart it now, so it cannot build up speed.
+                        lyingRestartNs = now; restartVio(v, "wandering " + dev.ultraxr.core.Fmt.f(dist(p, lyingAt!!), 2) + " m with the glasses lying still"); lyingAt = null; restarted = true
+                    } else if (lying && lyingAt == null) lyingAt = p.copyOf()
+                    val use = trusted && !lying && !restarted
+                    if (restarted) wasUsing = false
+                    else if (supervisor.onState(now, out[0].toLong(), true, p, vel, vioFeatures)) { resetVio(v); wasUsing = false }
+                    else if (use) { head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13])); wasUsing = true }
+                    // Not used: the head keeps its last position and turns from the IMU. When it is used
+                    // again the estimator's world is re-aligned to where the head was held.
+                    else if (wasUsing) { head.onVioEpochReset(); wasUsing = false }
+                    replayLog?.app(link?.replaySeconds ?: 0.0, head.predict(System.nanoTime()).pose.p, lying, use)
                 } else if (supervisor.onState(now, 0, false, ZERO, ZERO, -1)) resetVio(v)
             }
             if (++tick % 100 == 0) {
@@ -412,6 +453,27 @@ object Tracking : GlassesLink.Listener {
                 if (mode != lastMode) { lastMode = mode; log("head tracking: $mode"); notifyObservers() }
             }
         }
+    }
+
+    /** Whether the glasses are lying perfectly still, from the motion sensor (core/Stillness.kt). */
+    val stillness = dev.ultraxr.core.StillnessDetector()
+    /** Hold position while they are. On unless files/vio_options.txt says "hold_when_still=0" (for A/B replays). */
+    @Volatile var holdWhenStill = true
+    private var wasLying = false
+    private var wasUsing = false
+    private var lyingAt: DoubleArray? = null
+    private var lyingRestartNs = 0L
+    private fun dist(a: DoubleArray, b: DoubleArray) = Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))
+    private const val LYING_WANDER_M = 0.10
+    private const val LYING_WANDER_ON_PICKUP_M = 0.03
+
+    /** Starts the position estimator afresh; the head keeps its place and the new estimate is aligned to it. */
+    private fun restartVio(v: Long, why: String) {
+        replayLog?.note(link?.replaySeconds ?: 0.0, "restart: $why")
+        log("6DoF restarted: $why")
+        positionConfidence.reset()
+        Native.vioReset(v)
+        head.onVioEpochReset()
     }
 
     /** Hand tracking settings under measurement (files/hand_options.txt). */

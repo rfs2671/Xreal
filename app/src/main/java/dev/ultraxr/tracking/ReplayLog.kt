@@ -13,6 +13,8 @@ import kotlin.math.sqrt
  *                  landmarks, points seen by both cameras, processing time, reset count, whether position was trusted
  *   TAG-hands.csv  one line per hand tracking result: recording time, which hands were found, and for each hand the
  *                  thumb-tip to index-tip distance, the wrist's distance from the camera and its place in the view
+ *   TAG-app.csv    one line per position state: what the application was given (head position in its world), and
+ *                  whether the glasses were judged to be lying still and the estimator's position was used
  *   TAG-notes.txt  resets and the closing summary
  *
  * Times are seconds from the start of the recording, so runs with different settings line up.
@@ -21,6 +23,7 @@ class ReplayLog(dir: File, tag: String) {
     private val vio = PrintWriter(File(dir.apply { mkdirs() }, "$tag-vio.csv"))
     private val hands = PrintWriter(File(dir, "$tag-hands.csv"))
     private val notes = PrintWriter(File(dir, "$tag-notes.txt"))
+    private val app = PrintWriter(File(dir, "$tag-app.csv")).also { it.println("t,hx,hy,hz,lying,used") }
     var handResults = 0; private set
     val handFound = intArrayOf(0, 0)
 
@@ -50,11 +53,16 @@ class ReplayLog(dir: File, tag: String) {
         if (handResults % 60 == 0) { hands.flush(); vio.flush() }
     }
 
+    /** What the application is given: the head's position in the app's world, whether the glasses were judged to be lying still, and whether the estimator's position was used. */
+    @Synchronized fun app(t: Double, head: DoubleArray, lying: Boolean, used: Boolean) {
+        app.println(String.format(Locale.US, "%.3f,%.4f,%.4f,%.4f,%d,%d", t, head[0], head[1], head[2], if (lying) 1 else 0, if (used) 1 else 0))
+    }
+
     @Synchronized fun note(t: Double, text: String) { notes.println(String.format(Locale.US, "%.3f %s", t, text)); notes.flush() }
 
     @Synchronized fun close(summary: String) {
         notes.println(summary)
         notes.println("hand results $handResults, left found ${handFound[0]}, right found ${handFound[1]}")
-        vio.close(); hands.close(); notes.close()
+        vio.close(); hands.close(); notes.close(); app.close()
     }
 }

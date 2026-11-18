@@ -3,6 +3,7 @@
 
   python lab.py replay  RECORDING_NAME  OUT_DIR  [--runs base,epi10,...]     replay a recording under several settings
   python lab.py pacing  OUT_DIR                                             compositor frame pacing, both modes
+  python lab.py diag3d  OUT_DIR                                             one logged look at half-width 3D (glasses plugged in)
   python lab.py restore                                                     remove the test settings, go Home
 
 Needs the phone on Wi-Fi with wireless debugging and the glasses unplugged. A replay runs with the screen off and
@@ -28,9 +29,21 @@ PKG = "dev.ultraxr"; FILES = "/sdcard/Android/data/dev.ultraxr/files"; BROWSER =
 RUNS = {
     # name: (vio_options.txt, hand_options.txt)
     "base":   ("", ""),
+    "base2":  ("", ""),      # the same again: how much two runs of identical settings differ
+    # position held while the motion sensor says the glasses are lying still (the default from this build on), twice,
+    # and the same build with the hold switched off
+    "hold":   ("", ""),
+    "hold2":  ("", ""),
+    "hold3":  ("", ""),      # with the estimator restarted when it wanders while the glasses lie still
+    "hold4":  ("", ""),
+    "nohold": ("hold_when_still=0" + chr(10), ""),
     "epi10":  ("config.optical_flow_epipolar_error=0.01\n", "stretch=1\n"),
     "epi20":  ("config.optical_flow_epipolar_error=0.02\n", "quality_filter=0\n"),
     "epi10l4": ("config.optical_flow_epipolar_error=0.01\nconfig.optical_flow_levels=4\n", "stretch=1\nquality_filter=0\n"),
+    # the right camera turned by the correction measured from the recording's own stereo pairs (third item)
+    "rot":    ("", "", "0.24,-0.17,-0.04"),
+    "rotxy":  ("", "", "0.24,-0.17,0"),
+    "rothalf": ("", "", "0.12,-0.085,0"),
 }
 
 def run(args, timeout=120):
@@ -59,7 +72,7 @@ def put(dev, name, text):
 def glasses_attached(dev): return "Air 2 Ultra" in sh(dev, "dumpsys display | grep -c 'Air 2 Ultra' ; dumpsys display | grep -m1 'Air 2 Ultra'")
 
 def restore(dev):
-    put(dev, "vio_options.txt", ""); put(dev, "hand_options.txt", "")
+    put(dev, "vio_options.txt", ""); put(dev, "hand_options.txt", ""); put(dev, "stereo_rotation_fix.txt", "")
     sh(dev, "am force-stop com.igalia.wolvic.vanilla"); time.sleep(6); sh(dev, "am force-stop " + PKG)
     for p in ("sim_motion", "sim_auto"): sh(dev, "setprop debug.ultraxr.%s 0" % p)
     sh(dev, "setprop debug.xrt.ULTRAXR_DISPLAY_TIMING 0"); sh(dev, "input keyevent KEYCODE_HOME")
@@ -70,8 +83,8 @@ def replay(dev, name, out, runs):
     if glasses_attached(dev): print("The glasses are plugged in: a replay needs them unplugged. Nothing was run."); return 1
     if name not in sh(dev, "ls %s/recordings" % FILES): print("no such recording on the phone: " + name); return 1
     for tag in runs:
-        vio, hands = RUNS[tag]
-        put(dev, "vio_options.txt", vio); put(dev, "hand_options.txt", hands)
+        vio, hands = RUNS[tag][0], RUNS[tag][1]
+        put(dev, "vio_options.txt", vio); put(dev, "hand_options.txt", hands); put(dev, "stereo_rotation_fix.txt", RUNS[tag][2] if len(RUNS[tag]) > 2 else "")
         sh(dev, "am force-stop " + PKG); time.sleep(2); sh(dev, "logcat -c")
         sh(dev, "input keyevent KEYCODE_WAKEUP")
         sh(dev, "am start -n %s/.ui.LauncherActivity --es replay %s --es replay_tag %s" % (PKG, name, tag))
@@ -81,7 +94,7 @@ def replay(dev, name, out, runs):
             log = sh(dev, "logcat -d | grep -E 'UltraXR *: (replay finished|replayed|replay stopped|hand options|6DoF settings changed)' | tail -4")
             if "replay finished" in log or "replay stopped" in log: done = log; break
         print("%s: %s" % (tag, (done.splitlines()[-1].split("UltraXR :")[-1].strip() if done else "no end message after 7 minutes")), flush=True)
-        for kind in ("vio.csv", "hands.csv", "notes.txt"):
+        for kind in ("vio.csv", "hands.csv", "app.csv", "notes.txt"):
             run(["adb", "-s", dev, "pull", "%s/replay/%s-%s" % (FILES, tag, kind), os.path.join(out, "%s-%s" % (tag, kind))], 120)
         temp = re.search(r"temperature: (\d+)", sh(dev, "dumpsys battery"))
         if temp and int(temp.group(1)) > 420: print("battery at %.1f C: pausing two minutes" % (int(temp.group(1)) / 10)); time.sleep(120)
@@ -108,13 +121,49 @@ def pacing(dev, out):
     restore(dev)
     return 0
 
+def diag3d(dev, out):
+    """The app's bounded 3D-mode experiment (GlassesLink.diag3d: three mode commands, 30 s), then the phone's own
+    DisplayPort driver log for the same seconds, taken from a bug report (the only place it can be read without root)."""
+    import zipfile
+    os.makedirs(out, exist_ok=True)
+    if not glasses_attached(dev): print("The glasses are not plugged into the phone. Nothing was run."); return 1
+    sh(dev, "logcat -c")
+    sh(dev, "am start -n %s/.ui.LauncherActivity --ez diag3d true" % PKG)
+    t0 = time.time(); log = ""
+    while time.time() - t0 < 60:
+        time.sleep(5)
+        log = sh(dev, "logcat -d | grep -E 'UltraXR *: (diag3d|glasses (log|say|mode)|display [0-9]+ (ADDED|REMOVED)|3D:)'")
+        if "diag3d: done" in log or "diag3d: the glasses are not connected" in log: break
+    open(os.path.join(out, "diag3d-app.txt"), "w", encoding="utf-8").write(log)
+    for line in log.splitlines(): print(line.split("UltraXR :")[-1].strip()[:170])
+    print("reading the phone's DisplayPort driver log (a bug report, two to three minutes)...", flush=True)
+    z = os.path.join(out, "diag3d-bugreport.zip")
+    run(["adb", "-s", dev, "bugreport", z], 600)
+    kept = []
+    try:
+        with zipfile.ZipFile(z) as f:
+            name = [n for n in f.namelist() if n.startswith("bugreport-") and n.endswith(".txt")][0]
+            for raw in f.open(name):
+                line = raw.decode("utf-8", "replace")
+                if "dwc_dptx" in line and "TXEQ" not in line and "tx_eq_set" not in line and "PHY lane" not in line and "adjust lane" not in line and "Wait busy" not in line: kept.append(line.rstrip())
+        os.remove(z)       # the bug report holds far more than this needs; only the driver's lines are kept
+    except Exception as e: print("the bug report could not be read: %s" % e)
+    open(os.path.join(out, "diag3d-kernel.txt"), "w", encoding="utf-8").write(chr(10).join(kept))
+    def count(word): return sum(1 for l in kept if word in l)
+    print("DisplayPort driver lines kept: %d; link trainings finished %d, unplug events %d, plug events %d, mode enables %d" % (
+        len(kept), count("LINK TRAINING DONE"), count("HPD_UNPLUG start"), count("HPD_PLUG start"), count("ENABLE MODE")))
+    for l in kept:
+        if "RECEIVER CAPS" in l or "LINK TRAINING DONE" in l or "ENABLE MODE" in l or "HPD changed" in l or "CR_DONE = 0" in l or "DROP" in l: print("  " + l[l.find("["):][:150])
+    return 0
+
 def main():
     a = sys.argv[1:]
-    if not a or a[0] not in ("replay", "pacing", "restore"): print(__doc__); return 2
+    if not a or a[0] not in ("replay", "pacing", "restore", "diag3d"): print(__doc__); return 2
     dev = device()
     if dev is None: print("The Pixel is not reachable over adb. Nothing was done."); return 3
     if a[0] == "restore": restore(dev); return 0
     if a[0] == "pacing": return pacing(dev, a[1])
+    if a[0] == "diag3d": return diag3d(dev, a[1])
     runs = list(RUNS)
     if "--runs" in a: i = a.index("--runs"); runs = a[i + 1].split(","); del a[i:i + 2]
     return replay(dev, a[1], a[2], runs)

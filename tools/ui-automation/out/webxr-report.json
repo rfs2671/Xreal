@@ -5,7 +5,7 @@
  "ar": true,
  "mode": "immersive-ar",
  "error": null,
- "frames": 1524,
+ "frames": 1501,
  "views": 2,
  "viewports": [
   [
@@ -97,14 +97,14 @@
  "squeezeEvents": 0,
  "triggerMax": 1,
  "pinchGapMin": 0.004,
- "pinchGapMax": 0.1457,
- "frameMsAvg": 20.21,
+ "pinchGapMax": 0.1461,
+ "frameMsAvg": 20.19,
  "clicks": 1,
  "hitTest": false,
  "anchors": false,
  "ended": false,
  "events": {
-  "pointermove": 7,
+  "pointermove": 10,
   "pointerdown": 1,
   "touchstart": 1,
   "pointerup": 1,

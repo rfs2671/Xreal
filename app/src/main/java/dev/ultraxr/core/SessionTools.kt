@@ -25,16 +25,45 @@ class RecenterGesture(private val holdNs: Long = 1_500_000_000L) {
     }
 }
 
-/** A pinch as on/off from the distance between thumb tip and index tip, with hysteresis so it does not chatter. */
-class PinchState(private val pressM: Float = 0.018f, private val releaseM: Float = 0.032f) {
+/**
+ * A pinch as on/off from the distance between thumb tip and index tip.
+ *
+ *  - Hysteresis: it starts under one distance and ends only above a larger one, so it does not chatter.
+ *  - Relative to the hand: when the length of the index finger is given, the fingertips also count as together
+ *    under [pressRatio] of that length. A tracker that gets a hand's distance from the cameras slightly wrong gets
+ *    its size wrong by the same factor, so a distance in finger lengths survives that where one in millimetres does not.
+ *  - Two results in a row: with [frames] = 2 a single stray result neither starts nor ends a pinch.
+ *  - Brief loss: the tracker often loses a hand for a frame or two exactly when the fingers touch, because they hide
+ *    each other. [lost] with a time keeps the pinch for [holdNs]; only a longer loss ends it.
+ */
+class PinchState(private val pressM: Float = 0.018f, private val releaseM: Float = 0.032f,
+                 private val pressRatio: Float = 0.28f, private val releaseRatio: Float = 0.48f,
+                 private val frames: Int = 1, private val holdNs: Long = 250_000_000L) {
     var pinching = false; private set
-    /** Returns true on the moment the pinch starts. */
-    fun update(gapM: Float): Boolean {
+    private var run = 0
+    private var lostSinceNs = 0L
+
+    /** One tracking result. [fingerM] is the index finger's length, 0 when not known. Returns true on the moment the pinch starts. */
+    fun update(gapM: Float, fingerM: Float = 0f): Boolean {
+        lostSinceNs = 0L
+        val scaled = fingerM > 0.03f
+        val together = gapM < pressM || (scaled && gapM < pressRatio * fingerM)
+        val apart = gapM > releaseM && (!scaled || gapM > releaseRatio * fingerM)
         val was = pinching
-        pinching = if (was) gapM < releaseM else gapM < pressM
+        val wants = if (was) !apart else together
+        if (wants == was) { run = 0; return false }
+        if (++run < frames) return false
+        run = 0; pinching = wants
         return pinching && !was
     }
-    fun lost() { pinching = false }
+
+    /** The hand was not found. Without a time, or after [holdNs] without the hand, the pinch ends. Returns true while it is kept. */
+    fun lost(nowNs: Long = 0L): Boolean {
+        if (nowNs == 0L || !pinching) { pinching = false; run = 0; lostSinceNs = 0L; return false }
+        if (lostSinceNs == 0L) lostSinceNs = nowNs
+        if (nowNs - lostSinceNs > holdNs) { pinching = false; run = 0; lostSinceNs = 0L; return false }
+        return true
+    }
 }
 
 /**
@@ -51,8 +80,20 @@ class SessionJournal(val client: String, val display: String, val handsAs: Strin
     /** Thumb-tip to index-tip distance while each hand was tracked: the smallest seen, and how often it was under 2, 3 and 5 cm. */
     val minGapM = floatArrayOf(Float.MAX_VALUE, Float.MAX_VALUE)
     val gapUnder = arrayOf(longArrayOf(0, 0, 0), longArrayOf(0, 0, 0))
+    /** Frames in which a hand that had just been lost was kept where it was. */
+    val heldFrames = longArrayOf(0, 0)
+    private val fingerSum = doubleArrayOf(0.0, 0.0); private val fingerN = longArrayOf(0, 0)
+    private val minRatio = floatArrayOf(Float.MAX_VALUE, Float.MAX_VALUE)
+    private val lastGap = floatArrayOf(0f, 0f)
+    /** The index finger's measured length for this frame (call after [gap]). */
+    fun finger(side: Int, m: Float) {
+        if (m <= 0.03f) return
+        fingerSum[side] += m; fingerN[side]++
+        val r = lastGap[side] / m; if (r < minRatio[side]) minRatio[side] = r
+    }
     fun gap(side: Int, m: Float) {
         if (m < minGapM[side]) minGapM[side] = m
+        lastGap[side] = m
         if (m < 0.02f) gapUnder[side][0]++; if (m < 0.03f) gapUnder[side][1]++; if (m < 0.05f) gapUnder[side][2]++
     }
     var stereoMatchesSum = 0L; var landmarksSum = 0L; var vioSamples = 0L
@@ -83,6 +124,8 @@ class SessionJournal(val client: String, val display: String, val handsAs: Strin
         for ((side, name) in listOf(0 to "left", 1 to "right")) if (handFrames[side] > 0) {
             put(name + "_min_gap_mm", Math.round(minGapM[side] * 1000.0))
             put(name + "_frames_gap_under_20_30_50_mm", "" + gapUnder[side][0] + "/" + gapUnder[side][1] + "/" + gapUnder[side][2])
+            if (fingerN[side] > 0) { put(name + "_index_finger_mm", Math.round(fingerSum[side] / fingerN[side] * 1000)); put(name + "_min_gap_in_finger_lengths", Math.round(minRatio[side] * 100) / 100.0) }
+            put(name + "_frames_held_through_loss", heldFrames[side])
         }
         put("mean_stereo_matches", if (vioSamples > 0) stereoMatchesSum.toDouble() / vioSamples else 0.0)
         put("mean_landmarks", if (vioSamples > 0) landmarksSum.toDouble() / vioSamples else 0.0)

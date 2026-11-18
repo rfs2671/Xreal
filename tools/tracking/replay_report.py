@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compares replays of one recording through the trackers with different settings.
 
-  python replay_report.py RECORDING.uxrec DIR TAG [TAG ...] [--out FILE.json]
+  python replay_report.py RECORDING.uxrec DIR TAG [TAG ...] [--revisits REVISITS.json] [--out FILE.json]
 
 DIR holds TAG-vio.csv, TAG-hands.csv and TAG-notes.txt as written by the app's replay (tracking/ReplayLog). The
 recording itself is read for one thing only: when the glasses were still (the motion sensor says under 3 degrees
@@ -48,7 +48,7 @@ def stretches(still):
 def read(path):
     with open(path, newline="") as f: return list(csv.DictReader(f))
 
-def run_report(d, tag, still, spans, calm_spans=()):
+def run_report(d, tag, still, spans, calm_spans=(), revisits=()):
     r = {"tag": tag}
     vio = read(os.path.join(d, tag + "-vio.csv")); hands = read(os.path.join(d, tag + "-hands.csv"))
     notes = open(os.path.join(d, tag + "-notes.txt")).read().strip().splitlines() if os.path.exists(os.path.join(d, tag + "-notes.txt")) else []
@@ -71,6 +71,27 @@ def run_report(d, tag, still, spans, calm_spans=()):
         for a, b in spans:
             k = (t >= a) & (t < b) & trusted
             if k.sum() > 20 and epoch[k].max() == epoch[k].min(): w.append(float(np.linalg.norm(p[k] - p[k][0], axis=1).max() * 100))
+        # The estimator's own output over each still stretch, whether or not the app trusted it at the time: how far
+        # it strays, and how far apart its first and last second are. This is the estimator's drift with no gating.
+        raw = []; ends = []
+        for a, b in spans:
+            k = (t >= a) & (t < b)
+            if k.sum() > 60 and epoch[k].max() == epoch[k].min():
+                q = p[k]; raw.append(float(np.linalg.norm(q - q[:30].mean(axis=0), axis=1).max() * 100))
+                ends.append(float(np.linalg.norm(q[-30:].mean(axis=0) - q[:30].mean(axis=0)) * 100))
+        r["still_raw_stray_cm_worst"] = max(raw) if raw else None; r["still_raw_end_minus_start_cm"] = max(ends) if ends else None
+        r["still_trusted_share"] = float(np.mean([trusted[(t >= a) & (t < b)].mean() for a, b in spans])) if spans else None
+        k = t < 97
+        r["worn_stereo_points_median"] = float(np.median(stereo[k])) if k.sum() else None; r["worn_trusted_share"] = float(trusted[k].mean()) if k.sum() else None
+        # Revisits (tools/tracking/revisit.py): the head was in the same place at t1 and t2, so the distance reported
+        # between them is drift. Only pairs where position was trusted at both ends and the estimator did not restart.
+        e = []
+        for pr in revisits:
+            i = int(np.argmin(np.abs(t - pr["t1"]))); j = int(np.argmin(np.abs(t - pr["t2"])))
+            if abs(t[i] - pr["t1"]) < 0.1 and abs(t[j] - pr["t2"]) < 0.1 and epoch[i] == epoch[j] and trusted[i] and trusted[j]:
+                e.append(float(np.linalg.norm(p[j] - p[i]) * 100))
+        r["revisits_scored"] = len(e)
+        r["revisit_error_cm_median"] = float(np.median(e)) if e else None; r["revisit_error_cm_p90"] = float(np.percentile(e, 90)) if e else None; r["revisit_error_cm_worst"] = max(e) if e else None
         r["wander_cm_median"] = float(np.median(w)) if w else None; r["wander_cm_worst"] = float(max(w)) if w else None; r["still_stretches_used"] = len(w)
         # On the head and calm (under 12 deg/s): the head does move a little here, so this is an upper bound on error,
         # per second of calm, not error itself. Useful only to compare runs on the same motion.
@@ -79,6 +100,24 @@ def run_report(d, tag, still, spans, calm_spans=()):
             k = (t >= a) & (t < b) & trusted
             if k.sum() > 20 and epoch[k].max() == epoch[k].min(): c.append(float(np.linalg.norm(p[k] - p[k][0], axis=1).max() * 100 / (b - a)))
         r["calm_spread_cm_per_s"] = float(np.median(c)) if c else None; r["calm_stretches_used"] = len(c)
+        # What the application was given (TAG-app.csv, builds from 17 Nov 2026 evening on): the same two questions asked
+        # of the head position handed to games, which includes "not trusted" and "lying still" holds.
+        ap = os.path.join(d, tag + "-app.csv")
+        if os.path.exists(ap):
+            rows = read(ap)
+            if rows:
+                ta = np.array([float(v["t"]) for v in rows]); h = np.array([[float(v["hx"]), float(v["hy"]), float(v["hz"])] for v in rows]); ly = np.array([v["lying"] == "1" for v in rows])
+                stray = [float(np.linalg.norm(h[(ta >= a) & (ta < b)] - h[(ta >= a) & (ta < b)][:30].mean(axis=0), axis=1).max() * 100) for a, b in spans if ((ta >= a) & (ta < b)).sum() > 60]
+                # from two seconds into each still stretch: the hold needs a second to notice
+                late = [float(np.linalg.norm(h[(ta >= a + 2) & (ta < b)] - h[(ta >= a + 2) & (ta < b)][:30].mean(axis=0), axis=1).max() * 100) for a, b in spans if ((ta >= a + 2) & (ta < b)).sum() > 60]
+                r["app_still_stray_cm"] = max(stray) if stray else None; r["app_still_stray_after_2s_cm"] = max(late) if late else None
+                r["lying_share_while_still"] = float(np.mean([ly[(ta >= a) & (ta < b)].mean() for a, b in spans])) if spans else None
+                r["lying_share_while_worn"] = float(ly[ta < 97].mean()) if (ta < 97).sum() else None
+                e = []
+                for pr in revisits:
+                    i = int(np.argmin(np.abs(ta - pr["t1"]))); j = int(np.argmin(np.abs(ta - pr["t2"])))
+                    if abs(ta[i] - pr["t1"]) < 0.1 and abs(ta[j] - pr["t2"]) < 0.1: e.append(float(np.linalg.norm(h[j] - h[i]) * 100))
+                r["app_revisit_error_cm_median"] = float(np.median(e)) if e else None; r["app_revisit_error_cm_worst"] = max(e) if e else None
     else: r["states"] = 0
     if hands:
         mask = np.array([int(h["mask"]) for h in hands]); ms = np.array([float(h["process_ms"]) for h in hands])
@@ -100,14 +139,15 @@ def run_report(d, tag, still, spans, calm_spans=()):
     return r
 
 def main():
-    a = sys.argv[1:]; out = None
+    a = sys.argv[1:]; out = None; revisits = []
+    if "--revisits" in a: i = a.index("--revisits"); revisits = json.load(open(a[i + 1]))["pairs"]; del a[i:i + 2]
     if "--out" in a: i = a.index("--out"); out = a[i + 1]; del a[i:i + 2]
     if len(a) < 3: print(__doc__); return 2
     still, _ = still_seconds(a[0]); spans = stretches(still)
     calm, _ = still_seconds(a[0], 12.0); calm_spans = [sp for sp in stretches(calm - still)]
     print("the glasses were still for %d of the recording's seconds, in %d stretches of 3 s or more; calm but not still (on the head) in %d stretches" % (len(still), len(spans), len(calm_spans)))
-    rows = [run_report(a[1], tag, still, spans, calm_spans) for tag in a[2:]]
-    keys = ["trusted_share", "stereo_points_median", "landmarks_median", "creep_cm_s", "wander_cm_median", "wander_cm_worst", "calm_spread_cm_per_s", "jumps_over_5cm", "estimator_restarts", "resets_noted",
+    rows = [run_report(a[1], tag, still, spans, calm_spans, revisits) for tag in a[2:]]
+    keys = ["app_revisit_error_cm_median", "app_revisit_error_cm_worst", "app_still_stray_cm", "app_still_stray_after_2s_cm", "lying_share_while_still", "lying_share_while_worn", "revisits_scored", "revisit_error_cm_median", "revisit_error_cm_p90", "revisit_error_cm_worst", "worn_trusted_share", "worn_stereo_points_median", "calm_spread_cm_per_s", "still_trusted_share", "still_raw_stray_cm_worst", "still_raw_end_minus_start_cm", "creep_cm_s", "wander_cm_worst", "landmarks_median", "jumps_over_5cm", "estimator_restarts", "resets_noted",
             "process_ms_median", "left_found_frames", "right_found_frames", "left_longest_run_frames", "right_longest_run_frames", "hand_process_ms_median"]
     print("%-28s" % "" + "".join("%16s" % r["tag"][:15] for r in rows))
     for k in keys:

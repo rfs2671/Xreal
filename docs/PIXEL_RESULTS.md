@@ -174,24 +174,78 @@ session record and log (about 85 s worn):
 - Not reached: accepting Wolvic's terms (shown inside the glasses, needs a pinch on AGREE),
   entering XR dragging, any interaction.
 
-## Half-width 3D on this phone: where it stands
+## Half-width 3D on this phone: the evidence, suspect by suspect
 
-Collected from every attempt so far (four on 17 November 2026, three earlier):
+Four things could end half-width 3D (glasses mode 8) after two seconds. What the logs say about
+each:
 
-- The glasses accept mode 8 and re-plug the video link. In that mode their DisplayPort receiver
-  advertises only the lowest link rate. Earlier kernel logs show the Pixel failing four-lane
-  training at that rate on some plugs and falling to 640x480.
-- On 17 November the link came back at 1920x1080@60 every time, and every time the glasses
-  reported mode 1 again 2.3 s later, without a link restart, and showed nothing afterwards.
-- No attempt on this phone is known to have produced a picture in the glasses in mode 8. The
-  earlier note that the link "ran for about 90 and 140 seconds" does not say whether anything was
-  seen in the glasses during that time, and one earlier attempt is recorded as black.
+**1. The Pixel's link training: not the cause.** The phone's DisplayPort driver log exists for
+two earlier entries into mode 8 (bug report of 16 November, `ultra-dp-logs/pixel-dmesg-halfsbs.txt`).
+Both times:
 
-What is not known: whether the glasses give up because the picture the Pixel sends at the low
-link rate is not one they can lock to, or because their firmware expects something else of a
-half-width source. Telling these apart needs either the phone's kernel log during an attempt
-(not readable without root) or a different source device. Neither a firmware write nor a kernel
-change is allowed, so nothing further can be tried on this pair of devices from software alone.
+- the glasses advertised the low link rate (`RECEIVER CAPS: 12 06 84`, against `12 0a 84` in 2D)
+  and a plain 1920x1080@60 picture (EDID detailed timing 148.5 MHz, the same as in 2D);
+- training finished in one pass: clock recovery after two voltage steps on one lane, channel
+  equalisation at once, `LINK TRAINING DONE: rate=0 lanes=4`;
+- the driver enabled `1920x1080 60 148500 ...` with `tu = 44` (3.56 of 5.18 Gbit/s used);
+- and the link then stayed up for 90 s and for 137 s, with no error, no interrupt from the
+  glasses and no retraining, until the mode was changed by hand.
 
-Kept as it is: the attempt is off by default, is bounded when switched on, and a session that
-loses 3D drops to one picture at once.
+So the phone can train and hold the link the glasses ask for in this mode. (An earlier section
+of this document describes two other plugs where four-lane training failed and the phone fell
+to two lanes and 640x480. That failure exists too, but it is a different one: it shows as a
+narrow display, which the app detects and gives up on. It did not occur on 17 November.)
+
+**2. The app restoring 2D: not the cause.** On 17 November every mode command the app sent is in
+its log. In the four failed attempts it sent the 3D command and nothing else until the glasses
+were already reporting 2D; its own return-to-2D command, where it sent one, came afterwards.
+The glasses' mode was read back as 8, then as 1, with no command in between.
+
+**3. The phone's link dropping when the glasses change their mind: not seen.** On 17 November
+the phone's display for the glasses stayed present at 1920x1080 through the change back to 2D.
+(There is no driver log for those attempts: the kernel's log had rolled over before it was read.)
+
+**4. The glasses themselves: what is left.** The timing of all five attempts on 17 November,
+in seconds after the 3D command (from the app's log; the mode is read every two seconds, so
+"reported 2D" is the first reading that showed it):
+
+| | 16:22:21 | 16:33:05 | 16:33:26 | 16:33:35 | 16:33:44 |
+|---|---|---|---|---|---|
+| phone's display for the glasses gone | 0.3 | 0.4 | 0.3 | 0.4 | 0.3 |
+| glasses log "Close OLED" | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+| glasses report mode 8 | (not logged) | 1.1 | 2.3 | 2.3 | 2.3 |
+| display back at 1920x1080 | 3.7 | 3.5 | 2.0 | 2.1 | 2.1 |
+| glasses report mode 1 again | by 6.8 | 5.7 | 4.5 | 4.6 | 4.5 |
+| glasses log "Open OLED 2D" | 6.7 | 6.7 | 5.5 | 4.5 | 5.5 |
+
+Every time, the glasses took the mode, the picture came back, and 2.2 to 3.1 s after that they
+reported 2D again; their screen then came on with their own log line saying "2D". They were
+being worn. On 16 November, when the mode held for 90 and 137 s, nobody was wearing them and
+their screen did not come on at all.
+
+What this does and does not establish: the mode is abandoned by the glasses, two to three
+seconds after the picture returns and just before they switch their screen on, not by the
+phone's link and not by the app. Whether being worn is what makes the difference from
+16 November is likely but not shown (it is the only difference recorded). Why their firmware
+goes back to 2D is not known. Reading that out of the firmware was started and stopped
+(this environment's safety check ended it); no firmware was modified at any point.
+
+Whether a real picture has ever been shown in mode 8 from this phone is also not known: on
+16 November nobody was looking.
+
+### What can still be tried without touching firmware or kernel
+
+All reversible, each a single command sequence, none tried yet because each needs the glasses
+connected and worn:
+
+- **Ask again once the screen is on.** If the glasses drop the mode only on the way to
+  switching their screen on, a second request made once it is on may hold. `GlassesLink.diag3d`
+  does exactly this, once, with everything logged five times a second, and
+  `tools/pixel/lab.py diag3d` runs it and then pulls the phone's DisplayPort driver log for the
+  same seconds out of a bug report.
+- **The same sequence from the laptop.** If the glasses hold mode 8 with their screen on when a
+  PC is the source, the difference is in what the Pixel sends; if they drop it there too, it is
+  how this firmware treats mode 8, and no phone-side change will help.
+
+Until one of these says otherwise, the product stays as it is: 2D by default, the 3D attempt a
+switch in Settings, bounded, and a session that loses 3D drops to one picture at once.

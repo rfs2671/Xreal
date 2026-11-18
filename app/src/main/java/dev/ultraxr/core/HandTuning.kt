@@ -9,10 +9,11 @@ package dev.ultraxr.core
  *   quality_filter=0|1 XR Gate's hand quality filter off or on (unset: the library's own default)
  *   press_mm=18        thumb-tip to index-tip distance below which a pinch starts
  *   release_mm=32      distance above which it ends
+ *   steady=1           smooth the hand's place and keep the pointer where it was while a pinch lands (core/HandSteady)
  *   snap=1             while pinching, hand the application a hand whose two fingertips touch, so an
  *                      application with a tighter threshold of its own (a browser) sees the pinch too
  */
-data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean? = null, val pressM: Float = 0.018f, val releaseM: Float = 0.032f, val snap: Boolean = true) {
+data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean? = null, val pressM: Float = 0.018f, val releaseM: Float = 0.032f, val snap: Boolean = true, val steady: Boolean = true) {
     companion object {
         fun parse(text: String?): HandOptions {
             var o = HandOptions()
@@ -25,6 +26,7 @@ data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean?
                     "press_mm" -> v.toFloatOrNull()?.takeIf { it in 5f..60f }?.let { o.copy(pressM = it / 1000f) } ?: o
                     "release_mm" -> v.toFloatOrNull()?.takeIf { it in 8f..90f }?.let { o.copy(releaseM = it / 1000f) } ?: o
                     "snap" -> o.copy(snap = v == "1")
+                    "steady" -> o.copy(steady = v == "1")
                     else -> o
                 }
             }

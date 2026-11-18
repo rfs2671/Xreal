@@ -266,7 +266,11 @@ object XrHost : OpenXrGlassesLayer.Host {
         val pressed = booleanArrayOf(false, false)
         val joints = FloatArray(UltraXrFeed.HAND_FLOATS)
         val ho = Tracking.handOptions
-        val pinch = arrayOf(dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM), dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM))
+        val pinch = arrayOf(dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM, frames = 2), dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM, frames = 2))
+        // The last hand given to the application, kept through a loss of a quarter of a second at most.
+        val heldJoints = arrayOf(FloatArray(UltraXrFeed.HAND_FLOATS), FloatArray(UltraXrFeed.HAND_FLOATS))
+        val heldSinceNs = longArrayOf(0L, 0L); val haveHeld = booleanArrayOf(false, false)
+        val steady = arrayOf(dev.ultraxr.core.HandSteady(), dev.ultraxr.core.HandSteady()); val palm = DoubleArray(3); val off = DoubleArray(3)
         val recenter = dev.ultraxr.core.RecenterGesture()
         var vioTickNs = 0L
         while (feeding) {
@@ -317,22 +321,44 @@ object XrHost : OpenXrGlassesLayer.Host {
                 if (side == 1 && pointer) continue
                 val hand = hands.firstOrNull { it.isRight == (side == 1) && it.timestampNs == newest }
                 val poses = Tracking.handPoses26(side)
-                if (hand == null || poses == null) { UltraXrFeed.hand(side, newest, null, false); pressed[side] = false; pinch[side].lost(); continue }
+                if (hand == null || poses == null) {
+                    // Lost for a moment (fingers hiding each other in a pinch, the hand at the edge of the view): the
+                    // application keeps the hand where it was, pinch included, for a quarter of a second.
+                    if (haveHeld[side]) {
+                        if (heldSinceNs[side] == 0L) heldSinceNs[side] = nowNs
+                        if (nowNs - heldSinceNs[side] <= 250_000_000L) { pinch[side].lost(nowNs); UltraXrFeed.hand(side, newest, heldJoints[side], true); journal?.let { j -> j.heldFrames[side]++ }; continue }
+                    }
+                    haveHeld[side] = false; heldSinceNs[side] = 0L; steady[side].reset()
+                    UltraXrFeed.hand(side, newest, null, false); pressed[side] = false; pinch[side].lost(); continue
+                }
                 val tt = hand.joint(Hand.THUMB_TIP); val it2 = hand.joint(Hand.INDEX_TIP)
                 val gap = sqrt((tt[0] - it2[0]) * (tt[0] - it2[0]) + (tt[1] - it2[1]) * (tt[1] - it2[1]) + (tt[2] - it2[2]) * (tt[2] - it2[2])).toFloat()
-                val began = pinch[side].update(gap)
+                // Index finger length along its bones (knuckle, two joints, tip): the hand's own ruler.
+                var finger = 0f
+                for (b in 5..7) { val p0 = hand.joint(b); val p1 = hand.joint(b + 1); finger += sqrt((p0[0] - p1[0]) * (p0[0] - p1[0]) + (p0[1] - p1[1]) * (p0[1] - p1[1]) + (p0[2] - p1[2]) * (p0[2] - p1[2])).toFloat() }
+                val began = pinch[side].update(gap, finger)
                 journal?.let { j -> j.handFrames[side]++; if (began) j.pinches[side]++; j.gap(side, gap) }
                 // While our own (measured) rule says "pinching", the application is given fingertips that touch: a
                 // browser decides a pinch by its own, tighter distance, which a tracked hand may never reach.
                 val snap = ho.snap && pinch[side].pinching
                 val ti = UltraXrFeed.Joint.THUMB_METACARPAL + 3; val ii = UltraXrFeed.Joint.INDEX_METACARPAL + 4
                 val mx = (poses[ti * 7] + poses[ii * 7]) / 2; val my = (poses[ti * 7 + 1] + poses[ii * 7 + 1]) / 2; val mz = (poses[ti * 7 + 2] + poses[ii * 7 + 2]) / 2
+                // The whole hand is moved by one offset: its place steadied, its shape untouched (core/HandSteady).
+                var ox = 0f; var oy = 0f; var oz = 0f
+                if (ho.steady) {
+                    val pj = UltraXrFeed.Joint.PALM * 7
+                    palm[0] = poses[pj].toDouble(); palm[1] = poses[pj + 1].toDouble(); palm[2] = poses[pj + 2].toDouble()
+                    steady[side].offset(hand.timestampNs, palm, began, pinch[side].pinching, off)
+                    ox = off[0].toFloat(); oy = off[1].toFloat(); oz = off[2].toFloat()
+                }
                 for (j in 0 until UltraXrFeed.Joint.COUNT) {
                     val o = j * 7
-                    if (snap && (j == ti || j == ii)) UltraXrFeed.putJoint(joints, j, mx, my, mz, poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], 0.008f)
-                    else UltraXrFeed.putJoint(joints, j, poses[o], poses[o + 1], poses[o + 2], poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], if (j == 0) 0.02f else 0.008f)
+                    if (snap && (j == ti || j == ii)) UltraXrFeed.putJoint(joints, j, mx + ox, my + oy, mz + oz, poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], 0.008f)
+                    else UltraXrFeed.putJoint(joints, j, poses[o] + ox, poses[o + 1] + oy, poses[o + 2] + oz, poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], if (j == 0) 0.02f else 0.008f)
                 }
                 UltraXrFeed.hand(side, hand.timestampNs, joints, true)
+                System.arraycopy(joints, 0, heldJoints[side], 0, joints.size); haveHeld[side] = true; heldSinceNs[side] = 0L
+                journal?.let { j -> j.finger(side, finger) }
                 val st = states.firstOrNull { it.isRight == (side == 1) } ?: continue
                 if (!handsOnly) feedController(side, hand, st, poses, pressed)
             }

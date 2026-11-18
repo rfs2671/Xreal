@@ -40,6 +40,37 @@ class SessionToolsTest {
         p.lost(); assertFalse(p.pinching)
     }
 
+    @Test fun aPinchCanBeJudgedInFingerLengths() {
+        // A hand tracked 30 % too large: its fingertips never come under 18 mm, but they do come under 0.28 finger lengths.
+        val p = PinchState()
+        assertFalse(p.update(0.060f, 0.100f))
+        assertTrue("24 mm on a 100 mm finger is together", p.update(0.024f, 0.100f))
+        assertFalse(p.update(0.040f, 0.100f)); assertTrue("40 mm is not yet apart on that hand", p.pinching)
+        assertFalse(p.update(0.055f, 0.100f)); assertFalse(p.pinching)
+        // without a finger length the millimetre rule is all there is
+        assertFalse(PinchState().update(0.024f))
+    }
+
+    @Test fun oneStrayResultNeitherStartsNorEndsAPinch() {
+        val p = PinchState(frames = 2)
+        assertFalse(p.update(0.010f)); assertFalse("one result is not enough", p.pinching)
+        assertFalse(p.update(0.060f)); assertFalse(p.update(0.010f)); assertFalse(p.pinching)
+        assertTrue("two in a row", p.update(0.010f)); assertTrue(p.pinching)
+        assertFalse(p.update(0.060f)); assertTrue("one open result does not end it", p.pinching)
+        assertFalse(p.update(0.010f)); assertFalse(p.update(0.060f)); assertTrue(p.pinching)
+        assertFalse(p.update(0.060f)); assertFalse(p.pinching)
+    }
+
+    @Test fun aPinchSurvivesLosingTheHandBrieflyButNotForLong() {
+        val ms = 1_000_000L
+        val p = PinchState(); assertTrue(p.update(0.010f))
+        assertTrue(p.lost(1000 * ms)); assertTrue(p.lost(1100 * ms)); assertTrue("fingers hid each other for 0.2 s", p.pinching)
+        assertFalse(p.update(0.012f)); assertTrue("the same pinch goes on", p.pinching)
+        assertTrue(p.lost(2000 * ms)); assertFalse("gone for 0.3 s", p.lost(2300 * ms)); assertFalse(p.pinching)
+        // a hand that was not pinching is simply lost
+        val q = PinchState(); assertFalse(q.lost(5000 * ms)); assertFalse(q.pinching)
+    }
+
     @Test fun theJournalCountsWhatHappened() {
         val j = SessionJournal("com.example", "glasses, one view per eye", "joints", 1000)
         j.head(false, doubleArrayOf(0.0, 0.0, 0.0))
