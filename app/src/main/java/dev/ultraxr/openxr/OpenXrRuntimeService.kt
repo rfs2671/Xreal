@@ -68,7 +68,11 @@ class OpenXrRuntimeService : Service() {
         private val packages = context.packageManager
         override fun canDrawOverOtherApps(): Boolean {
             // The first thing an application asks over Binder: note who it is, so the host can feed it suitably.
-            OpenXrGlassesLayer.clientPackage = runCatching { packages.getNameForUid(android.os.Binder.getCallingUid()) }.getOrNull() ?: ""
+            // A name that cannot be resolved (seen on the Pixel: the session was then treated as an unknown application,
+            // given controllers as well as hands, and the browser aimed by the controller instead of by the hand) must
+            // not wipe out the one the launcher set when it started the application.
+            val name = runCatching { packages.getNameForUid(android.os.Binder.getCallingUid()) }.getOrNull()
+            if (!name.isNullOrEmpty()) OpenXrGlassesLayer.clientPackage = name
             return OpenXrGlassesLayer.canShow()
         }
     }

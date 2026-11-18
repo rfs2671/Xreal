@@ -28,6 +28,8 @@ object XrRuntime {
         Tracking.stereoWant("game", wantStereo)
         TrackingService.start(c)
         XrHost.openShell()
+        // The launcher knows what it is starting: say so now, in case the application's name cannot be read later.
+        dev.ultraxr.openxr.OpenXrGlassesLayer.clientPackage = browser.activityInfo.packageName
         val i = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).setClassName(browser.activityInfo.packageName, browser.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try { c.startActivity(i) } catch (e: Exception) { Tracking.log("could not open $url in ${browser.activityInfo.packageName}: $e") }
     }
@@ -41,6 +43,7 @@ object XrRuntime {
         Tracking.stereoWant("game", wantStereo)
         TrackingService.start(c)
         XrHost.openShell()
+        dev.ultraxr.openxr.OpenXrGlassesLayer.clientPackage = info.activityInfo.packageName
         val i = Intent(Intent.ACTION_MAIN).addCategory(CATEGORY_IMMERSIVE).setClassName(info.activityInfo.packageName, info.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try { c.startActivity(i) } catch (e: Exception) { Tracking.log("could not start ${info.activityInfo.packageName}: $e") }
     }
