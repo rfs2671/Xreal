@@ -74,3 +74,46 @@ only 7 % above the wrong ones when pictures are added up, which is not enough to
 ## The one test that decides
 
 In `ACCEPTANCE.md`. It asks five things, each with a number or a yes/no, and each answer points at one cause.
+
+## 18 November, afternoon: the owner's Room check, and what it showed
+
+The owner lowered the floor until it "looked perfect" and a grid line stayed on a floor mark while he walked
+(one eye closed). From the phone's log of that session:
+
+- the cameras put the floor 1.84 m below where his head was when the session started (1.50 to 1.60 m below the
+  cameras while he looked down and walked). He is 6 ft 1 in; that is the real floor within about 10 cm;
+- "perfect" was 85 cm lower than that: a floor drawn about 2.4 m below the cameras sits, for his eyes, on a floor
+  about 1.6 m below them.
+
+Checked since, on this machine:
+
+| Suspect | Test | Result |
+|---|---|---|
+| The app draws things at the wrong place in the picture | Emulator, single 2D picture, the simulated table: rows of its lines in the captured picture against the rows geometry gives | 208, 332, 489, 695, 974 against 208 and 976 for the far and near edge. Exact. |
+| The cameras' "level" is tilted | The counter top in the recording, as a plane in the measured world | Level within 1 to 2 degrees over 2.5 m of depth. |
+
+So what is measured is right and what is drawn is right, and still the drawn floor has to be 85 cm too low to be
+seen on the real one. What is left is between the picture and the eye: where the glasses' picture actually sits
+against the motion sensor's straight-ahead. A floor 1.6 m under the eyes that has to be drawn 2.4 m under them is
+a picture seen about 9 to 12 degrees higher than the app assumes, at every distance from 1 to 4 m (which is why
+one floor offset looked right everywhere). The factory file says 0.2 degrees; the owner's eyes say about ten.
+Two other readings of the same answer are not excluded by anything measured: the picture being seen larger than
+the factory file's field of view, or position tracking reporting more movement than there was.
+
+Also seen in the recording: at 120 s the position estimate dropped 0.64 m in two seconds and stayed there while
+the cameras show the counter top 0.61 then 0.70 m below them, so the head had gone down 9 cm, not 64. The estimate
+was marked trusted throughout. That is a tracking fault of its own, not fixed here.
+
+### What was built on it
+
+A picture correction (`Settings.pictureTiltDeg`): the view handed to the runtime is turned up by that angle about
+the head's left-right axis, so everything any XR application draws lands that much lower: floor, table tops,
+walls, hands, and every game, not only the Room check's floor. The touchpad's two hold buttons now turn the
+picture one degree up or down, and the touchpad shows the angle and the cameras' floor distance in white.
+The owner's 85 cm floor offset is turned into 10 degrees once and the floor offset is cleared.
+
+Verified on the emulator: with 10 degrees set, the table's lines are drawn at rows 754 and 913 where geometry
+gives 755 and 914, and a ray straight ahead meets the wall 0.441 m higher (2.5 m x tan 10 degrees). Not verified:
+that tilt is the right reading. The fingertip rings decide it (`ACCEPTANCE.md`): the hand is placed by the same
+cameras, so rings that sit on the fingertips at the same setting that puts the grid on the floor mean tilt; rings
+that need a different setting than the floor mean size or tracking.

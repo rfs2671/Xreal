@@ -66,32 +66,24 @@ own DisplayPort driver log for those seconds. The picture will blank and may sta
 end; if it does, unplug the glasses and plug them in again. **Question 0: at any point during
 that minute, did you see a picture that was different in each eye?**
 
-## The session (about four minutes): what decides the floor
+## The session (about two minutes): rings on the fingertips, grid on the floor
 
-The floor looked too high even drawn below the real one, and nothing measurable from a recording explains it
-(`SPATIAL_RESEARCH.md`). Each step below has one answer, and each answer points at one cause.
+On 18 November the owner had to draw the floor 85 cm below the measured one for it to look right, with measuring
+and drawing both checked (`SPATIAL_RESEARCH.md`). That is now a picture correction of 10 degrees, set once from
+that answer, and the floor is back at what the cameras measure.
 
-**Before:** a lit room, two steps of clear floor, glasses plugged straight into the phone. Open Ultra XR, open the
-home view in the glasses, look at **Room check** and tap the phone.
+**Before:** a lit room, glasses plugged straight into the phone. Open Ultra XR, open the home view in the
+glasses, look at **Room check** and tap the phone. The phone shows "Picture turned 10 degrees down".
 
-1. **Stand straight and look down until the grid is green. Read the phone:** "Cameras: floor N m under the glasses".
-   **Answer 1: the number.** (Your eyes are about 1.74 m up. If it says about that, the measuring is right and the
-   showing is wrong; if it says 1.4, the measuring is wrong.)
-2. **Close one eye. Is the grid on the floor now?**
-   **Answer 2: yes / still too high / too low.** (Both eyes get the same picture, which sits 3.9 m away for the
-   eyes whatever is drawn. If one eye fixes it, the cause is the missing depth, not the floor.)
-3. **Still one eye closed: walk two steps forward and back, watching one grid line against a mark on the floor.**
-   **Answer 3: the line stays on the mark / slides with me / slides against me.** (A line glued to the floor is at
-   floor height. One that moves along with you is above the floor; this does not depend on judging depth.)
-4. **Hold a hand up at arm's length, one eye closed. A red ring is drawn on the index fingertip and the thumb tip.**
-   **Answer 4: on the fingertips / off by about N finger widths, and which way.** (This is the display's own
-   error, with the floor and walking out of it.)
-5. **Hold "floor down" or "floor up" until the grid is where the floor is (it now goes 1.2 m either way).**
-   **Answer 5: the "moved N cm" the phone shows.**
+1. **One eye closed, hold a hand up at arm's length.** A red ring is drawn on the index fingertip and the thumb tip.
+   If the rings sit above the fingertips hold **picture down**, if below hold **picture up** (one degree a hold),
+   until they are on. **Answer 1: the degrees the phone shows.**
+2. **Without touching the buttons again, look down at the floor.** **Answer 2: is the green grid on the floor:
+   yes / too high / too low.**
+3. **Move the hand to the left or right edge of the picture.** **Answer 3: is the ring still on the fingertip?**
+   (If not, the picture is also the wrong size.)
 
-Then leave with **Hold to leave the game**.
-
-Volume-up recentres the view and the pointer at any time.
+Then leave with **Hold to leave the game**. Volume-up recentres the view and the pointer at any time.
 
 Tell me the three answers. With the phone on Wi-Fi and wireless debugging on, the rest is read
 from it:

@@ -195,6 +195,7 @@ object XrHost : OpenXrGlassesLayer.Host {
             UltraXrFeed.configureEyes(s.ipdMm / 1000f, 0f)
             lastEvent = "runtime configured without a glasses display"
         }
+        loadPictureTilt()
         // Feed heights relative to the head's start; Monado adds the wearer's height for the floor.
         UltraXrFeed.setOriginOffset(0f, s.standingHeightM, 0f)
         UltraXrFeed.configureHands(30f, 250f)
@@ -278,6 +279,29 @@ object XrHost : OpenXrGlassesLayer.Host {
      * taken at once; after that it is followed slowly, so nothing in a game jumps.
      */
     @Volatile private var floorTrim = Float.NaN; private var floorTrimApplied = 0f
+    /** The owner's picture correction in degrees (positive: what is drawn sits lower). */
+    @Volatile var pictureTiltDeg = 0f; private set
+    /**
+     * Reads the picture correction. An owner who had moved the floor far down before this correction existed was
+     * correcting the same thing, at one distance only: that is turned into the tilt once, and the floor goes back
+     * to what the cameras measure.
+     */
+    fun loadPictureTilt() {
+        val st = Tracking.settings
+        if (!st.pictureTiltSet && st.floorTrimM > 0.3f) {
+            Tracking.log("OpenXR: the floor had been moved " + dev.ultraxr.core.Fmt.f(st.floorTrimM * 100.0, 0) + " cm down by hand; now the picture is turned 10 degrees instead and the floor is the measured one")
+            st.pictureTiltDeg = 10f; st.floorTrimM = 0f; floorTrim = 0f
+        }
+        pictureTiltDeg = st.pictureTiltDeg
+        UltraXrFeed.displayPitchRad = Math.toRadians(pictureTiltDeg.toDouble()).toFloat()
+    }
+    /** Turns everything drawn a step down (positive degrees) or up for the owner, who is looking at it; kept. */
+    fun nudgePictureTilt(stepDeg: Float) {
+        val t = (pictureTiltDeg + stepDeg).coerceIn(-20f, 20f)
+        pictureTiltDeg = t; Tracking.settings.pictureTiltDeg = t
+        UltraXrFeed.displayPitchRad = Math.toRadians(t.toDouble()).toFloat()
+        Tracking.log("OpenXR: picture turned by the owner to " + dev.ultraxr.core.Fmt.f(t.toDouble(), 1) + " degrees down")
+    }
     /** Moves the floor a step down (positive) or up for the owner, who is looking at it; kept for next time. */
     fun nudgeFloor(stepM: Float) {
         val t = ((if (floorTrim.isNaN()) Tracking.settings.floorTrimM else floorTrim) + stepM).coerceIn(-1.2f, 1.2f)

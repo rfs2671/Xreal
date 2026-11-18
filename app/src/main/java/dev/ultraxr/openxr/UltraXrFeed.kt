@@ -104,9 +104,20 @@ object UltraXrFeed {
         velX: Float, velY: Float, velZ: Float,
         positionTracked: Boolean,
     ) {
+        // The picture's middle is not exactly where the motion sensor points: the view is turned up by the owner's
+        // correction about the head's own left-right axis (q * a turn about x), so what is drawn lands lower.
+        var qx = qx; var qy = qy; var qz = qz; var qw = qw
+        val tilt = displayPitchRad
+        if (tilt != 0f) {
+            val sn = kotlin.math.sin(tilt / 2); val cs = kotlin.math.cos(tilt / 2)
+            val x = qw * sn + qx * cs; val y = qy * cs + qz * sn; val z = qz * cs - qy * sn; val w = qw * cs - qx * sn
+            qx = x; qy = y; qz = z; qw = w
+        }
         val h = lastHead; h[0] = px; h[1] = py; h[2] = pz; h[3] = qx; h[4] = qy; h[5] = qz; h[6] = qw; lastHeadNs = System.nanoTime()
         PocketFeed.nativePose6(timestampNs, px, py, pz, qx, qy, qz, qw, angVelX, angVelY, angVelZ, velX, velY, velZ, positionTracked)
     }
+    /** How far the view is turned up from the motion sensor's straight-ahead, in radians (the owner's picture correction). */
+    @Volatile var displayPitchRad = 0f
     /** The head pose fed last (position, then orientation x, y, z, w) and when, for whoever tells a page where the head is. */
     val lastHead = FloatArray(7).also { it[6] = 1f }
     @Volatile var lastHeadNs = 0L

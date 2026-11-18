@@ -1,0 +1,61 @@
+{
+ "page": "room",
+ "hasXR": true,
+ "mode": "immersive-ar",
+ "error": null,
+ "frames": 1259,
+ "ready": true,
+ "measured": true,
+ "floorY": 0,
+ "eyeHeight": 1.3,
+ "surfaces": 3,
+ "kinds": "floor,table,wall",
+ "packets": 171,
+ "roomError": null,
+ "lookHit": {
+  "kind": "table",
+  "y": 0.75,
+  "d": 1.1
+ },
+ "apiHit": {
+  "y": 0.75,
+  "x": 0,
+  "z": -0.95
+ },
+ "apiPlanes": [
+  {
+   "label": "floor",
+   "orientation": "horizontal",
+   "points": 5,
+   "y": 0
+  },
+  {
+   "label": "table",
+   "orientation": "horizontal",
+   "points": 5,
+   "y": 0.75
+  },
+  {
+   "label": "wall",
+   "orientation": "vertical",
+   "points": 5,
+   "y": 1.2
+  }
+ ],
+ "apiAnchor": {
+  "y": 1.3,
+  "tracked": true
+ },
+ "balls": 5,
+ "bounces": 56,
+ "features": [
+  "local",
+  "viewer",
+  "hand-tracking",
+  "local-floor",
+  "hit-test",
+  "plane-detection",
+  "anchors"
+ ],
+ "fingerMarks": 4
+}

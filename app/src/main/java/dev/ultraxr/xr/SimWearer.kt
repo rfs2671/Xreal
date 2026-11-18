@@ -72,6 +72,8 @@ object SimWearer {
                     dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.WALL, 0.0, -down + 1.2, -2.5, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.5, 1.0, 120)), 1000, 800))
                 dev.ultraxr.tracking.Tracking.log("sim: room " + (if (down == null) "removed" else "with the floor $down m below the start"))
             }
+            // sim_tilt <degrees>: the owner's picture correction, as the touchpad's Picture buttons set it
+            prop("sim_tilt", "").toDoubleOrNull()?.let { dev.ultraxr.openxr.UltraXrFeed.displayPitchRad = Math.toRadians(it).toFloat() }
             val tap = prop("sim_tap", "")
             if (tap != lastTap) { if (lastTap != null && tap.isNotEmpty()) tapUntilNs = nowNs + 220_000_000L; lastTap = tap }
         }

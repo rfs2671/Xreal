@@ -73,7 +73,7 @@ class PointerService : AccessibilityService() {
     private fun show() {
         val v = Pad(this)
         v.onLeave = { leave() }
-        v.onFloor = { step -> XrHost.nudgeFloor(step) }
+        v.onFloor = { step -> XrHost.nudgePictureTilt(step) }
         val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.OPAQUE)
@@ -117,7 +117,7 @@ class PointerService : AccessibilityService() {
         private val metresPerPixel = 0.7 / minOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels).coerceAtLeast(1)
         init { setBackgroundColor(0xFF05070A.toInt()); keepScreenOn = true }
         var onLeave: (() -> Unit)? = null
-        /** The Floor buttons: called with metres to move the floor down (negative: up). */
+        /** The Picture buttons: called with degrees to turn everything drawn down (negative: up). */
         var onFloor: ((Float) -> Unit)? = null
         private fun inFloorUp(ux: Float, uy: Float, w: Int, h: Int) = ux > w * 0.08f && ux < w * 0.48f && uy > h * 0.66f && uy < h * 0.75f
         private fun inFloorDown(ux: Float, uy: Float, w: Int, h: Int) = ux > w * 0.52f && ux < w * 0.92f && uy > h * 0.66f && uy < h * 0.75f
@@ -178,19 +178,19 @@ class PointerService : AccessibilityService() {
             canvas.drawRoundRect(width * 0.2f, height * 0.80f, width * 0.8f, height * 0.89f, 24 * density, 24 * density, paint)
             paint.style = Paint.Style.FILL; paint.textSize = 18f * density; paint.color = 0xFFE8F0FA.toInt(); paint.textAlign = Paint.Align.CENTER
             canvas.drawText("Hold to leave the game", width / 2f, height * 0.845f + 6 * density, paint)
-            // the floor, for when a game's floor is not on the real one: 3 cm a press, remembered
+            // the picture, for when what is drawn sits above or below the real thing: one degree a press, remembered
             paint.style = Paint.Style.STROKE; paint.color = 0xFF9FB0C4.toInt()
             canvas.drawRoundRect(width * 0.08f, height * 0.66f, width * 0.48f, height * 0.75f, 24 * density, 24 * density, paint)
             canvas.drawRoundRect(width * 0.52f, height * 0.66f, width * 0.92f, height * 0.75f, 24 * density, 24 * density, paint)
             paint.style = Paint.Style.FILL; paint.color = 0xFFE8F0FA.toInt(); paint.textSize = 17f * density
-            canvas.drawText("Hold: floor up", width * 0.28f, height * 0.705f + 6 * density, paint)
-            canvas.drawText("Hold: floor down", width * 0.72f, height * 0.705f + 6 * density, paint)
-            paint.textSize = 13f * density; paint.color = 0xFF9FB0C4.toInt()
-            val cm = Math.round(XrHost.floorTrimM * 100)
-            // what the cameras measure, in a number the wearer can check against a tape measure or their own height
+            canvas.drawText("Hold: picture up", width * 0.28f, height * 0.705f + 6 * density, paint)
+            canvas.drawText("Hold: picture down", width * 0.72f, height * 0.705f + 6 * density, paint)
+            // what is set and what the cameras measure, in numbers the wearer can read out
+            paint.textSize = 17f * density; paint.color = 0xFFFFFFFF.toInt()
+            val tilt = XrHost.pictureTiltDeg
+            canvas.drawText("Picture turned " + dev.ultraxr.core.Fmt.f(Math.abs(tilt).toDouble(), 0) + " degrees " + (if (tilt >= 0) "down" else "up"), width / 2f, height * 0.60f, paint)
             val below = XrHost.measuredBelowGlassesM
-            val said = if (below.isNaN()) "Floor not found yet (using the height setting)" else "Cameras: floor " + dev.ultraxr.core.Fmt.f(below, 2) + " m under the glasses"
-            canvas.drawText(said + (if (cm == 0) "" else ", moved " + Math.abs(cm) + " cm " + (if (cm > 0) "down" else "up")), width / 2f, height * 0.78f, paint)
+            canvas.drawText(if (below.isNaN()) "Floor not found yet" else "Cameras: floor " + dev.ultraxr.core.Fmt.f(below, 2) + " m under the glasses", width / 2f, height * 0.635f, paint)
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -219,8 +219,8 @@ class PointerService : AccessibilityService() {
                             toPage(e.x, e.y, page)
                             val t = turn(); val w = if (t == 1 || t == 3) height else width; val h = if (t == 1 || t == 3) width else height
                             if (inLeave(page[0], page[1], w, h)) { onLeave?.invoke(); return true }
-                            if (inFloorUp(page[0], page[1], w, h)) onFloor?.invoke(-0.03f)
-                            if (inFloorDown(page[0], page[1], w, h)) onFloor?.invoke(0.03f)
+                            if (inFloorUp(page[0], page[1], w, h)) onFloor?.invoke(-1f)
+                            if (inFloorDown(page[0], page[1], w, h)) onFloor?.invoke(1f)
                         }
                     }
                 }

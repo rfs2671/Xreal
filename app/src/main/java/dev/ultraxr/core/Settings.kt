@@ -25,6 +25,13 @@ class Settings(context: Context) {
     var roomScan: Boolean get() = p.getBoolean("room_scan", true); set(v) = p.edit().putBoolean("room_scan", v).apply()
     /** How far the owner has moved the measured floor down (metres; negative is up), with the touchpad's Floor buttons. */
     var floorTrimM: Float get() = p.getFloat("floor_trim", 0f); set(v) = p.edit().putFloat("floor_trim", v.coerceIn(-1.2f, 1.2f)).apply()
+    /**
+     * How far above the motion sensor's straight-ahead the middle of the glasses' picture is seen, in degrees, as the
+     * owner set it with the touchpad's Picture buttons while looking at the rings on their fingertips. Everything
+     * an XR application draws is turned by this, so it is where the cameras measured it.
+     */
+    var pictureTiltDeg: Float get() = p.getFloat("picture_tilt", 0f); set(v) = p.edit().putFloat("picture_tilt", v.coerceIn(-20f, 20f)).apply()
+    val pictureTiltSet: Boolean get() = p.contains("picture_tilt")
     /** How hands reach OpenXR applications: "auto" (by application), "hands" (joints only) or "controllers" (joints and Touch-shaped controllers). */
     /**
      * Whether to try the glasses' half-width 3D mode. Off by default: on the Pixel 10 the glasses fall back to 2D
