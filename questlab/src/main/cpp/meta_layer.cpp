@@ -117,6 +117,42 @@ XrUuidEXT makeUuid(Kind k, int n) {
 }
 int anchorCount = 0;
 
+// Saved anchors, kept between runs in the game's own data folder. There is no saved map of the room yet, so there is
+// nothing to find a place by on the next run: an anchor comes back where it was relative to where the session
+// started (the room's frame begins at the head's place and heading at the start). Start in the same spot facing the
+// same way and it is where it was; start elsewhere and it is off by as much.
+std::string anchorFile() {
+    char name[256] = ""; FILE *f = fopen("/proc/self/cmdline", "r"); if (f) { fread(name, 1, sizeof name - 1, f); fclose(f); }
+    for (char *c = name; *c; c++) if (*c == ':') { *c = 0; break; }      // a process name may be package:suffix
+    return name[0] ? std::string("/data/data/") + name + "/uxr_anchors.txt" : std::string();
+}
+int anchorsRestored = 0;
+
+void storeAnchors() {      // lock held
+    std::string p = anchorFile(); if (p.empty()) return;
+    FILE *f = fopen((p + ".new").c_str(), "w"); if (!f) return;
+    for (auto *e : entities) {
+        if (e->kind != ANCHOR || !e->saved) continue;
+        fprintf(f, "%d ", e->key); for (int i = 0; i < 16; i++) fprintf(f, "%02x", e->uuid.data[i]);
+        fprintf(f, " %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", e->pose.orientation.x, e->pose.orientation.y, e->pose.orientation.z, e->pose.orientation.w, e->pose.position.x, e->pose.position.y, e->pose.position.z);
+    }
+    fclose(f); rename((p + ".new").c_str(), p.c_str());
+}
+void loadAnchors() {       // lock held; once an instance
+    for (auto *e : entities) if (e->kind == ANCHOR) return;
+    std::string p = anchorFile(); FILE *f = p.empty() ? nullptr : fopen(p.c_str(), "r"); if (!f) return;
+    int key; char hex[40]; float q[4], t[3];
+    while (fscanf(f, "%d %32s %f %f %f %f %f %f %f", &key, hex, &q[0], &q[1], &q[2], &q[3], &t[0], &t[1], &t[2]) == 9) {
+        if (strlen(hex) != 32) continue;
+        auto *e = new Entity{ANCHOR, {}, {{q[0], q[1], q[2], q[3]}, {t[0], t[1], t[2]}}};
+        for (int i = 0; i < 16; i++) { unsigned v = 0; sscanf(hex + 2 * i, "%2x", &v); e->uuid.data[i] = (uint8_t)v; }
+        e->key = key; e->saved = true; e->storable = true; entities.push_back(e); anchorsRestored++;
+        if (key > anchorCount) anchorCount = key;
+    }
+    fclose(f);
+    LOGI("%d saved anchors read back (placed relative to where this session started)", anchorsRestored);
+}
+
 // room.json's frame seen from our local-floor space: a turn about the vertical and a shift, from the head, which is in both
 float alignYaw = 0; V3 alignShift{0, 0, 0}; bool aligned = false;
 XrPosef roomInRef(const XrPosef &p) {
@@ -267,7 +303,7 @@ XrResult XRAPI_CALL uCreateSpatialAnchorFB(XrSession, const XrSpatialAnchorCreat
         base = loc.pose;
     }
     auto *e = new Entity{ANCHOR, makeUuid(ANCHOR, ++anchorCount), refInRoom(compose(base, info->poseInSpace))};
-    e->locatable = true; entities.push_back(e);
+    e->key = anchorCount; e->locatable = true; entities.push_back(e);
     *req = nextRequest++;
     XrEventDataSpatialAnchorCreateCompleteFB ev{XR_TYPE_EVENT_DATA_SPATIAL_ANCHOR_CREATE_COMPLETE_FB}; ev.requestId = *req; ev.result = XR_SUCCESS; ev.space = (XrSpace)(uintptr_t)e; ev.uuid = e->uuid; push(ev);
     return XR_SUCCESS;
@@ -332,14 +368,14 @@ XrResult XRAPI_CALL uRetrieveSpaceQueryResultsFB(XrSession, XrAsyncRequestIdFB i
 XrResult XRAPI_CALL uSaveSpaceFB(XrSession, const XrSpaceSaveInfoFB *info, XrAsyncRequestIdFB *req) {
     Entity *e = entity(info->space); if (!e) return XR_ERROR_HANDLE_INVALID;
     std::lock_guard<std::mutex> g(lock);
-    e->saved = true; *req = nextRequest++;      // kept for as long as the game runs; not yet across runs
+    e->saved = true; *req = nextRequest++; if (e->kind == ANCHOR) storeAnchors();
     XrEventDataSpaceSaveCompleteFB ev{XR_TYPE_EVENT_DATA_SPACE_SAVE_COMPLETE_FB}; ev.requestId = *req; ev.result = XR_SUCCESS; ev.space = info->space; ev.uuid = e->uuid; ev.location = info->location; push(ev);
     return XR_SUCCESS;
 }
 XrResult XRAPI_CALL uEraseSpaceFB(XrSession, const XrSpaceEraseInfoFB *info, XrAsyncRequestIdFB *req) {
     Entity *e = entity(info->space); if (!e) return XR_ERROR_HANDLE_INVALID;
     std::lock_guard<std::mutex> g(lock);
-    e->saved = false; *req = nextRequest++;
+    e->saved = false; *req = nextRequest++; if (e->kind == ANCHOR) storeAnchors();
     XrEventDataSpaceEraseCompleteFB ev{XR_TYPE_EVENT_DATA_SPACE_ERASE_COMPLETE_FB}; ev.requestId = *req; ev.result = XR_SUCCESS; ev.space = info->space; ev.uuid = e->uuid; ev.location = info->location; push(ev);
     return XR_SUCCESS;
 }
@@ -566,7 +602,7 @@ XrResult XRAPI_CALL uGetSystemProperties(XrInstance i, XrSystemId id, XrSystemPr
 XrResult XRAPI_CALL uCreateSession(XrInstance i, const XrSessionCreateInfo *info, XrSession *out) {
     XrResult r = rCreateSession(i, info, out); if (XR_FAILED(r)) return r;
     std::lock_guard<std::mutex> g(lock);
-    session = *out; aligned = false; lastTime = 0;
+    session = *out; aligned = false; lastTime = 0; loadAnchors();
     XrReferenceSpaceCreateInfo ci{XR_TYPE_REFERENCE_SPACE_CREATE_INFO}; ci.poseInReferenceSpace = {{0, 0, 0, 1}, {0, 0, 0}};
     ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT;
     if (XR_FAILED(rCreateReferenceSpace(session, &ci, &roomRef))) { ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL; rCreateReferenceSpace(session, &ci, &roomRef); }

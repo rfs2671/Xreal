@@ -161,12 +161,24 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         XrSpaceQueryResultsFB qr{XR_TYPE_SPACE_QUERY_RESULTS_FB}; retrieve(sess, id, &qr); found.resize(qr.resultCountOutput); qr.resultCapacityInput = (uint32_t)found.size(); qr.results = found.data();
         r = retrieve(sess, id, &qr); check(XR_SUCCEEDED(r) && !found.empty(), "xrRetrieveSpaceQueryResultsFB", "%u entities", qr.resultCountOutput);
     }
+    // anchors saved by an earlier run of this test come back in the query: each is found again and then erased, so
+    // the next run starts clean but for the one this run saves
+    auto eraseFn = fn<PFN_xrEraseSpaceFB>("xrEraseSpaceFB"); int oldAnchors = 0, oldLocated = 0; float oldDist = -1;
     int floors = 0, ceilings = 0, walls = 0, tables = 0, rooms = 0, located = 0, meshes = 0; XrSpace roomSpace = XR_NULL_HANDLE, meshSpace = XR_NULL_HANDLE; float floorY = NAN;
     for (auto &f : found) {
         uint32_t cn = 0; XrSpaceComponentTypeFB comps[16]; enumComp(f.space, 16, &cn, comps);
         bool loc = false, sem = false, b2 = false, lay = false;
         for (uint32_t i = 0; i < cn; i++) { loc |= comps[i] == XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB; sem |= comps[i] == XR_SPACE_COMPONENT_TYPE_SEMANTIC_LABELS_FB; b2 |= comps[i] == XR_SPACE_COMPONENT_TYPE_BOUNDED_2D_FB; lay |= comps[i] == XR_SPACE_COMPONENT_TYPE_ROOM_LAYOUT_FB; }
         if (lay) { rooms++; roomSpace = f.space; continue; }
+        if (loc && !sem && !b2) {      // a bare locatable entity: a saved anchor
+            oldAnchors++;
+            XrSpaceComponentStatusSetInfoFB set{XR_TYPE_SPACE_COMPONENT_STATUS_SET_INFO_FB}; set.componentType = XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB; set.enabled = XR_TRUE; XrAsyncRequestIdFB id = 0;
+            XrEventDataBuffer ev; if (XR_SUCCEEDED(setComp(f.space, &set, &id))) waitEvent(XR_TYPE_EVENT_DATA_SPACE_SET_STATUS_COMPLETE_FB, id, &ev, 30);
+            XrSpaceLocation al{XR_TYPE_SPACE_LOCATION};
+            if (XR_SUCCEEDED(xrLocateSpace(f.space, local, frameTime, &al)) && (al.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) { oldLocated++; oldDist = std::sqrt(al.pose.position.x * al.pose.position.x + al.pose.position.y * al.pose.position.y + al.pose.position.z * al.pose.position.z); }
+            if (eraseFn) { XrSpaceEraseInfoFB er{XR_TYPE_SPACE_ERASE_INFO_FB}; er.space = f.space; er.location = XR_SPACE_STORAGE_LOCATION_LOCAL_FB; XrAsyncRequestIdFB eid = 0; if (XR_SUCCEEDED(eraseFn(sess, &er, &eid))) waitEvent(XR_TYPE_EVENT_DATA_SPACE_ERASE_COMPLETE_FB, eid, &ev, 30); }
+            continue;
+        }
         char lab[64] = ""; if (sem) { XrSemanticLabelsFB sl{XR_TYPE_SEMANTIC_LABELS_FB}; sl.bufferCapacityInput = 63; sl.buffer = lab; labels(sess, f.space, &sl); lab[sl.bufferCountOutput < 63 ? sl.bufferCountOutput : 63] = 0; }
         XrRect2Df rect{}; if (b2) box2(sess, f.space, &rect);
         XrSpaceLocation l{XR_TYPE_SPACE_LOCATION}; bool ok = false;
@@ -180,7 +192,9 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         line("info  entity %-9s %.2f x %.2f m at (%.2f, %.2f, %.2f) in the local space%s", lab, rect.extent.width, rect.extent.height, l.pose.position.x, l.pose.position.y, l.pose.position.z, ok ? "" : "  (not located)");
     }
     check(rooms == 1 && floors == 1 && ceilings == 1, "the scene has one room, one floor and one ceiling", "%d rooms, %d floors, %d ceilings, %d walls, %d tables", rooms, floors, ceilings, walls, tables);
-    check(located == (int)found.size() - rooms && located > 0, "every plane can be made locatable and is located", "%d of %d", located, (int)found.size() - rooms);
+    line("info  anchors saved by an earlier run: %d found, %d located%s", oldAnchors, oldLocated, oldAnchors ? "" : " (none: the first run after installing, or the run before saved none)");
+    if (oldAnchors) check(oldLocated == oldAnchors && oldDist > 0.2f && oldDist < 1.5f, "an anchor saved by the run before is found again, where it was relative to the start", "%.2f m from this run's origin (it was made 0.5 m in front of the head)", oldDist);
+    check(located == (int)found.size() - rooms - oldAnchors && located > 0, "every plane can be made locatable and is located", "%d of %d", located, (int)found.size() - rooms - oldAnchors);
     check(!std::isnan(floorY) && floorY < -0.5f && floorY > -2.5f, "the floor is below the local space's origin by a person's eye height", "%.2f m", floorY);
     if (roomSpace != XR_NULL_HANDLE) {
         XrUuidEXT w[32]; XrRoomLayoutFB rl{XR_TYPE_ROOM_LAYOUT_FB}; rl.wallUuidCapacityInput = 32; rl.wallUuids = w; r = layout(sess, roomSpace, &rl);
@@ -236,7 +250,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
             float d = std::sqrt((al.pose.position.x - ex) * (al.pose.position.x - ex) + (al.pose.position.y - ey) * (al.pose.position.y - ey) + (al.pose.position.z - ez) * (al.pose.position.z - ez));
             check(XR_SUCCEEDED(r) && (before.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && d < 0.05f, "the anchor is located where it was made", "%.3f m off", d);
             XrSpaceSaveInfoFB svi{XR_TYPE_SPACE_SAVE_INFO_FB}; svi.space = ac->space; svi.location = XR_SPACE_STORAGE_LOCATION_LOCAL_FB; svi.persistenceMode = XR_SPACE_PERSISTENCE_MODE_INDEFINITE_FB; XrAsyncRequestIdFB sid = 0;
-            r = save ? save(sess, &svi, &sid) : XR_ERROR_FUNCTION_UNSUPPORTED; check(XR_SUCCEEDED(r) && waitEvent(XR_TYPE_EVENT_DATA_SPACE_SAVE_COMPLETE_FB, sid, &ev), "the anchor is saved (for this run; not yet across runs)", "%s", res(r));
+            r = save ? save(sess, &svi, &sid) : XR_ERROR_FUNCTION_UNSUPPORTED; check(XR_SUCCEEDED(r) && waitEvent(XR_TYPE_EVENT_DATA_SPACE_SAVE_COMPLETE_FB, sid, &ev), "the anchor is saved (kept for the next run)", "%s", res(r));
             // sharing with another player: there is no service behind it, and the game must be told so rather than left waiting
             auto cUser = fn<PFN_xrCreateSpaceUserFB>("xrCreateSpaceUserFB"); auto userId = fn<PFN_xrGetSpaceUserIdFB>("xrGetSpaceUserIdFB"); auto share = fn<PFN_xrShareSpacesFB>("xrShareSpacesFB");
             if (check(cUser && userId && share, "the sharing and user calls exist")) {
