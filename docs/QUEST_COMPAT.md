@@ -443,6 +443,13 @@ room, the hand-over of the corners through the layer, and a later session placin
 
 Only walls are marked. Table tops are still the ones the cameras find.
 
+Third worn try (18:14 to 18:19): **the owner marked his room.** 26 corners going round, closed on the first, handed
+over through the layer and kept by the app ("room plan kept: 26 corners, 26 walls ... 2 table tops as landmarks");
+the glasses showed "Room saved: 26 walls". The plan is 5.2 m by 7.5 m across, 20.6 square metres, 26.9 m round, with
+walls from 0.4 to 2.8 m long: an irregular room with its nooks, not a rectangle, which is the kind `fit()` can
+tell apart from itself. Not yet seen: how well the posts sat on the real corners (the wearer's word), and a later
+session placing this plan.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
