@@ -370,6 +370,18 @@ depend on it.
 
 Whether 10 degrees is all of the 12 inches is not known until the wearer looks again.
 
+### Unity's example on a cool phone with the tilt at 0 (19 November, 17:07)
+
+Worn, 90 s, phone at 31 C (thermal status 0 throughout). No failed `xrEndFrame`, nothing unsupported, no crash.
+
+- The wearer got through several steps of the tutorial: the pictures show its plane-data step and, later, its
+  menu video, with Unity's hand model drawn at the buttons. So presses arrive again.
+- This time the left hand was the one found (2256 of 3600 readings in the second half minute), 30 to 50 cm from
+  the head, level with the line of sight to 30 degrees below it, never above; the right in 68.
+- The room model had one wall at most while it ran.
+
+What the wearer saw of the hands' place against the real hands is not known yet.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
