@@ -64,9 +64,14 @@ What these runs also showed:
   (its handle stays good). In the first run two of the three walls were the same wall twice (1 cm apart).
 - The floor estimate moved between 1.46 and 1.79 m below the cameras within one run.
 - Table tops overlap (two within 15 cm of each other in the second run): several are the same surface.
-- No hand was reported in either run (0 readings): the hand aim state and the hand model have still not been
-  exercised with a real hand. Whether hand tracking was switched off in the app or simply saw no hand is not known.
+- No hand was reported in either run (0 readings): no hand was held up (the wearer confirmed). See the third run.
 - Nothing here was judged by eye: the test draws no picture of its own.
+
+A third worn run, for hands (about 22 s of reading each hand in turn, both hands held up and pinching): a hand was
+reported in 863 of 2640 readings (33 %), every one of them with a valid Meta aim state, and the index pinch strength
+reached 1.00. So hand joints reach a native app and the aim state follows them; a hand was absent in two readings
+of three, and this run cannot tell tracking drop-outs from the hand simply being out of view. (The wall check failed
+in this run by design: it waited only 5 s before the scene query.)
 
 ## Open
 
