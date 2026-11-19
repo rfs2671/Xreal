@@ -210,6 +210,19 @@ object XrHost : OpenXrGlassesLayer.Host {
             if (handsOnly) "joints" else "joints and controllers", System.currentTimeMillis())
         Tracking.recenter()
         floorApplied = Float.NaN
+        // One recorded session, asked for over adb with a file (record_next.txt holding the seconds): the raw camera and
+        // motion data of this game from its start, to replay a fault afterwards. The file is removed, so only this once.
+        try {
+            val dir = Tracking.appContextOrNull()?.getExternalFilesDir(null)
+            val flag = java.io.File(dir, "record_next.txt")
+            val secs = if (dir != null && flag.isFile) flag.readText().trim().toIntOrNull() ?: 0 else 0
+            val l = Tracking.link
+            if (secs > 0 && onGlasses && l != null && !l.recording && l.state == dev.ultraxr.glasses.GlassesLink.State.STREAMING) {
+                flag.delete()
+                l.record(java.io.File(Tracking.appContextOrNull()!!.getExternalFilesDir("recordings"), "game-" + System.currentTimeMillis() + ".uxrec"), secs.coerceAtMost(240))
+                Tracking.log("recording this session's raw tracking data for " + secs.coerceAtMost(240) + " s (asked for with record_next.txt)")
+            }
+        } catch (t: Throwable) { Tracking.log("could not start the recording: " + t) }
         try {
             val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
             @Suppress("DEPRECATION")

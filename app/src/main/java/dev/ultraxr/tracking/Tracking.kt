@@ -37,6 +37,7 @@ object Tracking : GlassesLink.Listener {
     private val observers = CopyOnWriteArrayList<Observer>()
     private val logLines = ArrayDeque<String>()
     private var appContext: Context? = null
+    fun appContextOrNull(): Context? = appContext
     private var users = 0
 
     // --- 6DoF
