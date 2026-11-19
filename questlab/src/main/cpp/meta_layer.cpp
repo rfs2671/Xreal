@@ -970,6 +970,7 @@ XrResult XRAPI_CALL uDestroySession(XrSession s) {
     { std::lock_guard<std::mutex> g(lock); if (roomRef) rDestroySpace(roomRef); if (viewRef) rDestroySpace(viewRef); roomRef = viewRef = XR_NULL_HANDLE; session = XR_NULL_HANDLE; }
     return rDestroySession(s);
 }
+struct AimKeep { V3 dir{0, 0, -1}; bool have = false, pinching = false; double since = 0, at = 0; } aimKeep[2];
 XrResult XRAPI_CALL uLocateHandJointsEXT(XrHandTrackerEXT t, const XrHandJointsLocateInfoEXT *info, XrHandJointLocationsEXT *out) {
     if (!rLocateHandJoints) return XR_ERROR_FUNCTION_UNSUPPORTED;
     XrResult r = rLocateHandJoints(t, info, out); if (XR_FAILED(r)) return r;
@@ -995,9 +996,35 @@ XrResult XRAPI_CALL uLocateHandJointsEXT(XrHandTrackerEXT t, const XrHandJointsL
         auto strength = [&](int tip) { XrVector3f a = P(XR_HAND_JOINT_THUMB_TIP_EXT), b = P(tip); float d = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)); float s = 1 - (d - 0.015f) / 0.045f; return s < 0 ? 0.f : s > 1 ? 1.f : s; };
         aim->pinchStrengthIndex = strength(XR_HAND_JOINT_INDEX_TIP_EXT); aim->pinchStrengthMiddle = strength(XR_HAND_JOINT_MIDDLE_TIP_EXT);
         aim->pinchStrengthRing = strength(XR_HAND_JOINT_RING_TIP_EXT); aim->pinchStrengthLittle = strength(XR_HAND_JOINT_LITTLE_TIP_EXT);
-        // the aim: from the index knuckle, the way the palm faces forward
-        aim->aimPose = out->jointLocations[XR_HAND_JOINT_INDEX_PROXIMAL_EXT].pose;
-        aim->status = XR_HAND_TRACKING_AIM_COMPUTED_BIT_FB | XR_HAND_TRACKING_AIM_VALID_BIT_FB | (aim->pinchStrengthIndex > 0.8f ? XR_HAND_TRACKING_AIM_INDEX_PINCHING_BIT_FB : 0);
+        // The aim, as Quest gives it: a ray along the arm, from the shoulder through the hand, not along a finger.
+        // (Until 19 November 2026 this was the index finger's first bone: the ray swung down as the finger curled
+        // to pinch, so the pinch landed somewhere else than where the wearer had pointed.) The shoulder is taken
+        // from the head: 22 cm below the eyes, 17 cm to the hand's side, 6 cm back. The ray starts between the
+        // thumb's and the index finger's knuckles, which hardly move in a pinch; its direction is smoothed, and held
+        // for the first 0.3 s of a pinch so that the closing of the fingers cannot drag it.
+        int side = 0; for (auto &ht : handTrackers) if (ht.first == t) side = ht.second;
+        AimKeep &k = aimKeep[side];
+        XrVector3f a0 = P(XR_HAND_JOINT_INDEX_PROXIMAL_EXT), a1 = P(XR_HAND_JOINT_THUMB_PROXIMAL_EXT), origin{(a0.x + a1.x) / 2, (a0.y + a1.y) / 2, (a0.z + a1.z) / 2};
+        XrSpaceLocation hl{XR_TYPE_SPACE_LOCATION}; bool head = viewRef != XR_NULL_HANDLE && XR_SUCCEEDED(rLocateSpace(viewRef, info->baseSpace, info->time, &hl)) && (hl.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && (hl.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT);
+        float sIdx = aim->pinchStrengthIndex; double now = nowS();
+        if (!k.pinching && sIdx > 0.6f) { k.pinching = true; k.since = now; } else if (k.pinching && sIdx < 0.31f) k.pinching = false;      // 33 mm to start, 46 mm to end: the owner's measured pinches
+        if (head) {
+            V3 f = rot(hl.pose.orientation, {0, 0, -1}); float fl = std::sqrt(f.x * f.x + f.z * f.z); if (fl < 0.2f) { f = rot(hl.pose.orientation, {0, 1, 0}); fl = std::sqrt(f.x * f.x + f.z * f.z); }
+            f = {f.x / fl, 0, f.z / fl}; V3 right{-f.z, 0, f.x}; float sd = side ? 0.17f : -0.17f;
+            V3 sh{hl.pose.position.x + right.x * sd - f.x * 0.06f, hl.pose.position.y - 0.22f, hl.pose.position.z + right.z * sd - f.z * 0.06f};
+            V3 d{origin.x - sh.x, origin.y - sh.y, origin.z - sh.z}; float dl = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+            if (dl > 0.05f) {
+                d = {d.x / dl, d.y / dl, d.z / dl};
+                bool hold = k.pinching && now - k.since < 0.3 && k.have;
+                if (!hold) { if (k.have && now - k.at < 0.5) { d = {k.dir.x * 0.7f + d.x * 0.3f, k.dir.y * 0.7f + d.y * 0.3f, k.dir.z * 0.7f + d.z * 0.3f}; float n2 = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z); d = {d.x / n2, d.y / n2, d.z / n2}; } k.dir = d; k.have = true; }
+                k.at = now;
+                V3 z{-k.dir.x, -k.dir.y, -k.dir.z}, x{z.z, 0, -z.x}; float xl = std::sqrt(x.x * x.x + x.z * x.z);      // x = up cross z
+                if (xl > 1e-3f) { x = {x.x / xl, 0, x.z / xl}; V3 y{z.y * x.z - z.z * x.y, z.z * x.x - z.x * x.z, z.x * x.y - z.y * x.x};
+                    aim->aimPose.orientation = fromAxes(x, y, z); aim->aimPose.position = origin; }
+                else aim->aimPose = out->jointLocations[XR_HAND_JOINT_INDEX_PROXIMAL_EXT].pose;
+            } else aim->aimPose = out->jointLocations[XR_HAND_JOINT_INDEX_PROXIMAL_EXT].pose;
+        } else aim->aimPose = out->jointLocations[XR_HAND_JOINT_INDEX_PROXIMAL_EXT].pose;
+        aim->status = XR_HAND_TRACKING_AIM_COMPUTED_BIT_FB | XR_HAND_TRACKING_AIM_VALID_BIT_FB | (k.pinching ? XR_HAND_TRACKING_AIM_INDEX_PINCHING_BIT_FB : 0);
     }
     return r;
 }

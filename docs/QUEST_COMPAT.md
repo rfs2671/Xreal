@@ -383,6 +383,18 @@ Worn, 90 s, phone at 31 C (thermal status 0 throughout). No failed `xrEndFrame`,
 The wearer's word afterwards: the drawn hands sat on his real hands. So the 10 degree tilt was the whole of the
 "12 inches", and with it at 0 the picture and the tracking cameras agree as far as an eye can tell.
 
+### The hand's pointing ray (19 November, 17:30)
+
+The wearer, of Unity's example: "why is the pointer logic so off, pressing takes forever."
+
+The layer's aim state (XR_FB_hand_tracking_aim, which Unity's hand ray uses) pointed along the index finger's
+first bone. A finger curls to pinch, so the ray swung down just as the pinch was made and the press landed
+elsewhere; and the "pinching" bit needed the tips under 24 mm, where this tracker measures the owner's pinches at
+17 to 31 mm. Now, as on Quest: the ray runs from the shoulder (taken from the head: 22 cm below the eyes, 17 cm
+to the side, 6 cm back) through the hand, starts between the thumb's and index finger's knuckles, is smoothed,
+and is held for the first 0.3 s of a pinch; the pinch bit starts under 33 mm and ends over 46 mm, the rule
+measured on the owner's own pinches. Compiled and installed; not yet tried by the wearer.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
