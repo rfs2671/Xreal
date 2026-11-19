@@ -89,13 +89,13 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     std::vector<XrExtensionProperties> ext(n, {XR_TYPE_EXTENSION_PROPERTIES}); xrEnumerateInstanceExtensionProperties(nullptr, n, &n, ext.data());
     auto offered = [&](const char *name) { for (auto &e : ext) if (strcmp(e.extensionName, name) == 0) return true; return false; };
     const char *meta[] = {"XR_FB_passthrough", "XR_FB_spatial_entity", "XR_FB_spatial_entity_query", "XR_FB_spatial_entity_storage", "XR_FB_spatial_entity_container", "XR_FB_scene", "XR_FB_hand_tracking_aim",
-                          "XR_FB_hand_tracking_mesh", "XR_FB_scene_capture", "XR_FB_spatial_entity_sharing", "XR_FB_spatial_entity_user", "XR_META_spatial_entity_mesh", "XR_META_boundary_visibility"};
+                          "XR_FB_hand_tracking_mesh", "XR_FB_scene_capture", "XR_FB_spatial_entity_sharing", "XR_FB_spatial_entity_user", "XR_META_spatial_entity_mesh", "XR_META_boundary_visibility", "XR_META_environment_depth"};
     const char *base[] = {"XR_KHR_android_create_instance", "XR_KHR_opengl_es_enable", "XR_EXT_hand_tracking"};
     // what Quest games commonly also ask for; listed so a missing one is known before a real game trips on it
     const char *alsoAsked[] = {"XR_FB_display_refresh_rate", "XR_FB_color_space", "XR_FB_swapchain_update_state", "XR_FB_swapchain_update_state_opengl_es", "XR_FB_foveation", "XR_FB_foveation_configuration",
         "XR_FB_composition_layer_alpha_blend", "XR_FB_composition_layer_settings", "XR_KHR_composition_layer_color_scale_bias", "XR_KHR_composition_layer_cylinder", "XR_KHR_composition_layer_equirect2",
         "XR_FB_hand_tracking_capsules", "XR_META_performance_metrics", "XR_EXT_performance_settings", "XR_KHR_android_thread_settings", "XR_FB_touch_controller_pro",
-        "XR_META_touch_controller_plus", "XR_FB_haptic_pcm", "XR_FB_triangle_mesh", "XR_META_environment_depth",
+        "XR_META_touch_controller_plus", "XR_FB_haptic_pcm", "XR_FB_triangle_mesh",
         "XR_FB_passthrough_keyboard_hands", "XR_META_passthrough_preferences", "XR_FB_body_tracking", "XR_FB_face_tracking2", "XR_EXT_local_floor"};
     std::vector<const char *> want;
     for (auto e : base) { check(offered(e), "offered", "%s", e); if (offered(e)) want.push_back(e); }
@@ -111,7 +111,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     if (!check(XR_SUCCEEDED(r), "an instance with all of them enabled", "%s", res(r))) return env->NewStringUTF(report.c_str());
     XrSystemGetInfo sg{XR_TYPE_SYSTEM_GET_INFO}; sg.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY; XrSystemId sys = 0; r = xrGetSystem(inst, &sg, &sys);
     if (!check(XR_SUCCEEDED(r), "a head-mounted system", "%s", res(r))) return env->NewStringUTF(report.c_str());
-    XrSystemBoundaryVisibilityPropertiesMETA bp{XR_TYPE_SYSTEM_BOUNDARY_VISIBILITY_PROPERTIES_META};
+    XrSystemEnvironmentDepthPropertiesMETA dp{XR_TYPE_SYSTEM_ENVIRONMENT_DEPTH_PROPERTIES_META};
+    XrSystemBoundaryVisibilityPropertiesMETA bp{XR_TYPE_SYSTEM_BOUNDARY_VISIBILITY_PROPERTIES_META, &dp};
     XrSystemSpatialEntityPropertiesFB sp{XR_TYPE_SYSTEM_SPATIAL_ENTITY_PROPERTIES_FB, &bp}; XrSystemPassthroughPropertiesFB pp{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB, &sp};
     XrSystemHandTrackingPropertiesEXT hp{XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT, &pp}; XrSystemProperties props{XR_TYPE_SYSTEM_PROPERTIES, &hp};
     xrGetSystemProperties(inst, sys, &props);
@@ -233,6 +234,31 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         r = boundaryVis(sess, XR_BOUNDARY_VISIBILITY_SUPPRESSED_META); bool got = false;
         for (int i = 0; i < 60 && !got; i++) { for (size_t k = 0; k < seen.size(); k++) if (seen[k].type == XR_TYPE_EVENT_DATA_BOUNDARY_VISIBILITY_CHANGED_META) { got = ((XrEventDataBoundaryVisibilityChangedMETA *)&seen[k])->boundaryVisibility == XR_BOUNDARY_VISIBILITY_SUPPRESSED_META; seen.erase(seen.begin() + k); break; } if (!got) frame(); }
         check(r == XR_SUCCESS && got, "xrRequestBoundaryVisibilityMETA (suppress) succeeds and its event arrives", "%s", res(r));
+    }
+
+    // ---- environment depth: the depth picture a game hides its objects behind the room with
+    auto dCreate = fn<PFN_xrCreateEnvironmentDepthProviderMETA>("xrCreateEnvironmentDepthProviderMETA"); auto dStart = fn<PFN_xrStartEnvironmentDepthProviderMETA>("xrStartEnvironmentDepthProviderMETA");
+    auto dSwap = fn<PFN_xrCreateEnvironmentDepthSwapchainMETA>("xrCreateEnvironmentDepthSwapchainMETA"); auto dEnum = fn<PFN_xrEnumerateEnvironmentDepthSwapchainImagesMETA>("xrEnumerateEnvironmentDepthSwapchainImagesMETA");
+    auto dState = fn<PFN_xrGetEnvironmentDepthSwapchainStateMETA>("xrGetEnvironmentDepthSwapchainStateMETA"); auto dAcquire = fn<PFN_xrAcquireEnvironmentDepthImageMETA>("xrAcquireEnvironmentDepthImageMETA");
+    check(dp.supportsEnvironmentDepth, "the system says it supports environment depth");
+    if (check(dCreate && dStart && dSwap && dEnum && dState && dAcquire, "the environment depth calls exist")) {
+        XrEnvironmentDepthProviderCreateInfoMETA dci{XR_TYPE_ENVIRONMENT_DEPTH_PROVIDER_CREATE_INFO_META}; XrEnvironmentDepthProviderMETA prov = XR_NULL_HANDLE;
+        r = dCreate(sess, &dci, &prov); check(XR_SUCCEEDED(r), "xrCreateEnvironmentDepthProviderMETA", "%s", res(r));
+        XrEnvironmentDepthSwapchainCreateInfoMETA dsi{XR_TYPE_ENVIRONMENT_DEPTH_SWAPCHAIN_CREATE_INFO_META}; XrEnvironmentDepthSwapchainMETA dsw = XR_NULL_HANDLE;
+        XrResult r2 = XR_SUCCEEDED(r) ? dSwap(prov, &dsi, &dsw) : r; XrEnvironmentDepthSwapchainStateMETA dst{XR_TYPE_ENVIRONMENT_DEPTH_SWAPCHAIN_STATE_META}; if (XR_SUCCEEDED(r2)) dState(dsw, &dst);
+        XrSwapchainImageOpenGLESKHR di{XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR}; uint32_t dn = 0; if (XR_SUCCEEDED(r2)) dEnum(dsw, 1, &dn, (XrSwapchainImageBaseHeader *)&di);
+        check(XR_SUCCEEDED(r2) && dn == 1 && di.image != 0 && glIsTexture(di.image) && dst.width > 0, "the depth swapchain gives an OpenGL ES texture", "%s, texture %u, %ux%u", res(r2), di.image, dst.width, dst.height);
+        if (XR_SUCCEEDED(r2)) {
+            dStart(prov); int got = 0; XrEnvironmentDepthImageMETA dimg{XR_TYPE_ENVIRONMENT_DEPTH_IMAGE_META}; dimg.views[0].type = dimg.views[1].type = XR_TYPE_ENVIRONMENT_DEPTH_IMAGE_VIEW_META;
+            while (glGetError() != GL_NO_ERROR) {}
+            for (int i = 0; i < 30; i++) { frame(); XrEnvironmentDepthImageAcquireInfoMETA da{XR_TYPE_ENVIRONMENT_DEPTH_IMAGE_ACQUIRE_INFO_META}; da.space = local; da.displayTime = frameTime; if (dAcquire(prov, &da, &dimg) == XR_SUCCESS) got++; }
+            GLenum ge = glGetError();
+            check(got >= 20 && ge == GL_NO_ERROR, "xrAcquireEnvironmentDepthImageMETA gives a depth picture a frame", "%d of 30 frames, GL error 0x%x, near %.2f m", got, (unsigned)ge, dimg.nearZ);
+            float centre = 0, low = 0; int n = 0;
+            if (void *lh = dlopen("libuxr_meta_layer.so", RTLD_NOW)) { auto probe = (int (*)(float *, float *))dlsym(lh, "uxrMetaLayerDepthProbe"); if (probe) n = probe(&centre, &low); }
+            // near the lower edge of the left eye's picture the floor is seen: from eye height, some metres ahead
+            check(n > 0 && low > 1.0f && low < 12.f, "the depth picture has the floor in its lower part", "%.2f m ahead near the lower edge, %.2f m at the centre (0 = nothing there)", low, centre);
+        }
     }
 
     // ---- an anchor: made half a metre in front of the head, found again where it was put

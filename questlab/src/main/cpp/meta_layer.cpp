@@ -21,11 +21,19 @@
 //   sharing       XR_FB_spatial_entity_sharing and _user: there is no service to share through; a share request
 //                 completes with "cloud storage disabled", which is what a Quest with sharing switched off answers.
 //   boundary      XR_META_boundary_visibility: there is no boundary; asking to hide it succeeds.
+//   depth         XR_META_environment_depth, for OpenGL ES sessions: a depth picture an eye, drawn here from the
+//                 scene's planes (floor, ceiling, walls, table tops) as each eye sees them at the asked time. It
+//                 hides game objects behind the walls and tables the room model has; it knows nothing of hands,
+//                 people or anything else that is not one of those planes. Vulkan sessions are told the feature
+//                 is unsupported.
 //
 // Everything else goes to the runtime untouched. One instance and one session at a time, as on a headset.
 #include <jni.h>
 #include <android/log.h>
+#include <EGL/egl.h>
+#include <GLES3/gl3.h>
 #define XR_USE_PLATFORM_ANDROID
+#define XR_USE_GRAPHICS_API_OPENGL_ES
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <openxr/openxr_loader_negotiation.h>
@@ -50,7 +58,7 @@ const char *LAYER = "XR_APILAYER_ULTRAXR_meta";
 const char *OURS[] = {"XR_FB_passthrough", "XR_FB_spatial_entity", "XR_FB_spatial_entity_query", "XR_FB_spatial_entity_storage",
                       "XR_FB_spatial_entity_container", "XR_FB_scene", "XR_FB_hand_tracking_aim", "XR_FB_scene_capture",
                       "XR_FB_spatial_entity_sharing", "XR_FB_spatial_entity_user", "XR_META_spatial_entity_mesh", "XR_FB_hand_tracking_mesh",
-                      "XR_META_boundary_visibility"};
+                      "XR_META_boundary_visibility", "XR_META_environment_depth"};
 
 PFN_xrGetInstanceProcAddr nextGipa = nullptr;
 XrInstance instance = XR_NULL_HANDLE;
@@ -62,7 +70,8 @@ XrTime lastTime = 0;
 PFN_xrDestroyInstance rDestroyInstance; PFN_xrGetSystemProperties rGetSystemProperties; PFN_xrCreateSession rCreateSession;
 PFN_xrDestroySession rDestroySession; PFN_xrCreateReferenceSpace rCreateReferenceSpace; PFN_xrDestroySpace rDestroySpace;
 PFN_xrLocateSpace rLocateSpace; PFN_xrPollEvent rPollEvent; PFN_xrWaitFrame rWaitFrame; PFN_xrEndFrame rEndFrame;
-PFN_xrLocateHandJointsEXT rLocateHandJoints; PFN_xrCreateHandTrackerEXT rCreateHandTracker;
+PFN_xrLocateHandJointsEXT rLocateHandJoints; PFN_xrCreateHandTrackerEXT rCreateHandTracker; PFN_xrLocateViews rLocateViews;
+bool sessionGles = false;
 
 std::mutex lock;
 
@@ -468,6 +477,96 @@ XrResult XRAPI_CALL uRequestBoundaryVisibilityMETA(XrSession, XrBoundaryVisibili
     return XR_SUCCESS;
 }
 
+// ---------------------------------------------------------------- environment depth
+// One square depth picture an eye, in a two-layer texture as Meta's runtime gives it: 16-bit, 0 at the near plane
+// (0.1 m), 1 infinitely far, so a surface z metres ahead is stored as 1 - 0.1 / z. Each eye's picture is what that
+// eye sees of the scene's planes at the asked time; where there is no plane it says "far".
+const int DEPTH_N = 160; const float DEPTH_NEAR = 0.1f;
+struct DepthProvider { bool running = false; GLuint tex = 0; };
+std::vector<uint16_t> depthPixels(DEPTH_N * DEPTH_N);
+float depthProbe[2] = {0, 0}; int depthImages = 0;      // for the test: metres at the picture's centre and near its lower edge, left eye
+struct PlaneInEye { V3 c, u, v, n; float hu, hv; };
+
+XrResult XRAPI_CALL uCreateEnvironmentDepthProviderMETA(XrSession, const XrEnvironmentDepthProviderCreateInfoMETA *, XrEnvironmentDepthProviderMETA *out) {
+    if (!out) return XR_ERROR_VALIDATION_FAILURE;
+    if (!sessionGles) return XR_ERROR_FEATURE_UNSUPPORTED;      // the texture is made with OpenGL ES, in the application's context
+    *out = (XrEnvironmentDepthProviderMETA)(uintptr_t) new DepthProvider; return XR_SUCCESS;
+}
+void dropDepthTexture(DepthProvider *p) { if (p->tex && eglGetCurrentContext() != EGL_NO_CONTEXT) glDeleteTextures(1, &p->tex); p->tex = 0; }
+XrResult XRAPI_CALL uDestroyEnvironmentDepthProviderMETA(XrEnvironmentDepthProviderMETA h) { auto *p = (DepthProvider *)(uintptr_t)h; if (!p) return XR_ERROR_HANDLE_INVALID; dropDepthTexture(p); delete p; return XR_SUCCESS; }
+XrResult XRAPI_CALL uStartEnvironmentDepthProviderMETA(XrEnvironmentDepthProviderMETA h) { if (!h) return XR_ERROR_HANDLE_INVALID; ((DepthProvider *)(uintptr_t)h)->running = true; return XR_SUCCESS; }
+XrResult XRAPI_CALL uStopEnvironmentDepthProviderMETA(XrEnvironmentDepthProviderMETA h) { if (!h) return XR_ERROR_HANDLE_INVALID; ((DepthProvider *)(uintptr_t)h)->running = false; return XR_SUCCESS; }
+XrResult XRAPI_CALL uCreateEnvironmentDepthSwapchainMETA(XrEnvironmentDepthProviderMETA h, const XrEnvironmentDepthSwapchainCreateInfoMETA *, XrEnvironmentDepthSwapchainMETA *out) {
+    auto *p = (DepthProvider *)(uintptr_t)h; if (!p || !out) return XR_ERROR_HANDLE_INVALID;
+    if (eglGetCurrentContext() == EGL_NO_CONTEXT) return XR_ERROR_RUNTIME_FAILURE;      // must be called where the application draws
+    if (!p->tex) {
+        GLint was = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &was);
+        glGenTextures(1, &p->tex); glBindTexture(GL_TEXTURE_2D_ARRAY, p->tex);
+        glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH_COMPONENT16, DEPTH_N, DEPTH_N, 2);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)was);
+    }
+    *out = (XrEnvironmentDepthSwapchainMETA)(uintptr_t)p; return XR_SUCCESS;
+}
+XrResult XRAPI_CALL uDestroyEnvironmentDepthSwapchainMETA(XrEnvironmentDepthSwapchainMETA h) { auto *p = (DepthProvider *)(uintptr_t)h; if (!p) return XR_ERROR_HANDLE_INVALID; dropDepthTexture(p); return XR_SUCCESS; }
+XrResult XRAPI_CALL uEnumerateEnvironmentDepthSwapchainImagesMETA(XrEnvironmentDepthSwapchainMETA h, uint32_t cap, uint32_t *count, XrSwapchainImageBaseHeader *images) {
+    auto *p = (DepthProvider *)(uintptr_t)h; if (!p || !count) return XR_ERROR_HANDLE_INVALID;
+    *count = 1; if (cap == 0) return XR_SUCCESS;
+    if (!images || images->type != XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR) return XR_ERROR_VALIDATION_FAILURE;
+    ((XrSwapchainImageOpenGLESKHR *)images)->image = p->tex; return XR_SUCCESS;
+}
+XrResult XRAPI_CALL uGetEnvironmentDepthSwapchainStateMETA(XrEnvironmentDepthSwapchainMETA h, XrEnvironmentDepthSwapchainStateMETA *st) { if (!h || !st) return XR_ERROR_HANDLE_INVALID; st->width = DEPTH_N; st->height = DEPTH_N; return XR_SUCCESS; }
+XrResult XRAPI_CALL uSetEnvironmentDepthHandRemovalMETA(XrEnvironmentDepthProviderMETA, const XrEnvironmentDepthHandRemovalSetInfoMETA *) { return XR_ERROR_FEATURE_UNSUPPORTED; }      // there are no hands in it to remove
+XrResult XRAPI_CALL uAcquireEnvironmentDepthImageMETA(XrEnvironmentDepthProviderMETA h, const XrEnvironmentDepthImageAcquireInfoMETA *info, XrEnvironmentDepthImageMETA *image) {
+    auto *p = (DepthProvider *)(uintptr_t)h; if (!p || !info || !image) return XR_ERROR_VALIDATION_FAILURE;
+    if (!p->running || !p->tex || !rLocateViews || eglGetCurrentContext() == EGL_NO_CONTEXT) return XR_ENVIRONMENT_DEPTH_NOT_AVAILABLE_META;
+    XrViewLocateInfo vi{XR_TYPE_VIEW_LOCATE_INFO}; vi.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO; vi.displayTime = info->displayTime; vi.space = info->space;
+    XrViewState vs{XR_TYPE_VIEW_STATE}; XrView views[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}; uint32_t nv = 0;
+    if (XR_FAILED(rLocateViews(session, &vi, &vs, 2, &nv, views)) || nv < 2 || !(vs.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT)) return XR_ENVIRONMENT_DEPTH_NOT_AVAILABLE_META;
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    if (XR_FAILED(rLocateSpace(roomRef, info->space, info->displayTime, &loc)) || !(loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) return XR_ENVIRONMENT_DEPTH_NOT_AVAILABLE_META;
+    std::vector<std::pair<XrPosef, std::pair<float, float>>> planes;
+    {
+        std::lock_guard<std::mutex> g(lock);
+        if (!aligned) return XR_ENVIRONMENT_DEPTH_NOT_AVAILABLE_META;
+        for (auto *e : entities) if (e->live && (e->kind == FLOOR || e->kind == CEILING || e->kind == WALL || e->kind == TABLE)) {
+            // the floor and the ceiling do not end where the scene's 8 m squares do: for hiding things they go on
+            bool wide = e->kind == FLOOR || e->kind == CEILING;
+            planes.push_back({compose(loc.pose, roomInRef(e->pose)), {wide ? 30.f : e->w / 2, wide ? 30.f : e->h / 2}});
+        }
+    }
+    if (planes.empty()) return XR_ENVIRONMENT_DEPTH_NOT_AVAILABLE_META;
+    GLint wasTex = 0, wasPbo = 0, wasAlign = 4, wasRow = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &wasTex); glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &wasPbo); glGetIntegerv(GL_UNPACK_ALIGNMENT, &wasAlign); glGetIntegerv(GL_UNPACK_ROW_LENGTH, &wasRow);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0); glPixelStorei(GL_UNPACK_ALIGNMENT, 2); glPixelStorei(GL_UNPACK_ROW_LENGTH, 0); glBindTexture(GL_TEXTURE_2D_ARRAY, p->tex);
+    for (int eye = 0; eye < 2; eye++) {
+        XrPosef inv = inverse(views[eye].pose); std::vector<PlaneInEye> pe; pe.reserve(planes.size());
+        for (auto &pl : planes) { XrPosef q = compose(inv, pl.first); pe.push_back({{q.position.x, q.position.y, q.position.z}, rot(q.orientation, {1, 0, 0}), rot(q.orientation, {0, 1, 0}), rot(q.orientation, {0, 0, 1}), pl.second.first, pl.second.second}); }
+        float tl = std::tan(views[eye].fov.angleLeft), tr = std::tan(views[eye].fov.angleRight), td = std::tan(views[eye].fov.angleDown), tu = std::tan(views[eye].fov.angleUp);
+        for (int y = 0; y < DEPTH_N; y++) {      // row 0 is the bottom of the picture
+            float dy = td + (tu - td) * (y + 0.5f) / DEPTH_N;
+            for (int x = 0; x < DEPTH_N; x++) {
+                float dx = tl + (tr - tl) * (x + 0.5f) / DEPTH_N, best = 1e9f;      // the ray (dx, dy, -1): t is then the distance ahead
+                for (auto &q : pe) {
+                    float den = q.n.x * dx + q.n.y * dy - q.n.z; if (std::fabs(den) < 1e-6f) continue;
+                    float t = (q.n.x * q.c.x + q.n.y * q.c.y + q.n.z * q.c.z) / den; if (t <= DEPTH_NEAR || t >= best) continue;
+                    float hx = t * dx - q.c.x, hy = t * dy - q.c.y, hz = -t - q.c.z;
+                    if (std::fabs(hx * q.u.x + hy * q.u.y + hz * q.u.z) > q.hu || std::fabs(hx * q.v.x + hy * q.v.y + hz * q.v.z) > q.hv) continue;
+                    best = t;
+                }
+                depthPixels[y * DEPTH_N + x] = best > 1e8f ? 65535 : (uint16_t)(65535.0f * (1.0f - DEPTH_NEAR / best) + 0.5f);
+                if (eye == 0 && x == DEPTH_N / 2 && (y == DEPTH_N / 2 || y == DEPTH_N / 16)) depthProbe[y == DEPTH_N / 2 ? 0 : 1] = best > 1e8f ? 0 : best;
+            }
+        }
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, eye, DEPTH_N, DEPTH_N, 1, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, depthPixels.data());
+        image->views[eye].fov = views[eye].fov; image->views[eye].pose = views[eye].pose;
+    }
+    glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)wasTex); glBindBuffer(GL_PIXEL_UNPACK_BUFFER, (GLuint)wasPbo); glPixelStorei(GL_UNPACK_ALIGNMENT, wasAlign); glPixelStorei(GL_UNPACK_ROW_LENGTH, wasRow);
+    image->swapchainIndex = 0; image->nearZ = DEPTH_NEAR; image->farZ = INFINITY; depthImages++;
+    return XR_SUCCESS;
+}
+
 // ---------------------------------------------------------------- a hand to draw
 // Quest gives games a skinned hand model. There is none here, so one is made: an open flat hand, fingers along -z, the
 // back of the hand up, the wrist at the origin; a slab for the palm and a six-sided tube along each finger, every ring
@@ -607,6 +706,7 @@ XrResult XRAPI_CALL uGetSystemProperties(XrInstance i, XrSystemId id, XrSystemPr
         if (n->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB) ((XrSystemPassthroughPropertiesFB *)n)->supportsPassthrough = XR_TRUE;
         if (n->type == XR_TYPE_SYSTEM_SPATIAL_ENTITY_PROPERTIES_FB) ((XrSystemSpatialEntityPropertiesFB *)n)->supportsSpatialEntity = XR_TRUE;
         if (n->type == XR_TYPE_SYSTEM_BOUNDARY_VISIBILITY_PROPERTIES_META) ((XrSystemBoundaryVisibilityPropertiesMETA *)n)->supportsBoundaryVisibility = XR_TRUE;
+        if (n->type == XR_TYPE_SYSTEM_ENVIRONMENT_DEPTH_PROPERTIES_META) { ((XrSystemEnvironmentDepthPropertiesMETA *)n)->supportsEnvironmentDepth = XR_TRUE; ((XrSystemEnvironmentDepthPropertiesMETA *)n)->supportsHandRemoval = XR_FALSE; }
     }
     return r;
 }
@@ -614,6 +714,7 @@ XrResult XRAPI_CALL uCreateSession(XrInstance i, const XrSessionCreateInfo *info
     XrResult r = rCreateSession(i, info, out); if (XR_FAILED(r)) return r;
     std::lock_guard<std::mutex> g(lock);
     session = *out; aligned = false; lastTime = 0; loadAnchors();
+    sessionGles = false; for (const XrBaseInStructure *n = (const XrBaseInStructure *)info->next; n; n = n->next) if (n->type == XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR) sessionGles = true;
     XrReferenceSpaceCreateInfo ci{XR_TYPE_REFERENCE_SPACE_CREATE_INFO}; ci.poseInReferenceSpace = {{0, 0, 0, 1}, {0, 0, 0}};
     ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT;
     if (XR_FAILED(rCreateReferenceSpace(session, &ci, &roomRef))) { ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL; rCreateReferenceSpace(session, &ci, &roomRef); }
@@ -661,6 +762,11 @@ const Entry table[] = {
     E("xrGetSpaceTriangleMeshMETA", uGetSpaceTriangleMeshMETA), E("xrRequestSceneCaptureFB", uRequestSceneCaptureFB), E("xrShareSpacesFB", uShareSpacesFB),
     E("xrCreateSpaceUserFB", uCreateSpaceUserFB), E("xrGetSpaceUserIdFB", uGetSpaceUserIdFB), E("xrDestroySpaceUserFB", uDestroySpaceUserFB),
     E("xrRequestBoundaryVisibilityMETA", uRequestBoundaryVisibilityMETA),
+    E("xrCreateEnvironmentDepthProviderMETA", uCreateEnvironmentDepthProviderMETA), E("xrDestroyEnvironmentDepthProviderMETA", uDestroyEnvironmentDepthProviderMETA),
+    E("xrStartEnvironmentDepthProviderMETA", uStartEnvironmentDepthProviderMETA), E("xrStopEnvironmentDepthProviderMETA", uStopEnvironmentDepthProviderMETA),
+    E("xrCreateEnvironmentDepthSwapchainMETA", uCreateEnvironmentDepthSwapchainMETA), E("xrDestroyEnvironmentDepthSwapchainMETA", uDestroyEnvironmentDepthSwapchainMETA),
+    E("xrEnumerateEnvironmentDepthSwapchainImagesMETA", uEnumerateEnvironmentDepthSwapchainImagesMETA), E("xrGetEnvironmentDepthSwapchainStateMETA", uGetEnvironmentDepthSwapchainStateMETA),
+    E("xrAcquireEnvironmentDepthImageMETA", uAcquireEnvironmentDepthImageMETA), E("xrSetEnvironmentDepthHandRemovalMETA", uSetEnvironmentDepthHandRemovalMETA),
     E("xrCreatePassthroughFB", uCreatePassthroughFB), E("xrDestroyPassthroughFB", uDestroyPassthroughFB), E("xrPassthroughStartFB", uPassthroughStartFB), E("xrPassthroughPauseFB", uPassthroughPauseFB),
     E("xrCreatePassthroughLayerFB", uCreatePassthroughLayerFB), E("xrDestroyPassthroughLayerFB", uDestroyPassthroughLayerFB), E("xrPassthroughLayerPauseFB", uPassthroughLayerPauseFB),
     E("xrPassthroughLayerResumeFB", uPassthroughLayerResumeFB), E("xrPassthroughLayerSetStyleFB", uPassthroughLayerSetStyleFB),
@@ -695,7 +801,7 @@ XrResult XRAPI_CALL uCreateApiLayerInstance(const XrInstanceCreateInfo *info, co
 #define R(n, v) nextGipa(instance, n, (PFN_xrVoidFunction *)&v)
     R("xrDestroyInstance", rDestroyInstance); R("xrGetSystemProperties", rGetSystemProperties); R("xrCreateSession", rCreateSession); R("xrDestroySession", rDestroySession);
     R("xrCreateReferenceSpace", rCreateReferenceSpace); R("xrDestroySpace", rDestroySpace); R("xrLocateSpace", rLocateSpace); R("xrPollEvent", rPollEvent);
-    R("xrWaitFrame", rWaitFrame); R("xrEndFrame", rEndFrame);
+    R("xrWaitFrame", rWaitFrame); R("xrEndFrame", rEndFrame); R("xrLocateViews", rLocateViews);
     rLocateHandJoints = nullptr; R("xrLocateHandJointsEXT", rLocateHandJoints); rCreateHandTracker = nullptr; R("xrCreateHandTrackerEXT", rCreateHandTracker);
     LOGI("layer active over the runtime (%u of the application's %u extensions passed down)", (unsigned)ext.size(), info->enabledExtensionCount);
     return r;
@@ -710,6 +816,7 @@ extern "C" __attribute__((visibility("default"))) XrResult XRAPI_CALL xrNegotiat
 }
 
 // for the test app in the same process: what the layer has done so far
+extern "C" __attribute__((visibility("default"))) int uxrMetaLayerDepthProbe(float *centre, float *low) { *centre = depthProbe[0]; *low = depthProbe[1]; return depthImages; }
 extern "C" __attribute__((visibility("default"))) void uxrMetaLayerStats(int *packets, int *dropped, int *alignedOut, int *entityCount) {
     std::lock_guard<std::mutex> g(lock); *packets = roomPackets; *dropped = passthroughLayersDropped; *alignedOut = aligned ? 1 : 0; *entityCount = (int)entities.size();
 }

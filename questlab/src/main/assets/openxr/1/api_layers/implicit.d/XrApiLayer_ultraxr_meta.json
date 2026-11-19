@@ -20,7 +20,8 @@
             { "name": "XR_FB_spatial_entity_sharing", "extension_version": "1" },
             { "name": "XR_FB_spatial_entity_user", "extension_version": "1" },
             { "name": "XR_META_spatial_entity_mesh", "extension_version": "1" },
-            { "name": "XR_META_boundary_visibility", "extension_version": "1" }
+            { "name": "XR_META_boundary_visibility", "extension_version": "1" },
+            { "name": "XR_META_environment_depth", "extension_version": "1" }
         ]
     }
 }
