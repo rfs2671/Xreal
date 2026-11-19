@@ -261,6 +261,24 @@ than the wearer could have walked or when two shifts fit equally well; given up 
 - Occlusion varied from run to run: a cube behind a wall hidden in 77 of 111 and 190 of 209 judged frames; a cube
   in front drawn in 86 of 86 and 310 of 481.
 
+### Walls and tables keep their identity (19 November, 14:00)
+
+Found while looking into the uneven occlusion: the layer gave each wall and table top its entity by its place in
+the room data's list, and that order changes from one reading to the next. A game holding "its" wall could find it
+on another wall half a second later. Each surface found is now matched to the entity that was the same surface
+before (same facing, within 0.35 m of its plane for a wall and 0.20 m for a table top, overlapping it); only a
+surface never seen becomes a new entity, and one no longer found keeps its handle and is left out of queries.
+The layer's log has a `ROOM` line with how many there are, how many are known but not found, how many were ever
+made, and how many moved more than 0.25 m between readings.
+
+Checked on the phone with the glasses lying on a table (no walls there): the run passes as before, 75 of 77, the
+two being the missing wall and the anchor's distance after the glasses were moved. **Not yet seen with real walls.**
+
+The uneven occlusion itself (a cube 0.3 m in front of a wall hidden in 171 of 481 judged frames in one run) is not
+explained with certainty. In that run two walls were 0.22 m apart in depth and overlapping sideways: a cube in
+front of the further one sits about at the nearer one's face, so hiding it may have been right (a cupboard in
+front of a wall) or the same wall found twice. It needs a look in that room.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,

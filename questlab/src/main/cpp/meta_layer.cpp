@@ -307,6 +307,8 @@ bool numbers(const std::string &s, size_t from, const char *name, float *out, in
 std::atomic<bool> running{false}; std::thread poller; int roomPackets = 0; bool roomTracked = false, floorMeasured = false;
 struct HeadSample { XrPosef p; bool ok = false; } jsonHead;
 
+int nextSurfaceKey = 0, surfacesNew = 0, surfaceJumps = 0, saidSurfaces = -1, saidGone = -1;
+float dist(const XrVector3f &a, const XrVector3f &b) { return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)); }
 void upsert(Kind kind, int key, const XrPosef &pose, float w, float h) {
     for (auto *e : entities) if (e->kind == kind && e->key == key) { e->pose = pose; e->w = w; e->h = h; e->live = true; return; }
     auto *e = new Entity{kind, makeUuid(kind, key), pose, w, h}; e->key = key; e->storable = true; e->saved = true; entities.push_back(e);
@@ -327,15 +329,50 @@ void readRoom() {
     upsert(CEILING, 0, {fromAxes({1, 0, 0}, {0, 0, 1}, {0, -1, 0}), {0, fy + 2.5f, 0}}, 8, 8);
     upsert(ROOM, 0, {{0, 0, 0, 1}, {0, fy, 0}}, 0, 0);
     upsert(MESH, 0, {{0, 0, 0, 1}, {0, fy, 0}}, 0, 0);
-    for (auto *e : entities) if (e->kind == WALL || e->kind == TABLE) e->live = false;
-    int walls = 0, tables = 0; size_t i = 0;
+    // Walls and table tops come as a list whose order means nothing and changes from one reading to the next. A game
+    // holds a wall for as long as it runs, so each one found now is given to the entity that was that same surface
+    // before (same facing, about the same plane, overlapping it); only a surface never seen becomes a new entity.
+    struct Found { Kind kind; XrPosef pose; float w, h; V3 n; };
+    std::vector<Found> found; size_t i = 0;
     while ((i = s.find("{\"kind\":\"", i)) != std::string::npos) {
         bool wall = s.compare(i + 9, 4, "wall") == 0, table = s.compare(i + 9, 5, "table") == 0;
         float c[3], u[3], v[3], n[3], hu, hv;
         if ((wall || table) && numbers(s, i, "c", c, 3) && numbers(s, i, "u", u, 3) && numbers(s, i, "v", v, 3) && numbers(s, i, "n", n, 3) && numbers(s, i, "hu", &hu, 1) && numbers(s, i, "hv", &hv, 1))
-            upsert(wall ? WALL : TABLE, wall ? walls++ : tables++, {fromAxes({u[0], u[1], u[2]}, {v[0], v[1], v[2]}, {n[0], n[1], n[2]}), {c[0], c[1], c[2]}}, hu * 2, hv * 2);
+            found.push_back({wall ? WALL : TABLE, {fromAxes({u[0], u[1], u[2]}, {v[0], v[1], v[2]}, {n[0], n[1], n[2]}), {c[0], c[1], c[2]}}, hu * 2, hv * 2, {n[0], n[1], n[2]}});
         i += 9;
     }
+    std::vector<Entity *> was; for (auto *e : entities) if (e->kind == WALL || e->kind == TABLE) { was.push_back(e); e->live = false; }
+    std::vector<bool> placed(found.size(), false), taken(was.size(), false);
+    auto cost = [](const Entity *e, const Found &f) -> float {      // metres apart as the same surface, or 1e9: not the same
+        if (e->kind != f.kind) return 1e9f;
+        V3 en = rot(e->pose.orientation, {0, 0, 1});
+        if (en.x * f.n.x + en.y * f.n.y + en.z * f.n.z < 0.9f) return 1e9f;
+        float dx = f.pose.position.x - e->pose.position.x, dy = f.pose.position.y - e->pose.position.y, dz = f.pose.position.z - e->pose.position.z;
+        float across = std::fabs(dx * en.x + dy * en.y + dz * en.z), along = std::sqrt(std::max(0.f, dx * dx + dy * dy + dz * dz - across * across));
+        float reach = (std::max(e->w, e->h) + std::max(f.w, f.h)) / 2;      // their middles this near: they overlap
+        if (across > (f.kind == WALL ? 0.35f : 0.20f) || along > std::max(0.4f, reach * 0.6f)) return 1e9f;
+        return across + 0.3f * along;
+    };
+    for (;;) {      // the nearest pair first, until none is left that could be the same surface
+        float best = 1e8f; int bf = -1, be = -1;
+        for (size_t a = 0; a < found.size(); a++) { if (placed[a]) continue; for (size_t b = 0; b < was.size(); b++) { if (taken[b]) continue; float c = cost(was[b], found[a]); if (c < best) { best = c; bf = (int)a; be = (int)b; } } }
+        if (bf < 0) break;
+        placed[bf] = taken[be] = true; Entity *e = was[be];
+        if (!e->live && roomPackets > 1 && dist(e->pose.position, found[bf].pose.position) > 0.25f) surfaceJumps++;
+        e->pose = found[bf].pose; e->w = found[bf].w; e->h = found[bf].h; e->live = true;
+    }
+    for (size_t a = 0; a < found.size(); a++) {
+        if (placed[a]) continue;
+        // never seen before. Past 48 of a kind the oldest one that is gone is used again, so that a surface found
+        // a little differently every time cannot fill the memory
+        Entity *e = nullptr; int n = 0; for (auto *o : was) if (o->kind == found[a].kind) n++;
+        if (n >= 48) for (size_t b = 0; b < was.size() && !e; b++) if (!taken[b] && was[b]->kind == found[a].kind) { e = was[b]; taken[b] = true; }
+        if (!e) { int key = nextSurfaceKey++; e = new Entity{found[a].kind, makeUuid(found[a].kind, key), found[a].pose, found[a].w, found[a].h}; e->key = key; e->storable = true; e->saved = true; entities.push_back(e); surfacesNew++; }
+        e->pose = found[a].pose; e->w = found[a].w; e->h = found[a].h; e->live = true;
+    }
+    int gone = 0; for (size_t b = 0; b < was.size(); b++) if (!taken[b]) gone++;
+    if ((int)found.size() != saidSurfaces || gone != saidGone) { saidSurfaces = (int)found.size(); saidGone = gone;
+        diag("ROOM  %d walls and table tops now; %d known that are not found at the moment; %d ever made; %d moved more than 0.25 m between readings", saidSurfaces, gone, surfacesNew, surfaceJumps); }
 }
 void pollLoop() { while (running) { readRoom(); for (int i = 0; i < 5 && running; i++) usleep(100000); } }
 
