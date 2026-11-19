@@ -422,7 +422,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         if (setupPlace) {
             check(setupClosed, "the kept room is placed from corners the wearer looked at", "%d corners given, last answer %d", (int)setupCorners.size(), setupAsked);
             __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room %s", setupClosed ? "placed" : "NOT placed");
-            if (setupClosed) { double show = nowSeconds() + 25; while (nowSeconds() < show) frame(); }      // the walls in green, for a look round
+            if (setupClosed) { double show = nowSeconds() + 90; while (nowSeconds() < show) frame(); }      // the walls in green, for a walk round the room
         } else if (setupClosed) {
             std::vector<float> xz; for (auto &c : setupCorners) { xz.push_back(c.x); xz.push_back(c.z); }
             int kept = 0;

@@ -99,6 +99,7 @@ object Tracking : GlassesLink.Listener {
     private var planFit: dev.ultraxr.core.RoomPlan.Fit? = null
     private var planBefore: dev.ultraxr.core.RoomPlan.Fit? = null
     private var planLostNs = 0L; private var planMaxShift = 0.0; private var planSaidNs = 0L
+    private var planTried = 0; private var planAgreed = 0; private var planCorrected = 0; private var planCorrectedM = 0.0
     @Volatile private var planShifting = false
     /** For whoever tells applications about the room: corners marked, and whether the plan is placed in the world now. */
     val roomPlanCorners: Int get() = synchronized(planLock) { plan?.corners?.size ?: 0 }
@@ -773,9 +774,32 @@ object Tracking : GlassesLink.Listener {
                         val lines = found.map { dev.ultraxr.core.RoomRecall.Line(it.x0, it.z0, it.x1, it.z1) }
                         // The marked room: placed in this world from the walls and table tops found, and after a loss of
                         // position the world is moved (turned and shifted) so that it lies where it lay before.
-                        var planMove: Pose? = null; var planSaid: String? = null
+                        var planMove: Pose? = null; var planSaid: String? = null; var planDrift = false
                         synchronized(planLock) {
-                            val pl = plan
+                            val pl = plan; val placed = planFit
+                            if (pl != null && placed != null && lines.size >= 2) {
+                                // The plan is placed: it is the map. The position estimator has no map of its own and
+                                // wanders as the wearer walks (worn on 19 November: walls that matched were "completely
+                                // off" after a walk, with no loss of position logged). The walls found in the last few
+                                // seconds are laid against the plan near where it is believed to lie; what they are off
+                                // by is how far the world has wandered, and most of that is taken out at once.
+                                planTried++
+                                val fit = pl.fit(lines, emptyList(), near = placed, yawWithin = 0.17, maxShift = 1.2)
+                                if (fit != null) {
+                                    val mv = placed.worldMoveFrom(fit)
+                                    val far = Math.sqrt(mv.p[0] * mv.p[0] + mv.p[2] * mv.p[2]); val turn = 2 * Math.atan2(mv.q[1], mv.q[3])
+                                    planAgreed++
+                                    if (far > 0.05 || Math.abs(turn) > 0.017) {
+                                        planMove = Pose(doubleArrayOf(mv.p[0] * 0.7, 0.0, mv.p[2] * 0.7), Q.axisAngle(0.0, 1.0, 0.0, turn * 0.7)); planDrift = true
+                                        planCorrected++; planCorrectedM += far
+                                    }
+                                }
+                                // a wall plan that is some seconds old was drawn in a world that has wandered since: begun afresh
+                                if (wallMap.pictures >= 12) wallMapReset = true
+                                val nowNs = System.nanoTime()
+                                if (nowNs - planSaidNs > 20_000_000_000L) { planSaidNs = nowNs
+                                    planSaid = "room: kept on the marked room: " + planTried + " looks at the walls, " + planAgreed + " could be laid on the plan, " + planCorrected + " corrections, " + dev.ultraxr.core.Fmt.f(planCorrectedM, 2) + " m in all" }
+                            }
                             if (pl != null && planFit == null) {
                                 val fy = roomFindings?.floorY ?: Double.NaN
                                 val tablesNow = roomFindings?.surfaces?.filter { it.kind == dev.ultraxr.core.RoomSurface.Kind.TABLE && !fy.isNaN() }?.map { doubleArrayOf(it.cx, it.cz, it.cy - fy) } ?: emptyList()
@@ -798,7 +822,8 @@ object Tracking : GlassesLink.Listener {
                         val pm = planMove
                         if (pm != null) {
                             val far = Math.sqrt(pm.p[0] * pm.p[0] + pm.p[2] * pm.p[2]); val turn = Math.toDegrees(2 * Math.atan2(pm.q[1], pm.q[3]))
-                            log("room: the marked room is found again; the world had slipped " + dev.ultraxr.core.Fmt.f(far, 2) + " m and " + dev.ultraxr.core.Fmt.f(turn, 1) + " degrees and is put back")
+                            if (!planDrift) log("room: the marked room is found again; the world had slipped " + dev.ultraxr.core.Fmt.f(far, 2) + " m and " + dev.ultraxr.core.Fmt.f(turn, 1) + " degrees and is put back")
+                            else if (far > 0.15) log("room: drift taken out against the marked room: " + dev.ultraxr.core.Fmt.f(far, 2) + " m, " + dev.ultraxr.core.Fmt.f(turn, 1) + " degrees")
                             planShifting = true; recallShifting = true; try { head.moveWorld(pm) } finally { planShifting = false; recallShifting = false }
                             continue
                         }
