@@ -380,7 +380,8 @@ Worn, 90 s, phone at 31 C (thermal status 0 throughout). No failed `xrEndFrame`,
   the head, level with the line of sight to 30 degrees below it, never above; the right in 68.
 - The room model had one wall at most while it ran.
 
-What the wearer saw of the hands' place against the real hands is not known yet.
+The wearer's word afterwards: the drawn hands sat on his real hands. So the 10 degree tilt was the whole of the
+"12 inches", and with it at 0 the picture and the tracking cameras agree as far as an eye can tell.
 
 ## Open
 
