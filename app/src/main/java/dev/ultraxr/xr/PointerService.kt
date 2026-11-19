@@ -73,7 +73,15 @@ class PointerService : AccessibilityService() {
     private fun show() {
         val v = Pad(this)
         v.onLeave = { leave() }
-        v.onFloor = { step -> XrHost.nudgePictureTilt(step) }
+        // The picture's tilt is turned a degree only by two taps on the same button within 0.6 s. A single tap did
+        // it until 19 November 2026, when ten stray touches of the phone during a game, a second or more apart,
+        // left everything drawn 10 degrees low without the wearer knowing.
+        var floorTapNs = 0L; var floorTapStep = 0f
+        v.onFloor = { step ->
+            val now = System.nanoTime()
+            if (step == floorTapStep && now - floorTapNs < 600_000_000L) { floorTapNs = 0L; XrHost.nudgePictureTilt(step) }
+            else { floorTapNs = now; floorTapStep = step; dev.ultraxr.tracking.Tracking.log("OpenXR: one tap on a picture-tilt button, ignored (two quick taps turn the picture a degree)") }
+        }
         val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.OPAQUE)

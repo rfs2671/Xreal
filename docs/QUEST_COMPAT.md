@@ -356,6 +356,20 @@ not found); stopped and started again it ran: 5400 frames, no failed `xrEndFrame
   At severe hand tracking is halved and the room is looked at every 1.7 s; dense depth took up to 0.9 s a picture.
   Numbers from this run are numbers from a hot phone.
 
+### "Hands are 12 inches below where they are" (19 November, 17:00)
+
+The picture had been turned 10 degrees down since 13:49:47 that day: ten single taps on the touchpad's
+picture-tilt button, one to two seconds apart, during a worn test (the wearer was holding the phone). Everything
+drawn after that, in every run from the third worn run on, sat 10 degrees low against the real room; a hand at
+45 cm is drawn 8 cm low by that alone. The setting is back at 0 (the factory calibration has the displays within
+0.2 degrees of the motion sensor in pitch), and the buttons now need two taps within 0.6 s.
+
+Earlier results of that afternoon that this touches: the judgement of wall grids and cubes by eye (none was
+given), and the wearer's reports about Unity's example. The counts taken from the test's own pictures do not
+depend on it.
+
+Whether 10 degrees is all of the 12 inches is not known until the wearer looks again.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
