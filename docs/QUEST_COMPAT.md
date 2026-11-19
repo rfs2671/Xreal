@@ -470,6 +470,22 @@ table tops found every 8 s, so a fit that does not come can be studied from the 
 What would make it dependable: the wearer looks at two of the marked corners and taps at each (a turn and a shift
 are two points), and the walls then only keep it in place. Not built.
 
+### Placing the kept room from corners the wearer looks at (19 November, 18:40)
+
+`RoomPlan.fitCorners`: in a fresh session the wearer looks at corners of the room and pinches, any of them in any
+order; each is some corner of the plan, it is not said which. Every way of taking the two taps furthest apart for
+two corners of the plan the same distance apart is tried and kept when every tap lies within 25 cm of a corner of
+its own; a rival place counts only when its taps lie nearly as well.
+
+On the owner's plan (26 corners, some 0.4 m apart), 300 random places, taps 7 cm off each way: three taps are never
+taken as enough; four place it rightly in 214, wrongly in 2, and ask for another in 84; five rightly in 272,
+wrongly in 1. So a wrong place is rare but possible, which is why the walls are then drawn in green for the wearer
+to check against the real ones.
+
+`tools/quest/room_setup.py SERIAL` now places a kept plan (and marks a room only when there is none, or with
+`--new`). The app's side is checked on the phone (three corners refused, four placed). The tool's placing mode has
+compiled and not yet run on the glasses.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,

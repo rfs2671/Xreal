@@ -118,6 +118,20 @@ object Tracking : GlassesLink.Listener {
         val said = "room plan kept: " + corners.size + " corners, " + p.walls.size + " walls (" + p.walls.joinToString(" ") { dev.ultraxr.core.Fmt.f(it.length, 1) } + " m), " + tables.size + " table tops as landmarks"
         log(said); return said
     }
+    /**
+     * The wearer has looked at corners of the room and tapped: [taps] are (x, z) in the app's world as it is now.
+     * Places the plan when they settle where it lies (core/RoomPlan.fitCorners). Returns a line for the log that
+     * begins "room plan placed" when it is.
+     */
+    fun placeRoomPlan(taps: List<DoubleArray>): String {
+        val said = synchronized(planLock) {
+            val p = plan ?: return@synchronized "no room plan to place"
+            val f = p.fitCorners(taps) ?: return@synchronized "room plan not placed yet from " + taps.size + " corners (four at least, and one more when two places fit)"
+            planFit = f; planBefore = null; planMaxShift = 0.0
+            "room plan placed from " + taps.size + " corners the wearer looked at"
+        }
+        log(said); return said
+    }
     fun clearRoomPlan(): String {
         synchronized(planLock) { plan = null; planFit = null; planBefore = null }
         try { appContext?.getExternalFilesDir(null)?.let { File(it, "room_plan.txt").delete() } } catch (_: Exception) {}

@@ -193,6 +193,10 @@ static void drawText(const M4 &vp) {
 // ---- room set-up: the wearer points at each corner where a wall meets the floor and pinches, going round the room once;
 // a pinch on the first corner again closes the room. Each corner is where the pointing ray meets the floor.
 static bool setupMode = false, setupClosed = false; static int setupSaved = -1; static std::vector<XrVector3f> setupCorners;
+// placing: a plan is kept already and this session has to find where it lies; the wearer looks at corners of the room, any of them
+static bool setupPlace = false; static int setupAsked = 0;
+static void *setupLayer() { static void *h = dlopen("libuxr_meta_layer.so", RTLD_NOW); return h; }
+static std::vector<float> setupWalls; static int setupWallAge = 0;
 static bool setupDown[2] = {false, false}; static double setupLastAdd = 0; static XrTime setupClosedAt = 0;
 static double viewNow() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
 static void buildSetup(XrTime t, const XrPosef &head) {
@@ -223,31 +227,55 @@ static void buildSetup(XrTime t, const XrPosef &head) {
         int first = (int)vtx.size() / 3;                               // the place looked at: a ring on the floor with a cross in it, and a post
         for (int i = 0; i < 24; i++) { float a0 = i * 0.2618f, a1 = (i + 1) * 0.2618f; lineTo({hit.x + 0.15f * std::cos(a0), floorY, hit.z + 0.15f * std::sin(a0)}, {hit.x + 0.15f * std::cos(a1), floorY, hit.z + 0.15f * std::sin(a1)}); }
         lineTo({hit.x - 0.15f, floorY, hit.z}, {hit.x + 0.15f, floorY, hit.z}); lineTo({hit.x, floorY, hit.z - 0.15f}, {hit.x, floorY, hit.z + 0.15f}); lineTo(hit, {hit.x, floorY + 1.0f, hit.z});
-        if (!setupCorners.empty()) lineTo(setupCorners.back(), hit);   // and the wall it would make from the last corner
+        if (!setupCorners.empty() && !setupPlace) lineTo(setupCorners.back(), hit);   // and the wall it would make from the last corner
         batch(GL_LINES, first, 1, 1, 1, 1, 0);
-        if (pressed && viewNow() - setupLastAdd > 0.7) {
+        if (pressed && setupPlace && viewNow() - setupLastAdd > 0.7) {
+            // placing: any corner of the room, well away from the ones given already; from the fourth on the app is asked
+            setupLastAdd = viewNow(); bool fresh = true; for (auto &c : setupCorners) if (std::hypot(hit.x - c.x, hit.z - c.z) < 0.5f) fresh = false;
+            if (fresh) {
+                setupCorners.push_back(hit); __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE corner %d given at %.2f %.2f", (int)setupCorners.size(), hit.x, hit.z);
+                if (setupCorners.size() >= 4) {
+                    std::vector<float> xz; for (auto &c : setupCorners) { xz.push_back(c.x); xz.push_back(c.z); }
+                    auto place = setupLayer() ? (int (*)(XrSpace, XrTime, const float *, int))dlsym(setupLayer(), "uxrMetaLayerPlaceRoomPlan") : nullptr;
+                    setupAsked = place ? place(local, t, xz.data(), (int)setupCorners.size()) : -1;
+                    __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE placing with %d corners: %s", (int)setupCorners.size(), setupAsked == 1 ? "placed" : setupAsked == 0 ? "not settled yet" : "could not ask");
+                    if (setupAsked == 1) { setupClosed = true; setupSaved = 1; setupClosedAt = t; }
+                }
+            }
+        } else if (pressed && viewNow() - setupLastAdd > 0.7) {
             setupLastAdd = viewNow();
             XrVector3f f0 = setupCorners.empty() ? hit : setupCorners[0];
             if (setupCorners.size() >= 3 && std::hypot(hit.x - f0.x, hit.z - f0.z) < 0.4f) { setupClosed = true; setupClosedAt = t; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room closed with %d corners", (int)setupCorners.size()); }
             else if (setupCorners.empty() || std::hypot(hit.x - setupCorners.back().x, hit.z - setupCorners.back().z) > 0.4f) { setupCorners.push_back(hit); __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE corner %d marked at %.2f %.2f", (int)setupCorners.size(), hit.x, hit.z); }
         }
     }
+    // the walls as applications are given them at this moment, in green: after a room is kept or placed they are the
+    // marked ones, and should stand on the real walls
+    if (setupLayer() && (setupWallAge++ % 30) == 0) { auto wallsFn = (int (*)(XrSpace, XrTime, float *, int))dlsym(setupLayer(), "uxrMetaLayerWalls");
+        setupWalls.assign(7 * 48, 0); int k = wallsFn ? wallsFn(local, t, setupWalls.data(), 48) : 0; setupWalls.resize((size_t)k * 7); }
+    if (!setupWalls.empty() && (setupClosed || setupPlace)) { int f2 = (int)vtx.size() / 3;
+        for (size_t w = 0; w + 6 < setupWalls.size(); w += 7) { XrVector3f a{setupWalls[w], setupWalls[w + 1], setupWalls[w + 2]}, b{setupWalls[w + 3], setupWalls[w + 4], setupWalls[w + 5]}; float hgt = std::min(setupWalls[w + 6], 2.3f);
+            lineTo(a, b); lineTo({a.x, a.y + hgt, a.z}, {b.x, b.y + hgt, b.z}); lineTo({a.x, a.y + hgt / 2, a.z}, {b.x, b.y + hgt / 2, b.z}); lineTo(a, {a.x, a.y + hgt, a.z}); lineTo(b, {b.x, b.y + hgt, b.z}); }
+        batch(GL_LINES, f2, 0.2f, 1.0f, 0.3f, 1, 0); }
     int first = (int)vtx.size() / 3; size_t n = setupCorners.size();
     for (size_t i = 0; i < n; i++) {
-        XrVector3f a = setupCorners[i]; lineTo(a, {a.x, floorY + top, a.z});
-        if (i + 1 < n || setupClosed) { XrVector3f b = setupCorners[(i + 1) % n]; lineTo(a, b); lineTo({a.x, floorY + top, a.z}, {b.x, floorY + top, b.z}); lineTo({a.x, floorY + top / 2, a.z}, {b.x, floorY + top / 2, b.z}); }
+        XrVector3f a = setupCorners[i]; lineTo(a, {a.x, floorY + (setupPlace ? 0.6f : top), a.z});
+        if (!setupPlace && (i + 1 < n || setupClosed)) { XrVector3f b = setupCorners[(i + 1) % n]; lineTo(a, b); lineTo({a.x, floorY + top, a.z}, {b.x, floorY + top, b.z}); lineTo({a.x, floorY + top / 2, a.z}, {b.x, floorY + top / 2, b.z}); }
     }
-    if (setupClosed) batch(GL_LINES, first, 0.2f, 1.0f, 0.3f, 1, 0); else batch(GL_LINES, first, 1.0f, 0.85f, 0.1f, 1, 0);
+    if (setupClosed && !setupPlace) batch(GL_LINES, first, 0.2f, 1.0f, 0.3f, 1, 0); else batch(GL_LINES, first, 1.0f, 0.85f, 0.1f, 1, 0);
     // what to do next, in words, and whether a hand is seen at all (a pinch nobody sees does nothing)
     static double handSeenAt = -10; if (handNow) handSeenAt = viewNow();
     const char *hand = viewNow() - handSeenAt < 1.0 ? "Hand seen" : "No hand seen: hold it up, or tap the phone";
     char words[400];
-    if (setupClosed) snprintf(words, sizeof words, setupSaved == 1 ? "Room saved: %d walls\n \nYou can take the glasses off" : setupSaved == 0 ? "The room could NOT be saved (%d corners)\n \n " : "Saving the room, %d corners...\n \n ", (int)n);
+    if (setupPlace && setupClosed) snprintf(words, sizeof words, "Room found\nThe green lines should stand on your walls\nLook around to check");
+    else if (setupPlace && n < 4) snprintf(words, sizeof words, "Finding your saved room: %d of 4 corners\nLook at ANY floor corner of the room, then pinch\n%s", (int)n, hand);
+    else if (setupPlace) snprintf(words, sizeof words, "%d corners: not sure yet\nOne more corner, far from the others\n%s", (int)n, hand);
+    else if (setupClosed) snprintf(words, sizeof words, setupSaved == 1 ? "Room saved: %d walls\n \nYou can take the glasses off" : setupSaved == 0 ? "The room could NOT be saved (%d corners)\n \n " : "Saving the room, %d corners...\n \n ", (int)n);
     else if (n == 0) snprintf(words, sizeof words, "Look at a floor corner of the room\nWhite ring on the corner: pinch\n%s", hand);
     else if (n < 3) snprintf(words, sizeof words, "%d marked. Look at the next corner\nRing on it: pinch\n%s", (int)n, hand);
     else snprintf(words, sizeof words, "%d marked. Next corner: pinch\nTo finish: pinch on the GREEN cross\n%s", (int)n, hand);
     setText(words); placeText(head);
-    if (n) { first = (int)vtx.size() / 3; XrVector3f a = setupCorners[0]; lineTo({a.x - 0.2f, floorY, a.z}, {a.x + 0.2f, floorY, a.z}); lineTo({a.x, floorY, a.z - 0.2f}, {a.x, floorY, a.z + 0.2f}); batch(GL_LINES, first, 0.2f, 1.0f, 0.3f, 1, 0); }   // the first corner: where to close
+    if (n && !setupPlace) { first = (int)vtx.size() / 3; XrVector3f a = setupCorners[0]; lineTo({a.x - 0.2f, floorY, a.z}, {a.x + 0.2f, floorY, a.z}); lineTo({a.x, floorY, a.z - 0.2f}, {a.x, floorY, a.z + 0.2f}); batch(GL_LINES, first, 0.2f, 1.0f, 0.3f, 1, 0); }   // the first corner: where to close
 }
 static void buildGeometry(XrTime t, const XrPosef &head) {
     vtx.clear(); batches.clear(); wallsInView = 0;

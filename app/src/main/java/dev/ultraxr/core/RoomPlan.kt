@@ -153,6 +153,54 @@ class RoomPlan(val corners: List<DoubleArray>, val tables: List<DoubleArray> = e
         return Fit(best.yaw, best.sx, best.sz, now.size, tablesAt(best))
     }
 
+    /**
+     * How the plan lies in a world in which the wearer has shown where some of its corners are: [taps] are (x, z) of
+     * corners of the room looked at and tapped, any of them, in any order, three at least. Each is a corner of the
+     * plan, it is not said which: every way of taking the two taps furthest apart for two corners of the plan the
+     * same distance apart is tried, and kept when every tap then lies within [tol] metres of a corner of its own.
+     * Null when no way fits, or when two different ways do (then one more corner settles it).
+     */
+    fun fitCorners(taps: List<DoubleArray>, tol: Double = 0.25): Fit? {
+        if (!usable || taps.size < 4) return null                      // three seldom settle it, and sometimes wrongly (tested on the owner's room)
+        var ia = 0; var ib = 1; var far = -1.0
+        for (i in taps.indices) for (j in i + 1 until taps.size) { val d = sqrt((taps[i][0] - taps[j][0]) * (taps[i][0] - taps[j][0]) + (taps[i][1] - taps[j][1]) * (taps[i][1] - taps[j][1])); if (d > far) { far = d; ia = i; ib = j } }
+        if (far < 1.0) return null                                       // three corners in one nook say little about the turn
+        val a = taps[ia]; val b = taps[ib]
+        class Cand(val f: Fit, val err: Double)
+        val cands = ArrayList<Cand>()
+        for (i in corners.indices) for (j in corners.indices) {
+            if (i == j) continue
+            val ci = corners[i]; val cj = corners[j]
+            if (abs(sqrt((ci[0] - cj[0]) * (ci[0] - cj[0]) + (ci[1] - cj[1]) * (ci[1] - cj[1])) - far) > tol) continue
+            var yaw = wrap(atan2(cj[1] - ci[1], cj[0] - ci[0]) - atan2(b[1] - a[1], b[0] - a[0]))
+            val r = Fit(yaw, 0.0, 0.0, 0, 0).apply(ci[0], ci[1]); var tx = a[0] - r[0]; var tz = a[1] - r[1]
+            var err = 0.0; var ok = true; val which = IntArray(taps.size)
+            for (pass in 0..1) {
+                val f = Fit(yaw, tx, tz, 0, 0); err = 0.0; val used = BooleanArray(corners.size)
+                for (k in taps.indices) {
+                    var bd = tol * tol; var bi = -1
+                    for (c in corners.indices) { if (used[c]) continue; val w = f.apply(corners[c][0], corners[c][1]); val d = (w[0] - taps[k][0]) * (w[0] - taps[k][0]) + (w[1] - taps[k][1]) * (w[1] - taps[k][1]); if (d < bd) { bd = d; bi = c } }
+                    if (bi < 0) { ok = false; break }
+                    used[bi] = true; which[k] = bi; err += bd
+                }
+                if (!ok || pass == 1) break
+                // the turn and shift that bring every tap nearest to its own corner
+                var mqx = 0.0; var mqz = 0.0; var mpx = 0.0; var mpz = 0.0; val n = taps.size
+                for (k in taps.indices) { mqx += corners[which[k]][0] / n; mqz += corners[which[k]][1] / n; mpx += taps[k][0] / n; mpz += taps[k][1] / n }
+                var sc = 0.0; var ss = 0.0
+                for (k in taps.indices) { val ux = corners[which[k]][0] - mqx; val uz = corners[which[k]][1] - mqz; val vx = taps[k][0] - mpx; val vz = taps[k][1] - mpz; sc += ux * vx + uz * vz; ss += ux * vz - uz * vx }
+                val th = atan2(ss, sc); val c = cos(th); val sn = sin(th)
+                yaw = wrap(-th); tx = mpx - (c * mqx - sn * mqz); tz = mpz - (sn * mqx + c * mqz)
+            }
+            if (ok) cands.add(Cand(Fit(yaw, tx, tz, 0, 0), err))
+        }
+        val top = cands.minByOrNull { it.err } ?: return null
+        // Another way that puts the plan somewhere else is no rival when its taps lie clearly worse: the right way leaves
+        // each tap a few centimetres from its corner, a chance fit leaves them a hand's width off.
+        for (c in cands) if ((abs(wrap(c.f.yaw - top.f.yaw)) > 0.17 || abs(c.f.tx - top.f.tx) > 0.45 || abs(c.f.tz - top.f.tz) > 0.45) && c.err < 4.0 * top.err + 0.006 * taps.size) return null
+        return Fit(top.f.yaw, top.f.tx, top.f.tz, walls.size, 0)
+    }
+
     /** A few lines of text, one thing a line: kept in the files folder of the app. */
     fun toText(): String {
         val sb = StringBuilder("ultraxr room plan 1\n")

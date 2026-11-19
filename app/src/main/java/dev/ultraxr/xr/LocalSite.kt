@@ -102,11 +102,14 @@ object LocalSite {
         // (x and z are the application world's), or /room_plan?clear=1 to forget the plan.
         if (path == "/room_plan") {
             val q = full.substringAfter('?', "")
-            val said = if (q.startsWith("clear")) Tracking.clearRoomPlan() else {
+            val said = if (q.startsWith("clear")) Tracking.clearRoomPlan() else if (q.startsWith("place=")) {
+                // corners of the room the wearer looked at in this session, any of them: /room_plan?place=x,z;x,z;...
+                Tracking.placeRoomPlan(q.substringAfter("place=").split(';').mapNotNull { pt -> val v = pt.split(',').mapNotNull { it.toDoubleOrNull() }; if (v.size == 2 && v.all { it.isFinite() && Math.abs(it) < 100 }) doubleArrayOf(v[0], v[1]) else null })
+            } else {
                 val corners = q.substringAfter("c=", "").split(';').mapNotNull { pt -> val v = pt.split(',').mapNotNull { it.toDoubleOrNull() }; if (v.size == 2 && v.all { it.isFinite() && Math.abs(it) < 100 }) doubleArrayOf(v[0], v[1]) else null }
                 Tracking.saveRoomPlan(corners)
             }
-            send(out, "200 OK", "application/json", ("{\"ok\":" + said.startsWith("room plan kept") + ",\"said\":\"" + said.replace("\"", "'") + "\"}").toByteArray()); return
+            send(out, "200 OK", "application/json", ("{\"ok\":" + (said.startsWith("room plan kept") || said.startsWith("room plan placed")) + ",\"said\":\"" + said.replace("\"", "'") + "\"}").toByteArray()); return
         }
         if (path.startsWith("/p/")) { proxy(full.removePrefix("/p/"), out); return }
         val name = path.trimStart('/').ifEmpty { "index.html" }

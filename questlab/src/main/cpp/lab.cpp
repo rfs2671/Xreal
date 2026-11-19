@@ -411,16 +411,25 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     }
 
     // ---- room set-up: the wearer marks the corners; the layer hands them to the Ultra XR app, which keeps the room
-    if (setupSeconds > 0 && !vulkan && setupRoomView(sys)) {
+    if (setupSeconds != 0 && !vulkan && setupRoomView(sys)) {
+        // a negative time: mark the room anew whatever is kept; otherwise a kept plan is placed, and a room is marked only when there is none
+        bool anew = setupSeconds < 0; if (anew) setupSeconds = -setupSeconds;
+        { int pc = 0, pp = 0; if (setupLayer()) { auto st = (void (*)(int *, int *))dlsym(setupLayer(), "uxrMetaLayerPlanState"); if (st) st(&pc, &pp); }
+          setupPlace = pc > 0 && !anew; line("info  room set-up: the Ultra XR app has a plan of %d corners, %s in this session: %s", pc, pp ? "placed" : "not placed", setupPlace ? "placing it" : "marking a room"); }
+        __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE mode %s", setupPlace ? "placing" : "marking");
         textEnv = env; textActivity = act; setupMode = true; renderHook = drawRoomView; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room set-up: point at each corner on the floor and pinch, for up to %d seconds", (int)setupSeconds);
         double until = nowSeconds() + setupSeconds; while (nowSeconds() < until && !setupClosed) frame();
-        if (setupClosed) {
+        if (setupPlace) {
+            check(setupClosed, "the kept room is placed from corners the wearer looked at", "%d corners given, last answer %d", (int)setupCorners.size(), setupAsked);
+            __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room %s", setupClosed ? "placed" : "NOT placed");
+            if (setupClosed) { double show = nowSeconds() + 25; while (nowSeconds() < show) frame(); }      // the walls in green, for a look round
+        } else if (setupClosed) {
             std::vector<float> xz; for (auto &c : setupCorners) { xz.push_back(c.x); xz.push_back(c.z); }
             int kept = 0;
             if (void *lh = dlopen("libuxr_meta_layer.so", RTLD_NOW)) { auto save = (int (*)(XrSpace, XrTime, const float *, int))dlsym(lh, "uxrMetaLayerSaveRoomPlan"); if (save) kept = save(local, frameTime, xz.data(), (int)setupCorners.size()); }
             setupSaved = kept; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room %s", kept ? "kept" : "NOT kept");
             check(kept == 1, "the marked room is handed to the Ultra XR app and kept", "%d corners", (int)setupCorners.size());
-            double show = nowSeconds() + 6; while (nowSeconds() < show) frame();      // the closed room, in green, for a look
+            double show = nowSeconds() + 15; while (nowSeconds() < show) frame();      // the closed room, in green, for a look
         } else check(false, "the room is marked and closed within the time", "%d corners marked, not closed", (int)setupCorners.size());
         for (size_t i = 0; i < setupCorners.size(); i++) line("info  corner %d at %.2f, %.2f in the local space", (int)i + 1, setupCorners[i].x, setupCorners[i].z);
         renderHook = nullptr; setupMode = false;

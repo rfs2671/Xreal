@@ -68,6 +68,25 @@ class RoomPlanTest {
         assertTrue("wrong $wrong", wrong <= 2); assertTrue("right $right", right >= 30); assertTrue(rightBy[4] * triedBy[2] >= rightBy[2] * triedBy[4])
     }
 
+    @Test fun theOwnersRoomIsPlacedFromCornersHeLooksAt() {
+        // In a fresh session he looks at corners of the room and taps, any of them; each tap lands within some
+        // centimetres of a marked corner (7 cm here, each way). Three, and where three do not settle it, a fourth.
+        val r = Random(21); val c = owners.corners
+        var right3 = 0; var wrong3 = 0; var none3 = 0; var right4 = 0; var wrong4 = 0; var none4 = 0; var right5 = 0; var wrong5 = 0; var none5 = 0
+        repeat(300) {
+            val yaw = r.nextDouble() * 6.28 - 3.14; val tx = r.nextDouble() * 6 - 3; val tz = r.nextDouble() * 6 - 3; val f = RoomPlan.Fit(yaw, tx, tz, 0, 0)
+            val pick = c.indices.shuffled(r).take(5)
+            val taps = pick.map { val w = f.apply(c[it][0], c[it][1]); doubleArrayOf(w[0] + r.nextGaussian() * 0.07, w[1] + r.nextGaussian() * 0.07) }
+            // right: the far end of a 4 m room within 30 cm of where it is (a turn within 4 degrees, the middle within 20 cm)
+            fun good(g: RoomPlan.Fit): Boolean { val m = f.apply(-0.9, 2.4); val n = g.apply(-0.9, 2.4); return abs(RoomPlan.wrap(g.yaw - yaw)) < 0.12 && abs(m[0] - n[0]) < 0.3 && abs(m[1] - n[1]) < 0.3 }
+            val g3 = owners.fitCorners(taps.take(3)); if (g3 == null) none3++ else if (good(g3)) right3++ else wrong3++
+            val g4 = owners.fitCorners(taps.take(4)); if (g4 == null) none4++ else if (good(g4)) right4++ else wrong4++
+            val g5 = owners.fitCorners(taps); if (g5 == null) none5++ else if (good(g5)) right5++ else wrong5++
+        }
+        println("RoomPlan owner's room from corners: three taps right $right3 wrong $wrong3 not said $none3 of 300; four taps right $right4 wrong $wrong4 not said $none4; five right $right5 wrong $wrong5 not said $none5")
+        assertEquals("three taps are not enough to say", 300, none3); assertTrue("wrong with four $wrong4", wrong4 <= 3); assertTrue("right with four $right4", right4 >= 150); assertTrue("wrong with five $wrong5", wrong5 <= 2); assertTrue("right with five $right5", right5 >= 200)
+    }
+
     @Test fun aPlainRectangleCannotSayWhichEndIsWhich() {
         val r = Random(2)
         assertNull(box.fit(found(box, listOf(0, 1), 0.7, 1.0, -0.5, r)))

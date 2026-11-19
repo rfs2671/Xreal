@@ -335,6 +335,7 @@ struct HeadSample { XrPosef p; bool ok = false; } jsonHead;
 
 int nextSurfaceKey = 0, surfacesNew = 0, surfaceJumps = 0, saidSurfaces = -1, saidGone = -1;
 float dist(const XrVector3f &a, const XrVector3f &b) { return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z)); }
+int planCorners = 0; bool planPlaced = false;      // the room the owner marked, as the Ultra XR app says: how many corners, and whether it is placed in this session
 void upsert(Kind kind, int key, const XrPosef &pose, float w, float h) {
     for (auto *e : entities) if (e->kind == kind && e->key == key) { e->pose = pose; e->w = w; e->h = h; e->live = true; return; }
     auto *e = new Entity{kind, makeUuid(kind, key), pose, w, h}; e->key = key; e->storable = true; e->saved = true; entities.push_back(e);
@@ -345,6 +346,7 @@ void readRoom() {
     std::lock_guard<std::mutex> g(lock);
     roomPackets++;
     roomTracked = s.find("\"tracked\":true") != std::string::npos;
+    { size_t pi = s.find("\"plan\":{\"corners\":"); planCorners = pi == std::string::npos ? 0 : atoi(s.c_str() + pi + 18); planPlaced = pi != std::string::npos && s.find("\"placed\":true", pi) != std::string::npos && s.find("\"placed\":true", pi) < pi + 48; }
     floorMeasured = s.find("\"measured\":true") != std::string::npos;
     float hp[3], hq[4];
     size_t hi = s.find("\"head\":");
@@ -1141,6 +1143,37 @@ extern "C" __attribute__((visibility("default"))) int uxrMetaLayerSaveRoomPlan(X
     std::string a = httpGet(q.c_str());
     diag("ROOM  %d marked corners handed to the Ultra XR app: %s", n, a.empty() ? "no answer" : a.c_str());
     return a.find("\"ok\":true") != std::string::npos ? 1 : 0;
+}
+// For the set-up tool: how many corners the kept plan has (0: none) and whether it is placed in this session.
+extern "C" __attribute__((visibility("default"))) void uxrMetaLayerPlanState(int *corners, int *placed) { std::lock_guard<std::mutex> g(lock); *corners = planCorners; *placed = planPlaced ? 1 : 0; }
+// Corners of the room the wearer looked at in this session (any of them, x and z in [space]): the Ultra XR app places
+// its kept plan from them. 1 when it is placed, 0 when they do not settle it yet, -1 when it could not be asked.
+extern "C" __attribute__((visibility("default"))) int uxrMetaLayerPlaceRoomPlan(XrSpace space, XrTime time, const float *xz, int n) {
+    if (!rLocateSpace || roomRef == XR_NULL_HANDLE || n < 1 || n > 16) return -1;
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    if (XR_FAILED(rLocateSpace(space, roomRef, time, &loc)) || !(loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) return -1;
+    std::string q = "/room_plan?place=";
+    { std::lock_guard<std::mutex> g(lock); if (!aligned) return -1;
+      for (int i = 0; i < n; i++) { XrPosef p = refInRoom(compose(loc.pose, {{0, 0, 0, 1}, {xz[i * 2], 0, xz[i * 2 + 1]}})); char b[64]; snprintf(b, sizeof b, "%s%.3f,%.3f", i ? ";" : "", p.position.x, p.position.z); q += b; } }
+    std::string a = httpGet(q.c_str());
+    diag("ROOM  %d corners the wearer looked at handed to the Ultra XR app: %s", n, a.empty() ? "no answer" : a.c_str());
+    if (a.empty()) return -1;
+    return a.find("\"ok\":true") != std::string::npos ? 1 : 0;
+}
+// The walls as applications are given them now, in [space]: for each, the two ends of its foot (x, y, z twice) and its
+// height, seven numbers. Returns how many (at most [max]).
+extern "C" __attribute__((visibility("default"))) int uxrMetaLayerWalls(XrSpace space, XrTime time, float *out, int max) {
+    if (!rLocateSpace || roomRef == XR_NULL_HANDLE) return 0;
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    if (XR_FAILED(rLocateSpace(roomRef, space, time, &loc)) || !(loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) return 0;
+    std::lock_guard<std::mutex> g(lock); if (!aligned) return 0;
+    int n = 0;
+    for (auto *e : entities) { if (n >= max) break; if (e->kind != WALL || !e->live) continue;
+        XrPosef p = compose(loc.pose, roomInRef(e->pose)); V3 u = rot(p.orientation, {1, 0, 0}), v = rot(p.orientation, {0, 1, 0});
+        float hw = e->w / 2, hh = e->h / 2; float *o = out + n * 7;
+        o[0] = p.position.x - u.x * hw - v.x * hh; o[1] = p.position.y - u.y * hw - v.y * hh; o[2] = p.position.z - u.z * hw - v.z * hh;
+        o[3] = p.position.x + u.x * hw - v.x * hh; o[4] = p.position.y + u.y * hw - v.y * hh; o[5] = p.position.z + u.z * hw - v.z * hh; o[6] = e->h; n++; }
+    return n;
 }
 extern "C" __attribute__((visibility("default"))) int uxrMetaLayerDepthProbe(float *centre, float *low) { *centre = depthProbe[0]; *low = depthProbe[1]; return depthImages; }
 extern "C" __attribute__((visibility("default"))) void uxrMetaLayerStats(int *packets, int *dropped, int *alignedOut, int *entityCount) {
