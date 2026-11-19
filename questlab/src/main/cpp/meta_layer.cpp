@@ -106,6 +106,7 @@ struct Entity {
     float w = 0, h = 0;                           // a plane's size along its x and y
     bool locatable = false, storable = false, saved = false;
     int key = 0;                                  // which wall or table it was in the room data
+    bool live = true;                             // false: a wall or table the room model no longer has; the handle stays good, queries leave it out
 };
 std::vector<Entity *> entities;                   // never freed while the instance lives: games keep the handles
 bool isEntity(XrSpace s) { for (auto *e : entities) if ((XrSpace)(uintptr_t)e == s) return true; return false; }
@@ -154,7 +155,7 @@ std::atomic<bool> running{false}; std::thread poller; int roomPackets = 0; bool 
 struct HeadSample { XrPosef p; bool ok = false; } jsonHead;
 
 void upsert(Kind kind, int key, const XrPosef &pose, float w, float h) {
-    for (auto *e : entities) if (e->kind == kind && e->key == key) { e->pose = pose; e->w = w; e->h = h; return; }
+    for (auto *e : entities) if (e->kind == kind && e->key == key) { e->pose = pose; e->w = w; e->h = h; e->live = true; return; }
     auto *e = new Entity{kind, makeUuid(kind, key), pose, w, h}; e->key = key; e->storable = true; e->saved = true; entities.push_back(e);
 }
 void readRoom() {
@@ -173,6 +174,7 @@ void readRoom() {
     upsert(CEILING, 0, {fromAxes({1, 0, 0}, {0, 0, 1}, {0, -1, 0}), {0, fy + 2.5f, 0}}, 8, 8);
     upsert(ROOM, 0, {{0, 0, 0, 1}, {0, fy, 0}}, 0, 0);
     upsert(MESH, 0, {{0, 0, 0, 1}, {0, fy, 0}}, 0, 0);
+    for (auto *e : entities) if (e->kind == WALL || e->kind == TABLE) e->live = false;
     int walls = 0, tables = 0; size_t i = 0;
     while ((i = s.find("{\"kind\":\"", i)) != std::string::npos) {
         bool wall = s.compare(i + 9, 4, "wall") == 0, table = s.compare(i + 9, 5, "table") == 0;
@@ -302,7 +304,7 @@ XrResult XRAPI_CALL uQuerySpacesFB(XrSession, const XrSpaceQueryInfoBaseHeaderFB
     const XrSpaceQueryInfoFB *qi = info->type == XR_TYPE_SPACE_QUERY_INFO_FB ? (const XrSpaceQueryInfoFB *)info : nullptr;
     const XrSpaceFilterInfoBaseHeaderFB *f = qi ? qi->filter : nullptr;
     for (auto *e : entities) {
-        if (e->kind == ANCHOR && !e->saved) continue;                       // a query finds what is stored
+        if ((e->kind == ANCHOR && !e->saved) || !e->live) continue;         // a query finds what is stored, and what is still there
         bool ok = true;
         if (f && f->type == XR_TYPE_SPACE_COMPONENT_FILTER_INFO_FB) ok = has(e, ((const XrSpaceComponentFilterInfoFB *)f)->componentType);
         else if (f && f->type == XR_TYPE_SPACE_UUID_FILTER_INFO_FB) {
@@ -344,7 +346,7 @@ XrResult XRAPI_CALL uEraseSpaceFB(XrSession, const XrSpaceEraseInfoFB *info, XrA
 XrResult XRAPI_CALL uGetSpaceContainerFB(XrSession, XrSpace s, XrSpaceContainerFB *out) {
     Entity *e = entity(s); if (!e || e->kind != ROOM) return XR_ERROR_SPACE_COMPONENT_NOT_ENABLED_FB;
     std::lock_guard<std::mutex> g(lock);
-    uint32_t n = 0; for (auto *x : entities) if (x->kind != ROOM && x->kind != ANCHOR) { if (out->uuids && n < out->uuidCapacityInput) out->uuids[n] = x->uuid; n++; }
+    uint32_t n = 0; for (auto *x : entities) if (x->kind != ROOM && x->kind != ANCHOR && x->live) { if (out->uuids && n < out->uuidCapacityInput) out->uuids[n] = x->uuid; n++; }
     out->uuidCountOutput = n; return (out->uuidCapacityInput && out->uuidCapacityInput < n) ? XR_ERROR_SIZE_INSUFFICIENT : XR_SUCCESS;
 }
 XrResult XRAPI_CALL uGetSpaceBoundingBox2DFB(XrSession, XrSpace s, XrRect2Df *out) {
@@ -369,7 +371,7 @@ XrResult XRAPI_CALL uGetSpaceRoomLayoutFB(XrSession, XrSpace s, XrRoomLayoutFB *
     uint32_t n = 0;
     for (auto *x : entities) {
         if (x->kind == FLOOR) out->floorUuid = x->uuid; else if (x->kind == CEILING) out->ceilingUuid = x->uuid;
-        else if (x->kind == WALL) { if (out->wallUuids && n < out->wallUuidCapacityInput) out->wallUuids[n] = x->uuid; n++; }
+        else if (x->kind == WALL && x->live) { if (out->wallUuids && n < out->wallUuidCapacityInput) out->wallUuids[n] = x->uuid; n++; }
     }
     out->wallUuidCountOutput = n; return (out->wallUuidCapacityInput && out->wallUuidCapacityInput < n) ? XR_ERROR_SIZE_INSUFFICIENT : XR_SUCCESS;
 }
@@ -381,7 +383,7 @@ std::vector<XrVector3f> meshV; std::vector<uint32_t> meshI;
 void buildMesh(Entity *m) {      // lock held
     meshV.clear(); meshI.clear(); XrPosef inv = inverse(m->pose);
     for (auto *e : entities) {
-        if (e->kind != FLOOR && e->kind != CEILING && e->kind != WALL && e->kind != TABLE) continue;
+        if ((e->kind != FLOOR && e->kind != CEILING && e->kind != WALL && e->kind != TABLE) || !e->live) continue;
         float x = e->w / 2, y = e->h / 2; const float k[4][2] = {{-x, -y}, {x, -y}, {x, y}, {-x, y}};
         uint32_t b = (uint32_t)meshV.size();
         for (auto &q : k) meshV.push_back(compose(inv, compose(e->pose, {{0, 0, 0, 1}, {q[0], q[1], 0}})).position);

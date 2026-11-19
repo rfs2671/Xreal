@@ -52,6 +52,22 @@ The one failure is again "no wall": the glasses lay still, so the room model mea
 is the height setting) nor a wall. The Scene API against a real room needs someone wearing them and looking around;
 the test takes `--ei room_seconds N` to wait for that before it queries.
 
+## Measured with the glasses worn and the wearer looking around the room
+
+Two runs of the synthetic test (50 s and 25 s of looking before the scene query): 60 checks, 60 pass, both times.
+The scene came back with a floor (measured, 1.61 and 1.72 m under the origin), a ceiling, 3 walls and 3 to 5 table
+tops, every plane locatable, the room mesh with two triangles a plane.
+
+What these runs also showed:
+- During a run the number of walls from dense depth went 0, 1, 2, 3, 2 (and 0, 2, 3, 2, 4): walls come and go. The
+  layer now leaves a wall or table the room model has dropped out of queries, the room's container and the mesh
+  (its handle stays good). In the first run two of the three walls were the same wall twice (1 cm apart).
+- The floor estimate moved between 1.46 and 1.79 m below the cameras within one run.
+- Table tops overlap (two within 15 cm of each other in the second run): several are the same surface.
+- No hand was reported in either run (0 readings): the hand aim state and the hand model have still not been
+  exercised with a real hand. Whether hand tracking was switched off in the app or simply saw no hand is not known.
+- Nothing here was judged by eye: the test draws no picture of its own.
+
 ## Open
 
 1. **Without glasses, a native app whose window is not showing loses the runtime.** Cause found: with no glasses
