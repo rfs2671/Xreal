@@ -308,4 +308,37 @@ class RoomTest {
         repeat(200) { fc.add(1.6, 0.0) }; fc.addCameraHeight(1.6)
         assertNull(fc.result())
     }
+
+    private fun wall(cx: Double, cz: Double, yawDeg: Double, half: Double, support: Int): RoomSurface {
+        val a = Math.toRadians(yawDeg)
+        return RoomSurface(RoomSurface.Kind.WALL, cx, 1.15, cz, Math.cos(a), 0.0, Math.sin(a), 0.0, 1.0, 0.0, half, 1.15, support)
+    }
+    private fun table(cx: Double, cy: Double, cz: Double, hu: Double, hv: Double, support: Int) =
+        RoomSurface(RoomSurface.Kind.TABLE, cx, cy, cz, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, hu, hv, support)
+
+    @Test fun `the same wall found twice is one wall`() {
+        // the two walls of the worn run of 19 November: 1 cm apart, the same way round; and a third, at a right angle
+        val out = dev.ultraxr.core.RoomTidy.tidy(listOf(wall(1.00, -0.26, 90.0, 1.145, 40), wall(0.99, -0.26, 90.0, 1.145, 30), wall(0.0, -2.0, 0.0, 1.3, 50)))
+        assertEquals(2, out.count { it.kind == RoomSurface.Kind.WALL })
+        assertEquals(70, out.first { Math.abs(it.cx - 1.0) < 0.05 }.support)
+    }
+
+    @Test fun `a wall seen in two pieces becomes one long wall, and the wall opposite stays its own`() {
+        val out = dev.ultraxr.core.RoomTidy.tidy(listOf(wall(0.0, -2.0, 0.0, 1.0, 50), wall(2.1, -2.05, 3.0, 1.0, 20), wall(0.0, 2.0, 180.0, 1.0, 30)))
+        assertEquals(2, out.size)
+        val long = out.first { it.cz < 0 }
+        assertTrue("covers both pieces: half length " + long.halfU, long.halfU > 2.0 && long.halfU < 2.2)
+    }
+
+    @Test fun `parallel walls half a metre apart are two walls`() {
+        assertEquals(2, dev.ultraxr.core.RoomTidy.tidy(listOf(wall(0.0, -2.0, 0.0, 1.0, 50), wall(0.0, -2.5, 0.0, 1.0, 20))).size)
+    }
+
+    @Test fun `table tops over each other at one height are one table, a shelf under it is not`() {
+        val out = dev.ultraxr.core.RoomTidy.tidy(listOf(table(-0.43, 0.84, -0.60, 0.53, 0.22, 30), table(-0.53, 0.83, -0.57, 0.585, 0.28, 60), table(-0.5, 0.40, -0.6, 0.5, 0.25, 20),
+            RoomSurface(RoomSurface.Kind.FLOOR, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 4.0, 4.0, 900)))
+        assertEquals(2, out.count { it.kind == RoomSurface.Kind.TABLE }); assertEquals(1, out.count { it.kind == RoomSurface.Kind.FLOOR })
+        val top = out.first { it.kind == RoomSurface.Kind.TABLE && it.cy > 0.8 }
+        assertEquals(90, top.support); assertTrue(top.halfU >= 0.585)
+    }
 }

@@ -695,8 +695,9 @@ object Tracking : GlassesLink.Listener {
                 val f0 = room.analyse(cam.p[1], cam.p[0], cam.p[2], look[0], look[2])
                 if (version != head.worldVersion) continue
                 // the walls of the floor plan take the place of the ones found from corners, once there are any
-                val f = if (denseWallsNow.isEmpty()) f0 else dev.ultraxr.core.RoomFindings(f0.floorY, f0.floorSupport,
-                    f0.surfaces.filter { it.kind != dev.ultraxr.core.RoomSurface.Kind.WALL } + denseWallsNow, f0.voxels, f0.confirmed)
+                // and what comes out twice (the same wall or table top, a few centimetres apart) is made one (core/RoomTidy)
+                val f = dev.ultraxr.core.RoomFindings(f0.floorY, f0.floorSupport, dev.ultraxr.core.RoomTidy.tidy(
+                    if (denseWallsNow.isEmpty()) f0.surfaces else f0.surfaces.filter { it.kind != dev.ultraxr.core.RoomSurface.Kind.WALL } + denseWallsNow), f0.voxels, f0.confirmed)
                 roomFindings = f
                 // The floor is flat: what it does with distance says whether the angle between the cameras is right.
                 val fc = floorCalibrator
