@@ -12,6 +12,15 @@
 //                 the components and semantic labels Meta's Scene API gives.
 //   anchors       places kept in the room's frame; they follow the room when the game's own space is recentred.
 //   hand aim      pinch strengths and an aim pose worked out from the runtime's hand joints.
+//   room mesh     XR_META_spatial_entity_mesh: one GLOBAL_MESH entity, its triangles the floor, ceiling, walls and
+//                 table tops above (flat faces; not a scan of the room's real shape).
+//   hand mesh     XR_FB_hand_tracking_mesh: a plain hand made here (a slab for the palm, a tube for each finger),
+//                 bound to the runtime's 26 joints.
+//   scene capture XR_FB_scene_capture: there is no room set-up screen to open, the room is found as one looks around;
+//                 the request is answered as finished.
+//   sharing       XR_FB_spatial_entity_sharing and _user: there is no service to share through; a share request
+//                 completes with "cloud storage disabled", which is what a Quest with sharing switched off answers.
+//   boundary      XR_META_boundary_visibility: there is no boundary; asking to hide it succeeds.
 //
 // Everything else goes to the runtime untouched. One instance and one session at a time, as on a headset.
 #include <jni.h>
@@ -20,6 +29,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <openxr/openxr_loader_negotiation.h>
+#include "meta_extra.h"
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -38,7 +48,9 @@
 namespace {
 const char *LAYER = "XR_APILAYER_ULTRAXR_meta";
 const char *OURS[] = {"XR_FB_passthrough", "XR_FB_spatial_entity", "XR_FB_spatial_entity_query", "XR_FB_spatial_entity_storage",
-                      "XR_FB_spatial_entity_container", "XR_FB_scene", "XR_FB_hand_tracking_aim"};
+                      "XR_FB_spatial_entity_container", "XR_FB_scene", "XR_FB_hand_tracking_aim", "XR_FB_scene_capture",
+                      "XR_FB_spatial_entity_sharing", "XR_FB_spatial_entity_user", "XR_META_spatial_entity_mesh", "XR_FB_hand_tracking_mesh",
+                      "XR_META_boundary_visibility"};
 
 PFN_xrGetInstanceProcAddr nextGipa = nullptr;
 XrInstance instance = XR_NULL_HANDLE;
@@ -50,7 +62,7 @@ XrTime lastTime = 0;
 PFN_xrDestroyInstance rDestroyInstance; PFN_xrGetSystemProperties rGetSystemProperties; PFN_xrCreateSession rCreateSession;
 PFN_xrDestroySession rDestroySession; PFN_xrCreateReferenceSpace rCreateReferenceSpace; PFN_xrDestroySpace rDestroySpace;
 PFN_xrLocateSpace rLocateSpace; PFN_xrPollEvent rPollEvent; PFN_xrWaitFrame rWaitFrame; PFN_xrEndFrame rEndFrame;
-PFN_xrLocateHandJointsEXT rLocateHandJoints;
+PFN_xrLocateHandJointsEXT rLocateHandJoints; PFN_xrCreateHandTrackerEXT rCreateHandTracker;
 
 std::mutex lock;
 
@@ -88,7 +100,7 @@ XrQuaternionf fromAxes(V3 x, V3 y, V3 z) {
 float yawOf(const XrQuaternionf &q) { V3 f = rot(q, {0, 0, -1}); return std::atan2(-f.x, -f.z); }
 
 // ---------------------------------------------------------------- the room's entities
-enum Kind { ROOM, FLOOR, CEILING, WALL, TABLE, ANCHOR };
+enum Kind { ROOM, FLOOR, CEILING, WALL, TABLE, ANCHOR, MESH };
 struct Entity {
     Kind kind; XrUuidEXT uuid; XrPosef pose;      // pose in the room's frame (room.json's)
     float w = 0, h = 0;                           // a plane's size along its x and y
@@ -160,6 +172,7 @@ void readRoom() {
     upsert(FLOOR, 0, {fromAxes({1, 0, 0}, {0, 0, -1}, {0, 1, 0}), {0, fy, 0}}, 8, 8);
     upsert(CEILING, 0, {fromAxes({1, 0, 0}, {0, 0, 1}, {0, -1, 0}), {0, fy + 2.5f, 0}}, 8, 8);
     upsert(ROOM, 0, {{0, 0, 0, 1}, {0, fy, 0}}, 0, 0);
+    upsert(MESH, 0, {{0, 0, 0, 1}, {0, fy, 0}}, 0, 0);
     int walls = 0, tables = 0; size_t i = 0;
     while ((i = s.find("{\"kind\":\"", i)) != std::string::npos) {
         bool wall = s.compare(i + 9, 4, "wall") == 0, table = s.compare(i + 9, 5, "table") == 0;
@@ -202,6 +215,7 @@ bool has(Entity *e, XrSpaceComponentTypeFB c) {
         case XR_SPACE_COMPONENT_TYPE_BOUNDED_2D_FB: return e->kind == FLOOR || e->kind == CEILING || e->kind == WALL || e->kind == TABLE;
         case XR_SPACE_COMPONENT_TYPE_SEMANTIC_LABELS_FB: return e->kind != ROOM && e->kind != ANCHOR;
         case XR_SPACE_COMPONENT_TYPE_ROOM_LAYOUT_FB: case XR_SPACE_COMPONENT_TYPE_SPACE_CONTAINER_FB: return e->kind == ROOM;
+        case XR_SPACE_COMPONENT_TYPE_TRIANGLE_MESH_META: return e->kind == MESH;
         default: return false;
     }
 }
@@ -211,7 +225,7 @@ bool enabled(Entity *e, XrSpaceComponentTypeFB c) {
     if (c == XR_SPACE_COMPONENT_TYPE_STORABLE_FB) return e->storable;
     return true;      // what the room model gives is always there
 }
-const char *label(Kind k) { return k == FLOOR ? "FLOOR" : k == CEILING ? "CEILING" : k == WALL ? "WALL_FACE" : k == TABLE ? "TABLE" : ""; }
+const char *label(Kind k) { return k == FLOOR ? "FLOOR" : k == CEILING ? "CEILING" : k == WALL ? "WALL_FACE" : k == TABLE ? "TABLE" : k == MESH ? "GLOBAL_MESH" : ""; }
 
 // ---------------------------------------------------------------- passthrough
 struct Pass { bool running = false; }; struct PassLayer { bool running = true; };
@@ -260,7 +274,8 @@ XrResult XRAPI_CALL uGetSpaceUuidFB(XrSpace s, XrUuidEXT *u) { Entity *e = entit
 XrResult XRAPI_CALL uEnumerateSpaceSupportedComponentsFB(XrSpace s, uint32_t cap, uint32_t *count, XrSpaceComponentTypeFB *out) {
     Entity *e = entity(s); if (!e) return XR_ERROR_HANDLE_INVALID;
     const XrSpaceComponentTypeFB all[] = {XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB, XR_SPACE_COMPONENT_TYPE_STORABLE_FB, XR_SPACE_COMPONENT_TYPE_BOUNDED_2D_FB,
-                                          XR_SPACE_COMPONENT_TYPE_SEMANTIC_LABELS_FB, XR_SPACE_COMPONENT_TYPE_ROOM_LAYOUT_FB, XR_SPACE_COMPONENT_TYPE_SPACE_CONTAINER_FB};
+                                          XR_SPACE_COMPONENT_TYPE_SEMANTIC_LABELS_FB, XR_SPACE_COMPONENT_TYPE_ROOM_LAYOUT_FB, XR_SPACE_COMPONENT_TYPE_SPACE_CONTAINER_FB,
+                                          XR_SPACE_COMPONENT_TYPE_TRIANGLE_MESH_META};
     uint32_t n = 0; for (auto c : all) if (has(e, c)) { if (out && n < cap) out[n] = c; n++; }
     *count = n; return (out && cap < n) ? XR_ERROR_SIZE_INSUFFICIENT : XR_SUCCESS;
 }
@@ -359,6 +374,152 @@ XrResult XRAPI_CALL uGetSpaceRoomLayoutFB(XrSession, XrSpace s, XrRoomLayoutFB *
     out->wallUuidCountOutput = n; return (out->wallUuidCapacityInput && out->wallUuidCapacityInput < n) ? XR_ERROR_SIZE_INSUFFICIENT : XR_SUCCESS;
 }
 
+// ---------------------------------------------------------------- the room as one mesh
+// The planes above as triangles, in the mesh entity's own frame (the room's origin at floor height). Each face is two
+// triangles, counter-clockwise seen from the side the plane faces (into the room).
+std::vector<XrVector3f> meshV; std::vector<uint32_t> meshI;
+void buildMesh(Entity *m) {      // lock held
+    meshV.clear(); meshI.clear(); XrPosef inv = inverse(m->pose);
+    for (auto *e : entities) {
+        if (e->kind != FLOOR && e->kind != CEILING && e->kind != WALL && e->kind != TABLE) continue;
+        float x = e->w / 2, y = e->h / 2; const float k[4][2] = {{-x, -y}, {x, -y}, {x, y}, {-x, y}};
+        uint32_t b = (uint32_t)meshV.size();
+        for (auto &q : k) meshV.push_back(compose(inv, compose(e->pose, {{0, 0, 0, 1}, {q[0], q[1], 0}})).position);
+        for (uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) meshI.push_back(b + i);
+    }
+}
+XrResult XRAPI_CALL uGetSpaceTriangleMeshMETA(XrSpace s, const XrSpaceTriangleMeshGetInfoMETA *, XrSpaceTriangleMeshMETA *out) {
+    Entity *e = entity(s); if (!e || e->kind != MESH || !out) return XR_ERROR_SPACE_COMPONENT_NOT_ENABLED_FB;
+    std::lock_guard<std::mutex> g(lock);
+    bool sizing = out->vertexCapacityInput == 0 || out->indexCapacityInput == 0;
+    if (sizing || meshV.empty()) buildMesh(e);      // built when the sizes are asked, so the second call matches the first
+    out->vertexCountOutput = (uint32_t)meshV.size(); out->indexCountOutput = (uint32_t)meshI.size();
+    if (sizing) return XR_SUCCESS;
+    if (out->vertexCapacityInput < meshV.size() || out->indexCapacityInput < meshI.size()) return XR_ERROR_SIZE_INSUFFICIENT;
+    if (out->vertices) memcpy(out->vertices, meshV.data(), meshV.size() * sizeof(XrVector3f));
+    if (out->indices) memcpy(out->indices, meshI.data(), meshI.size() * sizeof(uint32_t));
+    return XR_SUCCESS;
+}
+
+// ---------------------------------------------------------------- scene capture, sharing, boundary
+int sceneCaptures = 0;
+XrResult XRAPI_CALL uRequestSceneCaptureFB(XrSession, const XrSceneCaptureRequestInfoFB *, XrAsyncRequestIdFB *req) {
+    if (!req) return XR_ERROR_VALIDATION_FAILURE;
+    std::lock_guard<std::mutex> g(lock); *req = nextRequest++; sceneCaptures++;
+    XrEventDataSceneCaptureCompleteFB ev{XR_TYPE_EVENT_DATA_SCENE_CAPTURE_COMPLETE_FB}; ev.requestId = *req; ev.result = XR_SUCCESS; push(ev);
+    return XR_SUCCESS;
+}
+struct SpaceUser { XrSpaceUserIdFB id; };
+XrResult XRAPI_CALL uCreateSpaceUserFB(XrSession, const XrSpaceUserCreateInfoFB *info, XrSpaceUserFB *out) {
+    if (!info || !out) return XR_ERROR_VALIDATION_FAILURE;
+    *out = (XrSpaceUserFB)(uintptr_t) new SpaceUser{info->userId}; return XR_SUCCESS;
+}
+XrResult XRAPI_CALL uGetSpaceUserIdFB(XrSpaceUserFB u, XrSpaceUserIdFB *id) { if (!u || !id) return XR_ERROR_HANDLE_INVALID; *id = ((SpaceUser *)(uintptr_t)u)->id; return XR_SUCCESS; }
+XrResult XRAPI_CALL uDestroySpaceUserFB(XrSpaceUserFB u) { delete (SpaceUser *)(uintptr_t)u; return XR_SUCCESS; }
+XrResult XRAPI_CALL uShareSpacesFB(XrSession, const XrSpaceShareInfoFB *, XrAsyncRequestIdFB *req) {
+    if (!req) return XR_ERROR_VALIDATION_FAILURE;
+    std::lock_guard<std::mutex> g(lock); *req = nextRequest++;
+    XrEventDataSpaceShareCompleteFB ev{XR_TYPE_EVENT_DATA_SPACE_SHARE_COMPLETE_FB}; ev.requestId = *req; ev.result = XR_ERROR_SPACE_CLOUD_STORAGE_DISABLED_FB; push(ev);
+    return XR_SUCCESS;
+}
+XrBoundaryVisibilityMETA boundaryNow = XR_BOUNDARY_VISIBILITY_NOT_SUPPRESSED_META;
+XrResult XRAPI_CALL uRequestBoundaryVisibilityMETA(XrSession, XrBoundaryVisibilityMETA v) {
+    if (v != XR_BOUNDARY_VISIBILITY_NOT_SUPPRESSED_META && v != XR_BOUNDARY_VISIBILITY_SUPPRESSED_META) return XR_ERROR_VALIDATION_FAILURE;
+    std::lock_guard<std::mutex> g(lock);
+    if (v != boundaryNow) { boundaryNow = v; XrEventDataBoundaryVisibilityChangedMETA ev{XR_TYPE_EVENT_DATA_BOUNDARY_VISIBILITY_CHANGED_META}; ev.boundaryVisibility = v; push(ev); }
+    return XR_SUCCESS;
+}
+
+// ---------------------------------------------------------------- a hand to draw
+// Quest gives games a skinned hand model. There is none here, so one is made: an open flat hand, fingers along -z, the
+// back of the hand up, the wrist at the origin; a slab for the palm and a six-sided tube along each finger, every ring
+// of a tube bound to the joint it sits on. Joint frames follow XR_EXT_hand_tracking (-z towards the fingertip, +y out
+// of the back of the hand), so a game that poses the model with the tracked joints gets a hand where the hand is.
+struct HandMesh { XrPosef bind[XR_HAND_JOINT_COUNT_EXT]; float radius[XR_HAND_JOINT_COUNT_EXT]; XrHandJointEXT parent[XR_HAND_JOINT_COUNT_EXT];
+                  std::vector<XrVector3f> pos, nrm; std::vector<XrVector4sFB> joint; std::vector<int16_t> idx; };
+HandMesh handMesh[2]; bool handMeshBuilt = false;      // 0 left, 1 right
+std::vector<std::pair<XrHandTrackerEXT, int>> handTrackers;
+void buildHand(HandMesh &m, bool left) {
+    // x and z of each joint of a right hand, metres, in XrHandJointEXT's order: palm, wrist, thumb 4, then 5 a finger
+    static const float P[XR_HAND_JOINT_COUNT_EXT][2] = {{0.004f, -0.055f}, {0, 0},
+        {-0.025f, -0.020f}, {-0.050f, -0.050f}, {-0.068f, -0.080f}, {-0.080f, -0.105f},
+        {-0.018f, -0.025f}, {-0.025f, -0.095f}, {-0.027f, -0.135f}, {-0.028f, -0.160f}, {-0.029f, -0.182f},
+        {-0.002f, -0.025f}, {-0.003f, -0.097f}, {-0.003f, -0.142f}, {-0.003f, -0.170f}, {-0.003f, -0.194f},
+        {0.012f, -0.025f}, {0.017f, -0.090f}, {0.019f, -0.130f}, {0.020f, -0.157f}, {0.021f, -0.180f},
+        {0.025f, -0.022f}, {0.035f, -0.080f}, {0.039f, -0.110f}, {0.041f, -0.129f}, {0.043f, -0.150f}};
+    static const float R[XR_HAND_JOINT_COUNT_EXT] = {0.020f, 0.020f, 0.013f, 0.011f, 0.010f, 0.008f, 0.011f, 0.010f, 0.009f, 0.008f, 0.007f,
+        0.011f, 0.010f, 0.009f, 0.008f, 0.007f, 0.010f, 0.0095f, 0.0085f, 0.0075f, 0.0065f, 0.009f, 0.0085f, 0.0075f, 0.0065f, 0.006f};
+    const int first[5] = {XR_HAND_JOINT_THUMB_METACARPAL_EXT, XR_HAND_JOINT_INDEX_METACARPAL_EXT, XR_HAND_JOINT_MIDDLE_METACARPAL_EXT, XR_HAND_JOINT_RING_METACARPAL_EXT, XR_HAND_JOINT_LITTLE_METACARPAL_EXT};
+    const int count[5] = {4, 5, 5, 5, 5}; const int SIDES = 6;
+    float sx = left ? -1.f : 1.f;
+    auto at = [&](int j) { return V3{P[j][0] * sx, 0, P[j][1]}; };
+    for (int j = 0; j < XR_HAND_JOINT_COUNT_EXT; j++) { V3 a = at(j); m.bind[j] = {{0, 0, 0, 1}, {a.x, a.y, a.z}}; m.radius[j] = R[j]; m.parent[j] = XR_HAND_JOINT_WRIST_EXT; }
+    auto put = [&](V3 p, V3 n, int j) { m.pos.push_back({p.x, p.y, p.z}); m.nrm.push_back({n.x, n.y, n.z}); m.joint.push_back({(int16_t)j, 0, 0, 0}); };
+    auto tri = [&](int a, int b, int c) { m.idx.push_back((int16_t)a); m.idx.push_back((int16_t)b); m.idx.push_back((int16_t)c); };
+    // the palm: a box from just in front of the wrist to the knuckles, its back end on the wrist joint, its front on the palm joint
+    {
+        float x0 = left ? -0.042f : -0.032f, x1 = left ? 0.032f : 0.042f, y0 = -0.011f, y1 = 0.011f, z0 = -0.095f, z1 = -0.005f;
+        int b = (int)m.pos.size();
+        for (int i = 0; i < 8; i++) {
+            V3 p{(i & 1) ? x1 : x0, (i & 2) ? y1 : y0, (i & 4) ? z1 : z0}, n{(i & 1) ? 0.577f : -0.577f, (i & 2) ? 0.577f : -0.577f, (i & 4) ? 0.577f : -0.577f};
+            put(p, n, (i & 4) ? XR_HAND_JOINT_WRIST_EXT : XR_HAND_JOINT_PALM_EXT);
+        }
+        const int q[6][4] = {{1, 3, 7, 5}, {0, 4, 6, 2}, {2, 6, 7, 3}, {0, 1, 5, 4}, {4, 5, 7, 6}, {0, 2, 3, 1}};
+        for (auto &f : q) { tri(b + f[0], b + f[1], b + f[2]); tri(b + f[0], b + f[2], b + f[3]); }
+    }
+    for (int f = 0; f < 5; f++) {
+        int prev = -1; V3 dir{0, 0, -1};
+        for (int k = 0; k < count[f]; k++) {
+            int j = first[f] + k; V3 a = at(j);
+            if (k > 0) m.parent[j] = (XrHandJointEXT)(j - 1);
+            if (k < count[f] - 1) { V3 b = at(j + 1); float l = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z)); dir = {(b.x - a.x) / l, 0, (b.z - a.z) / l}; }
+            V3 z{-dir.x, 0, -dir.z}, y{0, 1, 0}, x{z.z, 0, -z.x};      // x = y cross z
+            m.bind[j].orientation = fromAxes(x, y, z);
+            int ring = (int)m.pos.size();
+            for (int i = 0; i < SIDES; i++) {
+                float an = 2 * (float)M_PI * i / SIDES, cs = std::cos(an), sn = std::sin(an); V3 n{cs * x.x + sn * y.x, cs * x.y + sn * y.y, cs * x.z + sn * y.z};
+                put({a.x + n.x * R[j], a.y + n.y * R[j], a.z + n.z * R[j]}, n, j);
+            }
+            if (prev >= 0) for (int i = 0; i < SIDES; i++) { int a0 = prev + i, b0 = prev + (i + 1) % SIDES, c0 = ring + i, d0 = ring + (i + 1) % SIDES; tri(a0, c0, b0); tri(b0, c0, d0); }
+            if (k == count[f] - 1) {      // the fingertip closes the tube
+                int t = (int)m.pos.size(); put({a.x + dir.x * R[j] * 0.7f, 0, a.z + dir.z * R[j] * 0.7f}, dir, j);
+                for (int i = 0; i < SIDES; i++) tri(ring + i, t, ring + (i + 1) % SIDES);
+            }
+            prev = ring;
+        }
+    }
+}
+XrResult XRAPI_CALL uCreateHandTrackerEXT(XrSession s, const XrHandTrackerCreateInfoEXT *info, XrHandTrackerEXT *out) {
+    if (!rCreateHandTracker) return XR_ERROR_FUNCTION_UNSUPPORTED;
+    XrResult r = rCreateHandTracker(s, info, out);
+    if (XR_SUCCEEDED(r) && info && out) { std::lock_guard<std::mutex> g(lock); handTrackers.push_back({*out, info->hand == XR_HAND_RIGHT_EXT ? 1 : 0}); }
+    return r;
+}
+XrResult XRAPI_CALL uGetHandMeshFB(XrHandTrackerEXT t, XrHandTrackingMeshFB *out) {
+    if (!out) return XR_ERROR_VALIDATION_FAILURE;
+    std::lock_guard<std::mutex> g(lock);
+    if (!handMeshBuilt) { buildHand(handMesh[0], true); buildHand(handMesh[1], false); handMeshBuilt = true; }
+    int h = -1; for (auto &p : handTrackers) if (p.first == t) h = p.second;
+    if (h < 0) return XR_ERROR_HANDLE_INVALID;
+    HandMesh &m = handMesh[h]; uint32_t nj = XR_HAND_JOINT_COUNT_EXT, nv = (uint32_t)m.pos.size(), ni = (uint32_t)m.idx.size();
+    out->jointCountOutput = nj; out->vertexCountOutput = nv; out->indexCountOutput = ni;
+    if ((out->jointCapacityInput && out->jointCapacityInput < nj) || (out->vertexCapacityInput && out->vertexCapacityInput < nv) || (out->indexCapacityInput && out->indexCapacityInput < ni)) return XR_ERROR_SIZE_INSUFFICIENT;
+    if (out->jointCapacityInput) {
+        if (out->jointBindPoses) memcpy(out->jointBindPoses, m.bind, sizeof m.bind);
+        if (out->jointRadii) memcpy(out->jointRadii, m.radius, sizeof m.radius);
+        if (out->jointParents) memcpy(out->jointParents, m.parent, sizeof m.parent);
+    }
+    if (out->vertexCapacityInput) {
+        if (out->vertexPositions) memcpy(out->vertexPositions, m.pos.data(), nv * sizeof(XrVector3f));
+        if (out->vertexNormals) memcpy(out->vertexNormals, m.nrm.data(), nv * sizeof(XrVector3f));
+        if (out->vertexUVs) memset(out->vertexUVs, 0, nv * sizeof(XrVector2f));
+        if (out->vertexBlendIndices) memcpy(out->vertexBlendIndices, m.joint.data(), nv * sizeof(XrVector4sFB));
+        if (out->vertexBlendWeights) for (uint32_t i = 0; i < nv; i++) out->vertexBlendWeights[i] = {1, 0, 0, 0};
+    }
+    if (out->indexCapacityInput && out->indices) memcpy(out->indices, m.idx.data(), ni * sizeof(int16_t));
+    return XR_SUCCESS;
+}
+
 // ---------------------------------------------------------------- calls we pass on, with a hand in them
 XrResult XRAPI_CALL uLocateSpace(XrSpace space, XrSpace base, XrTime time, XrSpaceLocation *loc) {
     Entity *a = entity(space), *b = entity(base);
@@ -396,6 +557,7 @@ XrResult XRAPI_CALL uGetSystemProperties(XrInstance i, XrSystemId id, XrSystemPr
     for (XrBaseOutStructure *n = (XrBaseOutStructure *)p->next; XR_SUCCEEDED(r) && n; n = n->next) {
         if (n->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB) ((XrSystemPassthroughPropertiesFB *)n)->supportsPassthrough = XR_TRUE;
         if (n->type == XR_TYPE_SYSTEM_SPATIAL_ENTITY_PROPERTIES_FB) ((XrSystemSpatialEntityPropertiesFB *)n)->supportsSpatialEntity = XR_TRUE;
+        if (n->type == XR_TYPE_SYSTEM_BOUNDARY_VISIBILITY_PROPERTIES_META) ((XrSystemBoundaryVisibilityPropertiesMETA *)n)->supportsBoundaryVisibility = XR_TRUE;
     }
     return r;
 }
@@ -420,6 +582,8 @@ XrResult XRAPI_CALL uLocateHandJointsEXT(XrHandTrackerEXT t, const XrHandJointsL
     if (!rLocateHandJoints) return XR_ERROR_FUNCTION_UNSUPPORTED;
     XrResult r = rLocateHandJoints(t, info, out); if (XR_FAILED(r)) return r;
     for (XrBaseOutStructure *n = (XrBaseOutStructure *)out->next; n; n = n->next) {
+        // the hand model above is made life-size and the joints are not rescaled: the scale is one
+        if (n->type == XR_TYPE_HAND_TRACKING_SCALE_FB) { auto *sc = (XrHandTrackingScaleFB *)n; sc->sensorOutput = 1; sc->currentOutput = 1; continue; }
         if (n->type != XR_TYPE_HAND_TRACKING_AIM_STATE_FB) continue;
         auto *aim = (XrHandTrackingAimStateFB *)n; aim->status = 0; aim->pinchStrengthIndex = aim->pinchStrengthMiddle = aim->pinchStrengthRing = aim->pinchStrengthLittle = 0;
         if (!out->isActive || out->jointCount < XR_HAND_JOINT_COUNT_EXT) continue;
@@ -444,7 +608,10 @@ struct Entry { const char *name; PFN_xrVoidFunction fn; };
 const Entry table[] = {
     E("xrDestroyInstance", uDestroyInstance), E("xrGetSystemProperties", uGetSystemProperties), E("xrCreateSession", uCreateSession), E("xrDestroySession", uDestroySession),
     E("xrLocateSpace", uLocateSpace), E("xrDestroySpace", uDestroySpace), E("xrWaitFrame", uWaitFrame), E("xrEndFrame", uEndFrame), E("xrPollEvent", uPollEvent),
-    E("xrLocateHandJointsEXT", uLocateHandJointsEXT),
+    E("xrLocateHandJointsEXT", uLocateHandJointsEXT), E("xrCreateHandTrackerEXT", uCreateHandTrackerEXT), E("xrGetHandMeshFB", uGetHandMeshFB),
+    E("xrGetSpaceTriangleMeshMETA", uGetSpaceTriangleMeshMETA), E("xrRequestSceneCaptureFB", uRequestSceneCaptureFB), E("xrShareSpacesFB", uShareSpacesFB),
+    E("xrCreateSpaceUserFB", uCreateSpaceUserFB), E("xrGetSpaceUserIdFB", uGetSpaceUserIdFB), E("xrDestroySpaceUserFB", uDestroySpaceUserFB),
+    E("xrRequestBoundaryVisibilityMETA", uRequestBoundaryVisibilityMETA),
     E("xrCreatePassthroughFB", uCreatePassthroughFB), E("xrDestroyPassthroughFB", uDestroyPassthroughFB), E("xrPassthroughStartFB", uPassthroughStartFB), E("xrPassthroughPauseFB", uPassthroughPauseFB),
     E("xrCreatePassthroughLayerFB", uCreatePassthroughLayerFB), E("xrDestroyPassthroughLayerFB", uDestroyPassthroughLayerFB), E("xrPassthroughLayerPauseFB", uPassthroughLayerPauseFB),
     E("xrPassthroughLayerResumeFB", uPassthroughLayerResumeFB), E("xrPassthroughLayerSetStyleFB", uPassthroughLayerSetStyleFB),
@@ -458,7 +625,7 @@ const Entry table[] = {
 XrResult XRAPI_CALL uGetInstanceProcAddr(XrInstance i, const char *name, PFN_xrVoidFunction *fn) {
     for (auto &e : table) if (strcmp(e.name, name) == 0) {
         // a call the runtime must also have: only ours if the runtime has it (hand joints may be missing)
-        if (strcmp(name, "xrLocateHandJointsEXT") == 0 && !rLocateHandJoints) break;
+        if ((strcmp(name, "xrLocateHandJointsEXT") == 0 || strcmp(name, "xrCreateHandTrackerEXT") == 0 || strcmp(name, "xrGetHandMeshFB") == 0) && (!rLocateHandJoints || !rCreateHandTracker)) break;
         *fn = e.fn; return XR_SUCCESS;
     }
     // asked before the instance exists (the loader looks the layer over first): nothing below us yet
@@ -480,7 +647,7 @@ XrResult XRAPI_CALL uCreateApiLayerInstance(const XrInstanceCreateInfo *info, co
     R("xrDestroyInstance", rDestroyInstance); R("xrGetSystemProperties", rGetSystemProperties); R("xrCreateSession", rCreateSession); R("xrDestroySession", rDestroySession);
     R("xrCreateReferenceSpace", rCreateReferenceSpace); R("xrDestroySpace", rDestroySpace); R("xrLocateSpace", rLocateSpace); R("xrPollEvent", rPollEvent);
     R("xrWaitFrame", rWaitFrame); R("xrEndFrame", rEndFrame);
-    rLocateHandJoints = nullptr; R("xrLocateHandJointsEXT", rLocateHandJoints);
+    rLocateHandJoints = nullptr; R("xrLocateHandJointsEXT", rLocateHandJoints); rCreateHandTracker = nullptr; R("xrCreateHandTrackerEXT", rCreateHandTracker);
     LOGI("layer active over the runtime (%u of the application's %u extensions passed down)", (unsigned)ext.size(), info->enabledExtensionCount);
     return r;
 }

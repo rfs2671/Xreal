@@ -5,7 +5,7 @@
         "library_path": "libuxr_meta_layer.so",
         "api_version": "1.0",
         "implementation_version": "1",
-        "description": "Answers Meta's mixed-reality extensions (passthrough, spatial entities, scene, hand aim) from Ultra XR's room model",
+        "description": "Answers Meta's mixed-reality extensions (passthrough, spatial entities, scene and its mesh, scene capture, hand aim and mesh, boundary) from Ultra XR's room model",
         "disable_environment": "DISABLE_XR_APILAYER_ULTRAXR_meta",
         "instance_extensions": [
             { "name": "XR_FB_passthrough", "extension_version": "3" },
@@ -14,7 +14,13 @@
             { "name": "XR_FB_spatial_entity_storage", "extension_version": "1" },
             { "name": "XR_FB_spatial_entity_container", "extension_version": "2" },
             { "name": "XR_FB_scene", "extension_version": "4" },
-            { "name": "XR_FB_hand_tracking_aim", "extension_version": "2" }
+            { "name": "XR_FB_hand_tracking_aim", "extension_version": "2" },
+            { "name": "XR_FB_hand_tracking_mesh", "extension_version": "3" },
+            { "name": "XR_FB_scene_capture", "extension_version": "1" },
+            { "name": "XR_FB_spatial_entity_sharing", "extension_version": "1" },
+            { "name": "XR_FB_spatial_entity_user", "extension_version": "1" },
+            { "name": "XR_META_spatial_entity_mesh", "extension_version": "1" },
+            { "name": "XR_META_boundary_visibility", "extension_version": "1" }
         ]
     }
 }

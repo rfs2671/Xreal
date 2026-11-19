@@ -10,6 +10,7 @@
 #define XR_USE_GRAPHICS_API_OPENGL_ES
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#include "meta_extra.h"
 #include <dlfcn.h>
 #include <unistd.h>
 #include <cmath>
@@ -87,14 +88,15 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     uint32_t n = 0; xrEnumerateInstanceExtensionProperties(nullptr, 0, &n, nullptr);
     std::vector<XrExtensionProperties> ext(n, {XR_TYPE_EXTENSION_PROPERTIES}); xrEnumerateInstanceExtensionProperties(nullptr, n, &n, ext.data());
     auto offered = [&](const char *name) { for (auto &e : ext) if (strcmp(e.extensionName, name) == 0) return true; return false; };
-    const char *meta[] = {"XR_FB_passthrough", "XR_FB_spatial_entity", "XR_FB_spatial_entity_query", "XR_FB_spatial_entity_storage", "XR_FB_spatial_entity_container", "XR_FB_scene", "XR_FB_hand_tracking_aim"};
+    const char *meta[] = {"XR_FB_passthrough", "XR_FB_spatial_entity", "XR_FB_spatial_entity_query", "XR_FB_spatial_entity_storage", "XR_FB_spatial_entity_container", "XR_FB_scene", "XR_FB_hand_tracking_aim",
+                          "XR_FB_hand_tracking_mesh", "XR_FB_scene_capture", "XR_FB_spatial_entity_sharing", "XR_FB_spatial_entity_user", "XR_META_spatial_entity_mesh", "XR_META_boundary_visibility"};
     const char *base[] = {"XR_KHR_android_create_instance", "XR_KHR_opengl_es_enable", "XR_EXT_hand_tracking"};
     // what Quest games commonly also ask for; listed so a missing one is known before a real game trips on it
     const char *alsoAsked[] = {"XR_FB_display_refresh_rate", "XR_FB_color_space", "XR_FB_swapchain_update_state", "XR_FB_swapchain_update_state_opengl_es", "XR_FB_foveation", "XR_FB_foveation_configuration",
         "XR_FB_composition_layer_alpha_blend", "XR_FB_composition_layer_settings", "XR_KHR_composition_layer_color_scale_bias", "XR_KHR_composition_layer_cylinder", "XR_KHR_composition_layer_equirect2",
-        "XR_FB_hand_tracking_mesh", "XR_FB_hand_tracking_capsules", "XR_META_performance_metrics", "XR_EXT_performance_settings", "XR_KHR_android_thread_settings", "XR_FB_touch_controller_pro",
-        "XR_META_touch_controller_plus", "XR_FB_haptic_pcm", "XR_FB_triangle_mesh", "XR_META_spatial_entity_mesh", "XR_META_environment_depth", "XR_FB_scene_capture", "XR_FB_spatial_entity_sharing",
-        "XR_FB_spatial_entity_user", "XR_META_boundary_visibility", "XR_FB_passthrough_keyboard_hands", "XR_META_passthrough_preferences", "XR_FB_body_tracking", "XR_FB_face_tracking2", "XR_EXT_local_floor"};
+        "XR_FB_hand_tracking_capsules", "XR_META_performance_metrics", "XR_EXT_performance_settings", "XR_KHR_android_thread_settings", "XR_FB_touch_controller_pro",
+        "XR_META_touch_controller_plus", "XR_FB_haptic_pcm", "XR_FB_triangle_mesh", "XR_META_environment_depth",
+        "XR_FB_passthrough_keyboard_hands", "XR_META_passthrough_preferences", "XR_FB_body_tracking", "XR_FB_face_tracking2", "XR_EXT_local_floor"};
     std::vector<const char *> want;
     for (auto e : base) { check(offered(e), "offered", "%s", e); if (offered(e)) want.push_back(e); }
     for (auto e : meta) { check(offered(e), "offered (a Meta mixed-reality extension)", "%s", e); if (offered(e)) want.push_back(e); }
@@ -109,7 +111,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     if (!check(XR_SUCCEEDED(r), "an instance with all of them enabled", "%s", res(r))) return env->NewStringUTF(report.c_str());
     XrSystemGetInfo sg{XR_TYPE_SYSTEM_GET_INFO}; sg.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY; XrSystemId sys = 0; r = xrGetSystem(inst, &sg, &sys);
     if (!check(XR_SUCCEEDED(r), "a head-mounted system", "%s", res(r))) return env->NewStringUTF(report.c_str());
-    XrSystemSpatialEntityPropertiesFB sp{XR_TYPE_SYSTEM_SPATIAL_ENTITY_PROPERTIES_FB}; XrSystemPassthroughPropertiesFB pp{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB, &sp};
+    XrSystemBoundaryVisibilityPropertiesMETA bp{XR_TYPE_SYSTEM_BOUNDARY_VISIBILITY_PROPERTIES_META};
+    XrSystemSpatialEntityPropertiesFB sp{XR_TYPE_SYSTEM_SPATIAL_ENTITY_PROPERTIES_FB, &bp}; XrSystemPassthroughPropertiesFB pp{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB, &sp};
     XrSystemHandTrackingPropertiesEXT hp{XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT, &pp}; XrSystemProperties props{XR_TYPE_SYSTEM_PROPERTIES, &hp};
     xrGetSystemProperties(inst, sys, &props);
     check(pp.supportsPassthrough, "the system says it supports passthrough"); check(sp.supportsSpatialEntity, "the system says it supports spatial entities");
@@ -158,7 +161,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         XrSpaceQueryResultsFB qr{XR_TYPE_SPACE_QUERY_RESULTS_FB}; retrieve(sess, id, &qr); found.resize(qr.resultCountOutput); qr.resultCapacityInput = (uint32_t)found.size(); qr.results = found.data();
         r = retrieve(sess, id, &qr); check(XR_SUCCEEDED(r) && !found.empty(), "xrRetrieveSpaceQueryResultsFB", "%u entities", qr.resultCountOutput);
     }
-    int floors = 0, ceilings = 0, walls = 0, tables = 0, rooms = 0, located = 0; XrSpace roomSpace = XR_NULL_HANDLE; float floorY = NAN;
+    int floors = 0, ceilings = 0, walls = 0, tables = 0, rooms = 0, located = 0, meshes = 0; XrSpace roomSpace = XR_NULL_HANDLE, meshSpace = XR_NULL_HANDLE; float floorY = NAN;
     for (auto &f : found) {
         uint32_t cn = 0; XrSpaceComponentTypeFB comps[16]; enumComp(f.space, 16, &cn, comps);
         bool loc = false, sem = false, b2 = false, lay = false;
@@ -173,7 +176,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
             ok = XR_SUCCEEDED(xrLocateSpace(f.space, local, frameTime, &l)) && (l.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT);
         }
         if (ok) located++;
-        if (!strcmp(lab, "FLOOR")) { floors++; if (ok) floorY = l.pose.position.y; } else if (!strcmp(lab, "CEILING")) ceilings++; else if (!strcmp(lab, "WALL_FACE")) walls++; else if (!strcmp(lab, "TABLE")) tables++;
+        if (!strcmp(lab, "FLOOR")) { floors++; if (ok) floorY = l.pose.position.y; } else if (!strcmp(lab, "CEILING")) ceilings++; else if (!strcmp(lab, "WALL_FACE")) walls++; else if (!strcmp(lab, "TABLE")) tables++; else if (!strcmp(lab, "GLOBAL_MESH")) { meshes++; meshSpace = f.space; }
         line("info  entity %-9s %.2f x %.2f m at (%.2f, %.2f, %.2f) in the local space%s", lab, rect.extent.width, rect.extent.height, l.pose.position.x, l.pose.position.y, l.pose.position.z, ok ? "" : "  (not located)");
     }
     check(rooms == 1 && floors == 1 && ceilings == 1, "the scene has one room, one floor and one ceiling", "%d rooms, %d floors, %d ceilings, %d walls, %d tables", rooms, floors, ceilings, walls, tables);
@@ -182,9 +185,41 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     if (roomSpace != XR_NULL_HANDLE) {
         XrUuidEXT w[32]; XrRoomLayoutFB rl{XR_TYPE_ROOM_LAYOUT_FB}; rl.wallUuidCapacityInput = 32; rl.wallUuids = w; r = layout(sess, roomSpace, &rl);
         XrUuidEXT u[64]; XrSpaceContainerFB sc{XR_TYPE_SPACE_CONTAINER_FB}; sc.uuidCapacityInput = 64; sc.uuids = u; XrResult r2 = container(sess, roomSpace, &sc);
-        check(XR_SUCCEEDED(r) && XR_SUCCEEDED(r2) && (int)rl.wallUuidCountOutput == walls && (int)sc.uuidCountOutput == floors + ceilings + walls + tables, "the room's layout and container list the same planes", "%u walls, %u contained", rl.wallUuidCountOutput, sc.uuidCountOutput);
+        check(XR_SUCCEEDED(r) && XR_SUCCEEDED(r2) && (int)rl.wallUuidCountOutput == walls && (int)sc.uuidCountOutput == floors + ceilings + walls + tables + meshes, "the room's layout and container list the same planes", "%u walls, %u contained", rl.wallUuidCountOutput, sc.uuidCountOutput);
     }
     check(walls > 0, "at least one wall has been found by the room model (needs the glasses' cameras looking at a room)", "%d", walls);
+
+    // ---- the room as a mesh (XR_META_spatial_entity_mesh), as games use for physics and for hiding things behind walls
+    auto triMesh = fn<PFN_xrGetSpaceTriangleMeshMETA>("xrGetSpaceTriangleMeshMETA");
+    if (check(triMesh && meshes == 1, "the scene has one GLOBAL_MESH entity and the mesh call exists", "%d", meshes)) {
+        XrSpaceTriangleMeshGetInfoMETA gi{XR_TYPE_SPACE_TRIANGLE_MESH_GET_INFO_META}; XrSpaceTriangleMeshMETA tm{XR_TYPE_SPACE_TRIANGLE_MESH_META};
+        r = triMesh(meshSpace, &gi, &tm); std::vector<XrVector3f> mv(tm.vertexCountOutput); std::vector<uint32_t> mi(tm.indexCountOutput);
+        tm.vertexCapacityInput = (uint32_t)mv.size(); tm.vertices = mv.data(); tm.indexCapacityInput = (uint32_t)mi.size(); tm.indices = mi.data();
+        XrResult r2 = triMesh(meshSpace, &gi, &tm);
+        bool sound = !mi.empty() && mi.size() % 3 == 0; float lo = 1e9f, hi = -1e9f;
+        for (auto i : mi) if (i >= mv.size()) sound = false;
+        for (auto &v : mv) { if (v.y < lo) lo = v.y; if (v.y > hi) hi = v.y; }
+        int planes = floors + ceilings + walls + tables;
+        check(XR_SUCCEEDED(r) && XR_SUCCEEDED(r2) && sound && (int)mv.size() == planes * 4 && (int)mi.size() == planes * 6, "xrGetSpaceTriangleMeshMETA gives two triangles for every plane of the scene", "%u vertices, %u indices, %d planes", (unsigned)mv.size(), (unsigned)mi.size(), planes);
+        check(std::fabs(lo) < 0.3f && hi > 1.5f && hi < 4.f, "the mesh stands on its own origin (the floor) and reaches the ceiling", "from %.2f to %.2f m", lo, hi);
+    }
+
+    // ---- scene capture: on Quest this opens room set-up; here the room is found by looking, and the request just completes
+    auto capture = fn<PFN_xrRequestSceneCaptureFB>("xrRequestSceneCaptureFB");
+    if (check(capture != nullptr, "the scene capture call exists")) {
+        XrSceneCaptureRequestInfoFB sci{XR_TYPE_SCENE_CAPTURE_REQUEST_INFO_FB}; XrAsyncRequestIdFB id = 0; r = capture(sess, &sci, &id); XrEventDataBuffer ev;
+        bool got = XR_SUCCEEDED(r) && waitEvent(XR_TYPE_EVENT_DATA_SCENE_CAPTURE_COMPLETE_FB, id, &ev);
+        check(got && XR_SUCCEEDED(((XrEventDataSceneCaptureCompleteFB *)&ev)->result), "xrRequestSceneCaptureFB completes (no set-up screen is shown)", "%s", res(r));
+    }
+
+    // ---- the boundary: there is none; a game asking to hide it is told it is hidden
+    auto boundaryVis = fn<PFN_xrRequestBoundaryVisibilityMETA>("xrRequestBoundaryVisibilityMETA");
+    check(bp.supportsBoundaryVisibility, "the system says it supports boundary visibility");
+    if (check(boundaryVis != nullptr, "the boundary visibility call exists")) {
+        r = boundaryVis(sess, XR_BOUNDARY_VISIBILITY_SUPPRESSED_META); bool got = false;
+        for (int i = 0; i < 60 && !got; i++) { for (size_t k = 0; k < seen.size(); k++) if (seen[k].type == XR_TYPE_EVENT_DATA_BOUNDARY_VISIBILITY_CHANGED_META) { got = ((XrEventDataBoundaryVisibilityChangedMETA *)&seen[k])->boundaryVisibility == XR_BOUNDARY_VISIBILITY_SUPPRESSED_META; seen.erase(seen.begin() + k); break; } if (!got) frame(); }
+        check(r == XR_SUCCESS && got, "xrRequestBoundaryVisibilityMETA (suppress) succeeds and its event arrives", "%s", res(r));
+    }
 
     // ---- an anchor: made half a metre in front of the head, found again where it was put
     auto cAnchor = fn<PFN_xrCreateSpatialAnchorFB>("xrCreateSpatialAnchorFB"); auto save = fn<PFN_xrSaveSpaceFB>("xrSaveSpaceFB");
@@ -202,16 +237,50 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
             check(XR_SUCCEEDED(r) && (before.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && d < 0.05f, "the anchor is located where it was made", "%.3f m off", d);
             XrSpaceSaveInfoFB svi{XR_TYPE_SPACE_SAVE_INFO_FB}; svi.space = ac->space; svi.location = XR_SPACE_STORAGE_LOCATION_LOCAL_FB; svi.persistenceMode = XR_SPACE_PERSISTENCE_MODE_INDEFINITE_FB; XrAsyncRequestIdFB sid = 0;
             r = save ? save(sess, &svi, &sid) : XR_ERROR_FUNCTION_UNSUPPORTED; check(XR_SUCCEEDED(r) && waitEvent(XR_TYPE_EVENT_DATA_SPACE_SAVE_COMPLETE_FB, sid, &ev), "the anchor is saved (for this run; not yet across runs)", "%s", res(r));
+            // sharing with another player: there is no service behind it, and the game must be told so rather than left waiting
+            auto cUser = fn<PFN_xrCreateSpaceUserFB>("xrCreateSpaceUserFB"); auto userId = fn<PFN_xrGetSpaceUserIdFB>("xrGetSpaceUserIdFB"); auto share = fn<PFN_xrShareSpacesFB>("xrShareSpacesFB");
+            if (check(cUser && userId && share, "the sharing and user calls exist")) {
+                XrSpaceUserCreateInfoFB uc{XR_TYPE_SPACE_USER_CREATE_INFO_FB}; uc.userId = 123456789; XrSpaceUserFB user = XR_NULL_HANDLE; XrSpaceUserIdFB back = 0;
+                r = cUser(sess, &uc, &user); if (XR_SUCCEEDED(r)) userId(user, &back);
+                check(XR_SUCCEEDED(r) && back == uc.userId, "a space user is made and gives its id back", "%s", res(r));
+                XrSpace spaces[1] = {ac->space}; XrSpaceUserFB users[1] = {user};
+                XrSpaceShareInfoFB shi{XR_TYPE_SPACE_SHARE_INFO_FB}; shi.spaceCount = 1; shi.spaces = spaces; shi.userCount = 1; shi.users = users; XrAsyncRequestIdFB shid = 0;
+                r = share(sess, &shi, &shid); bool got = XR_SUCCEEDED(r) && waitEvent(XR_TYPE_EVENT_DATA_SPACE_SHARE_COMPLETE_FB, shid, &ev);
+                check(got && ((XrEventDataSpaceShareCompleteFB *)&ev)->result == XR_ERROR_SPACE_CLOUD_STORAGE_DISABLED_FB, "a share request completes with 'cloud storage disabled' (sharing itself is not possible here)", "%s", got ? res(((XrEventDataSpaceShareCompleteFB *)&ev)->result) : "no event");
+            }
         }
     }
 
     // ---- hands with Meta's aim state
     auto cHand = fn<PFN_xrCreateHandTrackerEXT>("xrCreateHandTrackerEXT"); auto lHand = fn<PFN_xrLocateHandJointsEXT>("xrLocateHandJointsEXT");
+    auto handMeshFn = fn<PFN_xrGetHandMeshFB>("xrGetHandMeshFB"); float indexTipX[2] = {0, 0}; int meshOk = 0;
     if (check(cHand && lHand, "the hand tracking calls exist")) {
         int active = 0, withAim = 0; float maxPinch = 0;
         for (int h = 0; h < 2; h++) {
             XrHandTrackerCreateInfoEXT hc{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT}; hc.hand = h ? XR_HAND_RIGHT_EXT : XR_HAND_LEFT_EXT; hc.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT; XrHandTrackerEXT ht = XR_NULL_HANDLE;
             if (XR_FAILED(cHand(sess, &hc, &ht))) continue;
+            if (handMeshFn) {      // the hand model a game draws: sizes first, then the data, as the Meta SDK asks
+                XrHandTrackingMeshFB hm{XR_TYPE_HAND_TRACKING_MESH_FB}; XrResult m1 = handMeshFn(ht, &hm);
+                std::vector<XrPosef> bind(hm.jointCountOutput); std::vector<float> rad(hm.jointCountOutput); std::vector<XrHandJointEXT> par(hm.jointCountOutput);
+                std::vector<XrVector3f> vp(hm.vertexCountOutput), vn(hm.vertexCountOutput); std::vector<XrVector2f> uv(hm.vertexCountOutput); std::vector<XrVector4sFB> bi(hm.vertexCountOutput); std::vector<XrVector4f> bw(hm.vertexCountOutput);
+                std::vector<int16_t> ix(hm.indexCountOutput);
+                hm.jointCapacityInput = (uint32_t)bind.size(); hm.jointBindPoses = bind.data(); hm.jointRadii = rad.data(); hm.jointParents = par.data();
+                hm.vertexCapacityInput = (uint32_t)vp.size(); hm.vertexPositions = vp.data(); hm.vertexNormals = vn.data(); hm.vertexUVs = uv.data(); hm.vertexBlendIndices = bi.data(); hm.vertexBlendWeights = bw.data();
+                hm.indexCapacityInput = (uint32_t)ix.size(); hm.indices = ix.data();
+                XrResult m2 = handMeshFn(ht, &hm);
+                bool sound = XR_SUCCEEDED(m1) && XR_SUCCEEDED(m2) && bind.size() == XR_HAND_JOINT_COUNT_EXT && !vp.empty() && !ix.empty() && ix.size() % 3 == 0;
+                for (auto i : ix) if (i < 0 || (size_t)i >= vp.size()) sound = false;
+                for (size_t i = 0; i < vp.size() && sound; i++) if (bi[i].x < 0 || bi[i].x >= XR_HAND_JOINT_COUNT_EXT || std::fabs(bw[i].x + bw[i].y + bw[i].z + bw[i].w - 1) > 0.01f) sound = false;
+                // every triangle faces away from the bone it is bound to: outward, not inside out
+                int inward = 0;
+                for (size_t i = 0; sound && i + 2 < ix.size(); i += 3) {
+                    XrVector3f a = vp[ix[i]], b = vp[ix[i + 1]], cc = vp[ix[i + 2]]; float ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z, wx = cc.x - a.x, wy = cc.y - a.y, wz = cc.z - a.z;
+                    float nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; XrVector3f n = vn[ix[i]], n2 = vn[ix[i + 1]], n3 = vn[ix[i + 2]];
+                    if (nx * (n.x + n2.x + n3.x) + ny * (n.y + n2.y + n3.y) + nz * (n.z + n2.z + n3.z) <= 0) inward++;
+                }
+                if (sound && inward == 0) { meshOk++; indexTipX[h] = bind[XR_HAND_JOINT_INDEX_TIP_EXT].position.x; }
+                line("info  %s hand model: %u joints, %u vertices, %u triangles, %d facing inward", h ? "right" : "left", hm.jointCountOutput, hm.vertexCountOutput, hm.indexCountOutput / 3, inward);
+            }
             for (int i = 0; i < seconds * 6; i++) {
                 frame();
                 XrHandJointLocationEXT j[XR_HAND_JOINT_COUNT_EXT]; XrHandTrackingAimStateFB aim{XR_TYPE_HAND_TRACKING_AIM_STATE_FB};
@@ -222,6 +291,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         }
         line("info  hands: %d readings with a hand, %d with a valid aim state, strongest index pinch %.2f (needs a hand held up in front of the glasses)", active, withAim, maxPinch);
         check(active == withAim, "whenever a hand is tracked its aim state is filled in", "%d of %d", withAim, active);
+        check(handMeshFn && meshOk == 2, "xrGetHandMeshFB gives a sound hand model for each hand (made here, not Meta's)", "%d of 2", meshOk);
+        check(indexTipX[0] > 0 && indexTipX[1] < 0, "the left and right models are mirror images", "index tip x %.3f and %.3f", indexTipX[0], indexTipX[1]);
     }
 
     // ---- what the layer did meanwhile

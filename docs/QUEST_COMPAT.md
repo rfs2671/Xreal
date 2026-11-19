@@ -15,6 +15,17 @@ runtime, with no browser. First target: Wall Town Wonders. No Quest game has bee
 - `questlab/src/main/cpp/meta_layer.cpp` answers XR_FB_passthrough (layers are taken out of the frame: the glasses
   are see-through), XR_FB_spatial_entity with query, storage and container, XR_FB_scene (room, floor, ceiling, walls,
   table tops from the app's room.json) and XR_FB_hand_tracking_aim (pinch strengths from the hand joints).
+  Added later the same day:
+  - XR_META_spatial_entity_mesh: one GLOBAL_MESH entity whose triangles are the scene's planes (two a plane). Flat
+    faces, not a scan of the room's real shape.
+  - XR_FB_hand_tracking_mesh: a hand model made in the layer (a slab for the palm, a six-sided tube a finger; 157
+    vertices, 270 triangles), bound to the runtime's 26 joints. It is not Meta's model, and it has not been drawn by
+    a game yet: its winding (counter-clockwise outward) and joint frames are checked only by the test's own sums.
+  - XR_FB_scene_capture: completes at once (there is no room set-up screen; the room is found by looking).
+  - XR_FB_spatial_entity_sharing and _user: a share request completes with XR_ERROR_SPACE_CLOUD_STORAGE_DISABLED_FB.
+    Sharing itself (Meta's service) cannot be provided.
+  - XR_META_boundary_visibility: there is no boundary; a request to hide it succeeds and its event is sent. The
+    headers this module builds with (1.1.42) lack the extension, so `meta_extra.h` carries its definitions.
 - `questlab/src/main/cpp/lab.cpp` is the synthetic test: it asks what a Quest mixed-reality game asks.
 
 ## Measured on the Galaxy S21 Ultra (glasses not plugged in)
@@ -23,7 +34,8 @@ runtime, with no browser. First target: Wall Town Wonders. No Quest game has bee
 |---|---|
 | Khronos hello_xr (Vulkan), native, no browser | connects to the runtime and gets a session; its picture not checked (no glasses) |
 | Synthetic test, loader -> layer -> runtime | 41 checks, 40 pass; the one failure is "no wall found", expected without the cameras |
-| Synthetic test packaged like a converted game (dispatcher in front) | 40 checks, 32 to 33 pass |
+| The same with the six further extensions (second build) | 60 checks, 59 pass; the same one failure |
+| Synthetic test packaged like a converted game (dispatcher in front) | 40 checks, 32 to 33 pass (first build; not run again with the second) |
 
 In the passing run: all seven Meta extensions offered and enabled, passthrough created and 79 passthrough layers
 removed from frames, scene query answered (room, floor 1.60 m under the origin, ceiling), planes located, an anchor
@@ -31,14 +43,20 @@ made 0.5 m ahead and found 0.000 m from where it was put, saved for the run.
 
 ## Open
 
-1. **The runtime lets go of a native app whose screen is not in front.** In the later runs another activity came
-   in front of the test within a fraction of a second, and about two seconds after connecting the runtime service
-   was unbound ("the application left") while the test's frames went on. The app then stops serving the room, so
-   the scene comes back empty. Whether a real game, which stays in front, is affected is not known.
+1. **Without glasses, a native app whose window is not showing loses the runtime.** Cause found: with no glasses
+   window Monado's client makes a surface in the application's own activity and waits two seconds for it
+   (`Client.blockingConnect`, "Failed to create surface" in the log). If the phone's screen is asleep, or something
+   is in front, no surface comes, the client unbinds the service ("the application left") and the app stops serving
+   the room, so the scene comes back empty. With the phone awake the same build passes. With glasses plugged in this
+   path is not taken (the runtime draws on the glasses window); that case is still to be run.
 2. **With the dispatcher in front, the system does not say it supports spatial entities**: the dispatcher answers
    xrGetSystemProperties itself and the layer's answer is lost. To fix in the layer or the dispatcher.
-3. **Not offered by anything yet**: XR_FB_hand_tracking_mesh, XR_META_spatial_entity_mesh, XR_META_environment_depth,
-   XR_FB_scene_capture, XR_FB_spatial_entity_sharing, XR_META_boundary_visibility. A game that requires one will stop.
+3. **Not offered by anything yet**: XR_META_environment_depth (a depth picture per eye per frame, for hiding game
+   objects behind real ones). The app's dense depth runs about once a second at 240x320, so this would be far slower
+   and coarser than a Quest 3's. Also not offered: XR_FB_triangle_mesh, XR_FB_hand_tracking_capsules,
+   XR_FB_composition_layer_alpha_blend and _settings, XR_META_passthrough_preferences, XR_FB_body_tracking (and,
+   without the dispatcher in front, colour space, foveation, swapchain state and performance metrics, which the
+   dispatcher answers). A game that requires one of these will stop.
 4. **The test process crashes when its thread ends** (after the report is written): a thread-local destructor in a
    library that has been unloaded. Not yet traced.
 5. Anchors are kept for one run only. The ceiling is assumed 2.5 m over the floor. The room's walls need the glasses.
