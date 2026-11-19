@@ -85,7 +85,7 @@ class DesktopSession(private val activity: Activity) {
     /** Opens what the icon stands for. */
     fun activateHome(i: Int) {
         val item = homeItems.getOrNull(i) ?: return
-        if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else open(item.title, item.url, item.webKind)
+        if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else (HomeApps.all.firstOrNull { it.url == item.url }?.let { open(it) } ?: open(item.title, item.url, item.webKind))
         onLookPress?.invoke()
     }
     private var dockBitmap: Bitmap? = null
@@ -113,7 +113,7 @@ class DesktopSession(private val activity: Activity) {
     private fun ensureWeb(w: DesktopWindow): WebWindow = web.getOrPut(w.id) {
         WebWindow(activity, w.id, w.kind, w.url, darkPages) { ww ->
             desktop.find(ww.id)?.let { m ->
-                val t = ww.title.ifBlank { m.title }
+                val t = if (ww.isApp) m.title else ww.title.ifBlank { m.title }
                 if (m.title != t || m.url != ww.url) { m.title = t; m.url = ww.url; desktop.touch() }
             }
             onChanged?.invoke()
@@ -130,7 +130,17 @@ class DesktopSession(private val activity: Activity) {
     }
 
     // ---- actions from the phone UI
-    fun open(app: HomeApp) = open(app.title, app.url, app.kind)
+    fun open(app: HomeApp): Boolean {
+        // the real app when it is installed and the helper that can put it in a window is running; else its site
+        val comp = if (app.pkg.isNotEmpty() && dev.ultraxr.shell.AppShell.available) dev.ultraxr.shell.AppShell.componentOf(activity, app.pkg) else null
+        return if (comp != null) openApp(app.title, comp) else open(app.title, app.url, app.kind)
+    }
+    /** Another app in a window: [component] is "package/activity". One window an app: asked for again, it is shown. */
+    fun openApp(title: String, component: String): Boolean {
+        val address = "app://$component"
+        desktop.windows.firstOrNull { it.kind == "app" && it.url == address }?.let { w -> if (w.minimized) desktop.restore(w.id); desktop.focus(w.id); changed(); return true }
+        return open(title, address, "app")
+    }
     fun open(title: String, url: String, kind: String = "web"): Boolean {
         val w = desktop.add(title, url, kind, headYaw()) ?: return false
         if (w.follow) w.yaw = 0.0

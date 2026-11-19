@@ -24,6 +24,11 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
         </intent>
+        <!-- The apps with a launcher icon, to show them in the home view and run them in windows. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application

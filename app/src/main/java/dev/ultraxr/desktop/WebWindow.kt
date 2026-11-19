@@ -26,6 +26,10 @@ import dev.ultraxr.tracking.Tracking
  * renders into a Surface the 3D renderer samples as a texture. A virtual display (rather than
  * drawing the view into a canvas) gives the page a real hardware-accelerated window, so video
  * and WebGL work. Everything here runs on the main thread.
+ *
+ * A window of kind "app" holds another app instead of a page: its address is "app://package/activity". The virtual
+ * display is made the same way, with nothing of ours on it, and the shell helper ([dev.ultraxr.shell.AppShell]) is
+ * asked to start that app's activity there and to pass it touches and keys; Android lets only the shell user do both.
  */
 @SuppressLint("SetJavaScriptEnabled")
 class WebWindow(private val context: Context, val id: Int, private val kind: String, initialUrl: String, private val darkPages: Boolean, private val onChanged: (WebWindow) -> Unit) {
@@ -43,6 +47,11 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
     private var pendingUrl: String? = initialUrl
     private var downTime = 0L
     private var touching = false
+    val isApp = kind == "app"
+    /** For an app window: "package/activity". */
+    private val component = if (isApp) initialUrl.removePrefix("app://") else ""
+    private val displayId: Int get() = display?.display?.displayId ?: -1
+    private var lastMoveMs = 0L
 
     /** Attaches (or re-attaches after the renderer's GL context was recreated) the output surface. */
     fun attach(surface: Surface) {
@@ -53,6 +62,15 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
             val vd = dm.createVirtualDisplay("ultraxr-window-$id", pixelWidth, pixelHeight, DENSITY, surface,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY)
             display = vd
+            if (isApp) {
+                title = title.ifBlank { component.substringBefore('/') }
+                dev.ultraxr.shell.AppShell.send("launch " + vd.display.displayId + " " + component) { a ->
+                    if (!a.startsWith("ok")) { lastError = if (a.contains("no helper")) "The app helper is not running" else a.removePrefix("error ").take(120) }
+                    Tracking.log("apps: " + component + " on display " + vd.display.displayId + ": " + a.take(160))
+                    android.os.Handler(android.os.Looper.getMainLooper()).post { onChanged(this) }
+                }
+                return
+            }
             val p = Page(context, vd.display)
             p.show()
             presentation = p
@@ -63,13 +81,18 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
 
     fun detachSurface() { try { display?.surface = null } catch (_: Exception) {} }
 
-    fun load(target: String) { url = target; val w = web; if (w != null) w.loadUrl(target) else pendingUrl = target }
-    fun back() { web?.let { if (it.canGoBack()) it.goBack() } }
+    fun load(target: String) { if (isApp) return; url = target; val w = web; if (w != null) w.loadUrl(target) else pendingUrl = target }
+    fun back() { if (isApp) { key(KeyEvent.KEYCODE_BACK); return }; web?.let { if (it.canGoBack()) it.goBack() } }
     fun reload() { web?.reload() }
     fun canGoBack(): Boolean = web?.canGoBack() ?: false
 
     /** Inserts text at the page's focused field, as typing on a keyboard would; then Enter if asked. */
     fun typeText(text: String, enter: Boolean) {
+        if (isApp) {
+            if (text.isNotEmpty() && displayId >= 0) dev.ultraxr.shell.AppShell.send("text $displayId $text")
+            if (enter) key(KeyEvent.KEYCODE_ENTER)
+            return
+        }
         val w = web ?: return
         if (text.isEmpty()) { if (enter) key(KeyEvent.KEYCODE_ENTER); return }
         val js = org.json.JSONObject.quote(text)
@@ -78,6 +101,7 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
     }
 
     fun key(code: Int) {
+        if (isApp) { if (displayId >= 0) dev.ultraxr.shell.AppShell.send("key $displayId $code"); return }
         val w = web ?: return
         val t = SystemClock.uptimeMillis()
         w.dispatchKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_DOWN, code, 0)); w.dispatchKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_UP, code, 0))
@@ -89,6 +113,16 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
 
     /** A touch at ([u], [v]) of the content, 0..1 from the top-left. [action] is a MotionEvent action. */
     fun touch(action: Int, u: Double, v: Double) {
+        if (isApp) {
+            val id = displayId; if (id < 0) return
+            val now = SystemClock.uptimeMillis()
+            if (action == MotionEvent.ACTION_DOWN) touching = true else if (!touching) return
+            // moves are passed on at most every 12 ms: each is a message to the helper
+            if (action == MotionEvent.ACTION_MOVE) { if (now - lastMoveMs < 12) return; lastMoveMs = now }
+            dev.ultraxr.shell.AppShell.send("touch $id $action " + (u.coerceIn(0.0, 1.0) * pixelWidth).toInt() + " " + (v.coerceIn(0.0, 1.0) * pixelHeight).toInt())
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) touching = false
+            return
+        }
         val w = web ?: return
         val now = SystemClock.uptimeMillis()
         if (action == MotionEvent.ACTION_DOWN) { downTime = now; touching = true } else if (!touching) return
@@ -103,6 +137,14 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
 
     /** Scrolls the page at ([u], [v]) by [dx], [dy] pixels of content. */
     fun scroll(u: Double, v: Double, dx: Float, dy: Float) {
+        if (isApp) {
+            // a short drag of the finger the other way, as on a phone
+            val id = displayId; if (id < 0 || touching) return
+            val x = (u.coerceIn(0.0, 1.0) * pixelWidth).toInt(); val y = (v.coerceIn(0.0, 1.0) * pixelHeight).toInt()
+            val sh = dev.ultraxr.shell.AppShell
+            sh.send("touch $id 0 $x $y"); sh.send("touch $id 2 " + (x - dx / 2).toInt() + " " + (y - dy / 2).toInt()); sh.send("touch $id 2 " + (x - dx).toInt() + " " + (y - dy).toInt()); sh.send("touch $id 1 " + (x - dx).toInt() + " " + (y - dy).toInt())
+            return
+        }
         val w = web ?: return
         w.scrollBy(0, 0) // keeps the view awake for nested scrollers below
         w.evaluateJavascript("(function(x,y,dx,dy){var e=document.elementFromPoint(x,y);while(e&&e!==document.body){var s=getComputedStyle(e);if((e.scrollHeight>e.clientHeight&&/(auto|scroll)/.test(s.overflowY))||(e.scrollWidth>e.clientWidth&&/(auto|scroll)/.test(s.overflowX))){e.scrollBy(dx,dy);return;}e=e.parentElement;}window.scrollBy(dx,dy);})(" +
@@ -113,6 +155,7 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
     fun resume() { web?.onResume() }
 
     fun destroy() {
+        if (isApp && component.isNotEmpty()) dev.ultraxr.shell.AppShell.send("stop " + component.substringBefore('/'))
         try { presentation?.dismiss() } catch (_: Exception) {}
         presentation = null
         try { web?.let { (it.parent as? ViewGroup)?.removeView(it); it.stopLoading(); it.destroy() } } catch (_: Exception) {}

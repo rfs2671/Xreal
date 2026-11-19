@@ -264,12 +264,13 @@ class Desktop {
 }
 
 /** Sites offered on the home screen. */
-class HomeApp(val title: String, val url: String, val kind: String, val color: Int)
+/** A tile of the dock and the home view: a site, and the installed app ([pkg]) that is shown instead when it can be. */
+class HomeApp(val title: String, val url: String, val kind: String, val color: Int, val pkg: String = "")
 
 object HomeApps {
     val all = listOf(
-        HomeApp("YouTube", "https://m.youtube.com/", "youtube", 0xFFE53935.toInt()),
-        HomeApp("Xbox Cloud", "https://www.xbox.com/play", "xbox", 0xFF2E7D32.toInt()),
+        HomeApp("YouTube", "https://m.youtube.com/", "youtube", 0xFFE53935.toInt(), "com.google.android.youtube"),
+        HomeApp("Xbox Cloud", "https://www.xbox.com/play", "xbox", 0xFF2E7D32.toInt(), "com.gamepass"),
         HomeApp("Browser", "https://www.google.com/", "web", 0xFF1E88E5.toInt()),
         HomeApp("3D web", "https://threejs.org/examples/#webgl_animation_keyframes", "web", 0xFF8E24AA.toInt()),
     )
