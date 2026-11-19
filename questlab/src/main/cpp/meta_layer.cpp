@@ -58,6 +58,7 @@
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <chrono>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "UltraXRMeta", __VA_ARGS__)
 
@@ -150,8 +151,26 @@ PFN_xrVoidFunction stubFor(const char *name) {      // lock not needed: the load
     if (stubCount >= STUBS || strlen(name) >= sizeof stubs[0].name) return nullptr;
     strcpy(stubs[stubCount].name, name); return stubTable[stubCount++];
 }
+// Hands, as the game gets them: how often it asks for each hand's joints and how often a hand is there. A game that
+// stops asking has turned its hands off itself; a game that asks and gets none has lost them to the tracking.
+struct HandStat { uint64_t tracker = 0; std::atomic<long> asked{0}, there{0}; long askedSaid = 0, thereSaid = 0; int said = -1; double saidAt = 0; };
+HandStat handStats[4];
+double nowS() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+void noteHand(uint64_t tracker, bool active) {
+    for (int i = 0; i < 4; i++) {
+        HandStat &h = handStats[i];
+        if (h.tracker == 0) h.tracker = tracker;
+        if (h.tracker != tracker) continue;
+        h.asked++; if (active) h.there++;
+        double t = nowS();
+        if ((int)active != h.said && t - h.saidAt > 1.0) { h.said = active; h.saidAt = t; diag("HANDS  hand tracker %d: %s (there in %ld of %ld readings so far)", i + 1, active ? "a hand is tracked" : "no hand", h.there.load(), h.asked.load()); }
+        return;
+    }
+}
 void diagSummary(const char *when) {
     std::string called; int kinds = 0;
+    for (int i = 0; i < 4; i++) { HandStat &h = handStats[i]; if (!h.tracker) continue; long a = h.asked.load(), b = h.there.load();
+        diag("HANDS  hand tracker %d since the last summary: asked %ld times, a hand there %ld times%s", i + 1, a - h.askedSaid, b - h.thereSaid, a == h.askedSaid ? "  (the game has stopped asking for this hand)" : ""); h.askedSaid = a; h.thereSaid = b; }
     for (int i = 0; i < stubCount; i++) { int c = stubs[i].calls.load(); if (c) { kinds++; char b[112]; snprintf(b, sizeof b, " %s x%d", stubs[i].name, c); called += b; } }
     diag("SUMMARY (%s)  %ld frames, %ld failed xrEndFrame, %d unsupported functions called%s%s", when, frameCount.load(), endFrameFails.load(), kinds, kinds ? ":" : "", called.c_str());
 }
@@ -947,6 +966,7 @@ XrResult XRAPI_CALL uDestroySession(XrSession s) {
 XrResult XRAPI_CALL uLocateHandJointsEXT(XrHandTrackerEXT t, const XrHandJointsLocateInfoEXT *info, XrHandJointLocationsEXT *out) {
     if (!rLocateHandJoints) return XR_ERROR_FUNCTION_UNSUPPORTED;
     XrResult r = rLocateHandJoints(t, info, out); if (XR_FAILED(r)) return r;
+    noteHand((uint64_t)t, out->isActive == XR_TRUE);
     for (XrBaseOutStructure *n = (XrBaseOutStructure *)out->next; n; n = n->next) {
         // the hand model above is made life-size and the joints are not rescaled: the scale is one
         if (n->type == XR_TYPE_HAND_TRACKING_SCALE_FB) { auto *sc = (XrHandTrackingScaleFB *)n; sc->sensorOutput = 1; sc->currentOutput = 1; continue; }
