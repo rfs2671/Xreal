@@ -256,6 +256,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     auto handMeshFn = fn<PFN_xrGetHandMeshFB>("xrGetHandMeshFB"); float indexTipX[2] = {0, 0}; int meshOk = 0;
     if (check(cHand && lHand, "the hand tracking calls exist")) {
         int active = 0, withAim = 0; float maxPinch = 0;
+        XrHandTrackerEXT trk[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
         for (int h = 0; h < 2; h++) {
             XrHandTrackerCreateInfoEXT hc{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT}; hc.hand = h ? XR_HAND_RIGHT_EXT : XR_HAND_LEFT_EXT; hc.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT; XrHandTrackerEXT ht = XR_NULL_HANDLE;
             if (XR_FAILED(cHand(sess, &hc, &ht))) continue;
@@ -281,19 +282,31 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
                 if (sound && inward == 0) { meshOk++; indexTipX[h] = bind[XR_HAND_JOINT_INDEX_TIP_EXT].position.x; }
                 line("info  %s hand model: %u joints, %u vertices, %u triangles, %d facing inward", h ? "right" : "left", hm.jointCountOutput, hm.vertexCountOutput, hm.indexCountOutput / 3, inward);
             }
-            int seen0 = active, longestGap = 0, gap = 0; float pinchMax = 0; int pinches = 0; bool pinching = false;
-            __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE reading the %s hand now", h ? "RIGHT" : "LEFT");
+            trk[h] = ht;
+        }
+        // Each hand in turn is asked for (the log line is the cue), and BOTH trackers are read every frame: a hand
+        // held up but reported as the other one is then seen as such, not as "no hand".
+        for (int want = 0; want < 2; want++) {
+            int asWanted = 0, asOther = 0, neither = 0, both = 0, longestGap = 0, gap = 0, pinches = 0; float pinchMax = 0; bool pinching = false;
+            __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE reading the %s hand now", want ? "RIGHT" : "LEFT");
             for (int i = 0; i < seconds * 6; i++) {
-                frame();
-                XrHandJointLocationEXT j[XR_HAND_JOINT_COUNT_EXT]; XrHandTrackingAimStateFB aim{XR_TYPE_HAND_TRACKING_AIM_STATE_FB};
-                XrHandJointLocationsEXT hl{XR_TYPE_HAND_JOINT_LOCATIONS_EXT, &aim}; hl.jointCount = XR_HAND_JOINT_COUNT_EXT; hl.jointLocations = j;
-                XrHandJointsLocateInfoEXT hi{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT}; hi.baseSpace = local; hi.time = frameTime;
-                if (XR_SUCCEEDED(lHand(ht, &hi, &hl)) && hl.isActive) { active++; gap = 0; if (aim.status & XR_HAND_TRACKING_AIM_VALID_BIT_FB) withAim++; if (aim.pinchStrengthIndex > maxPinch) maxPinch = aim.pinchStrengthIndex;
-                    if (aim.pinchStrengthIndex > pinchMax) pinchMax = aim.pinchStrengthIndex;
-                    bool p = aim.pinchStrengthIndex > 0.8f; if (p && !pinching) pinches++; if (aim.pinchStrengthIndex < 0.4f || p) pinching = p; }
-                else if (++gap > longestGap) longestGap = gap;
+                frame(); bool on[2] = {false, false}; float pin[2] = {0, 0};
+                for (int h = 0; h < 2; h++) {
+                    if (trk[h] == XR_NULL_HANDLE) continue;
+                    XrHandJointLocationEXT j[XR_HAND_JOINT_COUNT_EXT]; XrHandTrackingAimStateFB aim{XR_TYPE_HAND_TRACKING_AIM_STATE_FB};
+                    XrHandJointLocationsEXT hl{XR_TYPE_HAND_JOINT_LOCATIONS_EXT, &aim}; hl.jointCount = XR_HAND_JOINT_COUNT_EXT; hl.jointLocations = j;
+                    XrHandJointsLocateInfoEXT hi{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT}; hi.baseSpace = local; hi.time = frameTime;
+                    if (XR_SUCCEEDED(lHand(trk[h], &hi, &hl)) && hl.isActive) { on[h] = true; pin[h] = aim.pinchStrengthIndex; active++; if (aim.status & XR_HAND_TRACKING_AIM_VALID_BIT_FB) withAim++; if (pin[h] > maxPinch) maxPinch = pin[h]; }
+                }
+                int other = 1 - want;
+                if (on[want] && on[other]) both++; else if (on[want]) asWanted++; else if (on[other]) asOther++; else neither++;
+                if (on[want] || on[other]) gap = 0; else if (++gap > longestGap) longestGap = gap;
+                float pv = on[want] ? pin[want] : on[other] ? pin[other] : -1;
+                if (pv >= 0) { if (pv > pinchMax) pinchMax = pv; bool pn = pv > 0.8f; if (pn && !pinching) pinches++; if (pv < 0.4f || pn) pinching = pn; }
             }
-            line("info  %s hand: seen in %d of %d readings (%.0f %%), longest stretch without it %d readings, %d pinches, strongest %.2f", h ? "right" : "left", active - seen0, seconds * 6, 100.0 * (active - seen0) / (seconds * 6 > 0 ? seconds * 6 : 1), longestGap, pinches, pinchMax);
+            int n = seconds * 6 > 0 ? seconds * 6 : 1;
+            line("info  asked for the %s hand, %d readings: reported as %s %d (%.0f %%), as the OTHER hand %d (%.0f %%), as both %d, no hand %d (%.0f %%); longest stretch with no hand %d; %d pinches, strongest %.2f",
+                 want ? "right" : "left", n, want ? "right" : "left", asWanted, 100.0 * asWanted / n, asOther, 100.0 * asOther / n, both, neither, 100.0 * neither / n, longestGap, pinches, pinchMax);
         }
         line("info  hands: %d readings with a hand, %d with a valid aim state, strongest index pinch %.2f (needs a hand held up in front of the glasses)", active, withAim, maxPinch);
         check(active == withAim, "whenever a hand is tracked its aim state is filled in", "%d of %d", withAim, active);

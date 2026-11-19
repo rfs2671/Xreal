@@ -76,9 +76,15 @@ in this run by design: it waited only 5 s before the scene query.)
 A fourth worn run, cued (left hand up for 20 s, then right for 20 s, pinching slowly; the test now counts each hand
 on its own): left hand seen in 0 of 1200 readings; right hand in 1115 of 1200 (93 %), longest stretch without it 85
 readings (1.4 s), every reading with a valid aim state, but 0 pinches and a strongest index pinch of only 0.22.
-Not explained yet: the left hand was never reported as left (not seen at all, or reported as the right hand; the
-test read one hand at a time and cannot tell), and no pinch registered although the third run reached 1.00. The test
-should read both hands every frame before this is run again.
+The wearer confirmed the left hand was up and pinching during its window. The app's own record of that session
+(journal.jsonl) has 265 hand-tracker frames labelled left and 760 labelled right in 48.7 s; 760 frames is about 25 s,
+more than the 20 s the right hand was up, and the test's right-hand readings began within 1.4 s of the window
+opening, before the wearer could have been told to switch. So the physical left hand was being reported as the
+right hand for a stretch: the tracker's left/right labelling is not reliable. The same record gives the smallest
+thumb-to-index gap seen as 50 mm for the right hand (30 mm left): the tracker did not see the right-hand pinches
+close, which is why none registered. Both are faults of the hand tracker under the layer, not of the Quest layer.
+The test now reads both hands every frame and reports "as the other hand" separately (checked on the phone without
+glasses, 59 of 60); the labelling has not yet been measured with it.
 
 ## Open
 
