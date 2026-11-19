@@ -62,7 +62,7 @@ def main():
         elif "CUE room closed" in l: print("%5.0f s  %s" % (now, l[4:]))
         elif "CUE room placed" in l or "CUE room NOT placed" in l:
             kept = "NOT" not in l; print("%5.0f s  %s" % (now, l[4:])); buzz(3 if kept else 5)
-            for k in range(3): time.sleep(5); qd.capture(serial, os.path.join(out, "glasses-placed-%d.png" % (k + 1)))
+            for k in range(8): time.sleep(10); qd.capture(serial, os.path.join(out, "glasses-placed-%d.png" % (k + 1)))
         elif "CUE room kept" in l or "CUE room NOT kept" in l:
             kept = "NOT" not in l; print("%5.0f s  %s" % (now, l[4:])); buzz(3 if kept else 5)
             time.sleep(2); qd.capture(serial, os.path.join(out, "glasses-closed.png"))

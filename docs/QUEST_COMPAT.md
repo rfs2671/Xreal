@@ -495,6 +495,21 @@ Seen in the log and not yet dealt with: the place given to the plan by an earlie
 force when this session began (the plan's place is not dropped when the glasses are plugged in again), and placing
 it anew made the layer take most walls for new ones (25 known and not found, 53 ever made).
 
+### "Matched, but drifted after walking: completely off" (19 November, 18:50)
+
+The wearer's word on the placed room. The log of those seconds has no loss of position, no restart and 134 to 192
+features throughout: the position estimator itself wanders as the wearer walks. It has no map.
+
+The plan is a map. While it is placed, the walls found in the last seconds are laid against it near where it is
+believed to lie (within 10 degrees and 1.2 m); what they are off by is how far the world has wandered, and 70 % of
+that is taken out at once by moving the world. The wall finder's floor plan is begun afresh every 12 pictures so
+that it is never older than the drift. A line every 20 s counts the looks, how many could be laid on the plan, the
+corrections and their sum; a correction of more than 15 cm gets a line of its own.
+
+Built and installed; no number yet. The estimator's wandering is not made smaller by this, only undone where the
+cameras see walls of the plan. After the kept room is placed the set-up tool now shows its walls for 90 s, for a
+walk round the room.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
