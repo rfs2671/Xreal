@@ -155,6 +155,62 @@ Regression suites on the emulator with this build: desktop 40 of 40, room 21 of 
 
 Every extension in the test's "Quest games also ask for" list is now offered when the dispatcher is in front.
 
+## Real-game readiness (19 November, afternoon)
+
+No feature was added in this round; it is about knowing what a real game does when it runs.
+
+### What a run of a game now leaves behind
+
+The layer writes, to logcat under the tag `UltraXRQuest` and to `uxr_quest_diag.txt` in the game's own folder
+(`/sdcard/Android/data/<package>/files/`):
+
+- the game's name, engine and the OpenXR version it asks for; every extension it enables, sorted into answered by
+  the layer, passed to the runtime, and unsupported (those are left out so that the game goes on);
+- the graphics API of the session (Vulkan or OpenGL ES), the blend modes the runtime takes, every swapchain
+  (format, size, samples, layers), reference space, binding suggestion (with the profile's name), action-set
+  attachment and session start, each with its result; the session's states; the interaction profile of each hand;
+- the layers of a frame whenever what the game submits changes, and every failed `xrEndFrame`;
+- `UNSUPPORTED CALL`: a function neither the runtime nor the layer has. The game gets a stand-in that answers
+  `XR_ERROR_FUNCTION_UNSUPPORTED` in place of a null pointer, and each one is named and counted;
+- `UNSUPPORTED FEATURE`: environment depth on a Vulkan session, passthrough on a game's own surface, hand removal;
+- on a crash (SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE): one line with the signal, the address, the frame count
+  and the last OpenXR call the layer saw, written before Android's own crash dump, which still follows;
+- a summary every 1800 frames and when the session ends.
+
+The dispatcher's own "unsupported:" lines (tag `OpenXRDispatch`) are kept and collected alongside; nothing of it
+was rebuilt.
+
+| Tool | What it does |
+|---|---|
+| `tools/quest/quest_inspect.py GAME.apk` | Reads the APK only. Package, engine, libraries, Meta's libraries, converted or as bought, manifest features and Quest metadata, every OpenXR extension named in the game's code sorted into layer / runtime / dispatcher only / nobody, blockers known before a run |
+| `tools/quest/quest_pack.py GAME.apk OUT.apk --install SERIAL` | As before: adds the layer and the loader chain, signs, installs |
+| `tools/quest/quest_diag.py PACKAGE --serial SERIAL --seconds 60 [--capture N]` | Starts the game as Ultra XR's launcher does, turns the dispatcher's detailed log on for the run, and writes a report (how far it got, unsupported things, failed calls, missing libraries, Meta platform lines, crash with the top of the stack), the whole logcat, the OpenXR lines alone, Android's crash dump, the layer's file and pictures of the glasses |
+| `tools/quest/worn_test.py SERIAL` | Runs the test app while somebody wears the glasses, buzzes the phone as a cue for each phase, takes pictures of the glasses |
+
+None of them changes anything inside a game, and none answers or removes a game's ownership check.
+
+### Wall Town Wonders, the day its APK is here
+
+    python tools/quest/quest_inspect.py WallTownWonders.apk --out wtw_inspect.txt
+    python tools/quest/quest_pack.py WallTownWonders.apk wtw_uxr.apk --install R5CR60SFF8M
+    python tools/quest/quest_diag.py <its package> --serial R5CR60SFF8M --seconds 90 --capture 4
+
+The first says whether it is converted, which engine it is, whether it brings Meta's platform SDK, and which
+extensions it names that nobody answers. The third says how far it got and what stopped it.
+
+### Measured on the S21 Ultra without the glasses (the phone alone: no cameras, so no walls and no hands)
+
+| Run | Result |
+|---|---|
+| Test app packed like a converted game, OpenGL ES, with the room view drawn | 76 of 77 (the one: no wall without cameras). 448 stereo pictures in 8 s, none refused; environment depth in all 448 |
+| The same on a Vulkan session, each frame a drawn layer over the passthrough layer | 75 of 76 (the same one). 167 frames drawn, no Vulkan or swapchain failure; the depth provider is refused cleanly (`XR_ERROR_FEATURE_UNSUPPORTED`) |
+| Touch controller bindings (`/interaction_profiles/oculus/touch_controller`) | Accepted; both hands report that profile; `xrSyncActions` 0 failures in 645 frames |
+| Khronos `hello_xr` (Vulkan, its own renderer) packed with the layer | Runs; session FOCUSED; no failed call |
+
+Found and fixed by these runs: the layer made its own floor-level space without `XR_EXT_local_floor` enabled when
+the application had not asked for it (the runtime logged a validation failure and the layer fell back to the
+eye-level space). The layer now enables the extension itself.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
