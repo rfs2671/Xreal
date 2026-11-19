@@ -139,7 +139,9 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         val q = if (tracked) head.pose.q else Q.mul(Q.axisAngle(0.0, 1.0, 0.0, previewYaw), Q.axisAngle(1.0, 0.0, 0.0, previewPitch))
         val p = if (tracked && f.usePosition) head.pose.p else f.anchor
         val tanV = if (preview) 0.62 else Tracking.displayTanV; val tanH = if (preview) tanV * width / height.coerceAtLeast(1) else Tracking.displayTanH
-        val two = stereo && !preview
+        // A picture three times as wide as it is high (3840x1080) is the glasses' full-width 3D: the left half goes to
+        // the left eye and the right half to the right, so one view across it would give each eye half a scene.
+        val two = (stereo || width >= height * 3) && !preview
         if (stereoNoted != (if (two) 1 else 0)) { stereoNoted = if (two) 1 else 0; Tracking.noteGraphics(if (two) "desktop drawing two eye views side by side, eye distance " + Math.round(ipdM * 1000) + " mm" + (if (swapEyes) ", eyes swapped" else "") else "desktop drawing one view") }
 
         GLES30.glEnable(GLES30.GL_BLEND); GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
