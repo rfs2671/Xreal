@@ -307,3 +307,34 @@ should be, from within 3 m, and do not find it twelve times running. In the same
 instead of twice, a table top never instead of three times, and two walls stood at the end instead of one.
 
 Not built yet from the roadmap: dense depth, a room mesh, occlusion, a saved map. Not seen in the glasses.
+
+## Dense depth, and walls from a floor plan (19 November 2026, night)
+
+**Dense depth (`core/DenseStereo`).** Both pictures are redrawn as ordinary 240 x 320 views with their rows lined up,
+matched by semi-global matching on a 5 x 5 census (64 disparities, four directions), checked left against right, and
+each answer is then sharpened on the full-size pictures. On the owner's recorded session about half of all pixels
+get a distance; 113 to 158 ms a pair on the laptop, 290 to 330 ms on the Pixel, run once a second off the tracking
+thread (the estimator's own time per frame did not change: 26 ms median).
+
+How good one distance is: floor points measured from 2 to 2.5 m scatter about 8 cm in height around the floor, which
+is about 10 cm in distance. Part of that is the head's pose at the moment of the picture, not the matching:
+sharpening the match on full-size pictures did not narrow it.
+
+**A fused mesh (`core/RoomMesh`): built, measured, not used.** A 5 cm signed-distance grid in hashed blocks, as in
+Chisel. It puts the floor at 1.70 to 1.71 m under the head, the same as every other measurement, but its surface is
+rough at every setting tried (5 and 8 cm cells, three weights): in the floor's own height band there are more
+upright faces than level ones. Used to hide virtual things it would hide them wrongly, so nothing draws it and
+nothing is hidden by it. What smears it is several centimetres of disagreement between pictures (pose, and what is
+left of the camera-angle error), which a finer match does not remove.
+
+**Dense depth fed to the corner-based finder: worse.** It took a level 20 cm under the floor for the floor and lost
+the wall. Not done.
+
+**Walls from a floor plan (`core/WallMap`): adopted.** Every place between 0.4 and 1.9 m over the floor is counted on
+a plan of 5 cm squares; a wall is a bright straight line there however rough one picture is, and lines are found by
+Hough voting. On the same recording: the long wall (3.6 m), the far wall (2.1 m) and the front of the piano (1.6 m),
+where the corner-based finder had the long wall only. In the app the plan's walls replace the corner-based ones once
+there are any; they stand from the floor to 2.3 m. Replayed on the Pixel: three walls at the end. Switch:
+`dense_walls=0` in `files/vio_options.txt`.
+
+Not seen in the glasses. Not built: table tops from dense depth, a usable mesh, hiding virtual things behind real ones.

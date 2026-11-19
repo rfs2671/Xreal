@@ -84,6 +84,11 @@ object Tracking : GlassesLink.Listener {
     @Volatile private var stereoFixIsUnit = true
     @Volatile private var floorCalibrator: dev.ultraxr.core.FloorCalibrator? = null
     @Volatile var floorSlopeNote = ""; private set
+    /** Walls from dense depth (core/WallMap): on unless files/vio_options.txt says dense_walls=0. */
+    @Volatile var denseWalls = true
+    @Volatile private var wallMapReset = false
+    @Volatile var denseMs = 0.0; private set
+    @Volatile var denseWallCount = 0; private set
     /** What the last look at the room found; null before the first. */
     @Volatile var roomFindings: dev.ultraxr.core.RoomFindings? = null; private set
     /** The floor's height in the app's world (the head's is 0 at a recentre). NaN until the cameras have found it. */
@@ -253,6 +258,7 @@ object Tracking : GlassesLink.Listener {
             try {
                 val lines = File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()
                 holdWhenStill = lines.none { it.replace(" ", "") == "hold_when_still=0" }
+                denseWalls = lines.none { it.replace(" ", "") == "dense_walls=0" }
                 val changed = ArrayList<String>()
                 if (lines.isNotEmpty()) {
                     val root = JSONObject(config); val v0 = root.getJSONObject("value0")
@@ -387,8 +393,8 @@ object Tracking : GlassesLink.Listener {
         // Head origin between the two cameras.
         head = HeadTracker(doubleArrayOf((c0.p[0] + c1.p[0]) / 2, (c0.p[1] + c1.p[1]) / 2, (c0.p[2] + c1.p[2]) / 2))
         // A recentre moves the app's world; the room found so far moves with it.
-        head.onWorldMoved = { moved -> room.transform(moved); roomFindings = room.analyse(0.0) }
-        room.clear(); roomFindings = null
+        head.onWorldMoved = { moved -> room.transform(moved); wallMapReset = true; roomFindings = room.analyse(0.0) }
+        room.clear(); wallMapReset = true; roomFindings = null
     }
 
     /** Display optics from the glasses' factory configuration, when it is there and plausible. */
@@ -529,7 +535,7 @@ object Tracking : GlassesLink.Listener {
                         // found of the room is dropped (the floor's height is kept until a new one is found).
                         if (roomUsedNs != 0L && now - roomUsedNs > 2_000_000_000L) {
                             val headNow = head.appFromEstimator().apply(Q.rotate(HeadTracker.Z_TO_Y, p))[1]
-                            room.regained(headNow); roomFindings = room.analyse(headNow)
+                            room.regained(headNow); wallMapReset = true; roomFindings = room.analyse(headNow)
                             log("room: position was away for " + (now - roomUsedNs) / 1_000_000_000L + " s: surfaces forgotten, floor " + (if (floorY.isNaN()) "unknown again" else dev.ultraxr.core.Fmt.f(headNow - floorY, 2) + " m below the head as before"))
                         }
                         roomUsedNs = now
@@ -622,6 +628,7 @@ object Tracking : GlassesLink.Listener {
         var finder: dev.ultraxr.core.StereoPoints? = null; var finderRig: dev.ultraxr.core.StereoRig? = null
         var frame = 0; var saidFloor = Double.NaN
         var calibratedThisRun = false; var calibCheckFrame = 0
+        var dense: dev.ultraxr.core.DenseStereo? = null; val wallMap = dev.ultraxr.core.WallMap(); var denseWallsNow: List<dev.ultraxr.core.RoomSurface> = emptyList(); var saidWalls = -1
         val ranges = DoubleArray(300)
         while (running) {
             var p: DoubleArray; var q: DoubleArray; var fix: Pose; var version: Int
@@ -635,6 +642,7 @@ object Tracking : GlassesLink.Listener {
             if (rig !== finderRig) {
                 finder = dev.ultraxr.core.StereoPoints(rig); finderRig = rig
                 val a = rig.cam0InImu.p; val b = rig.cam1InImu.p
+                dense = dev.ultraxr.core.DenseStereo(rig); wallMap.clear(); denseWallsNow = emptyList()
                 floorCalibrator = dev.ultraxr.core.FloorCalibrator(Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])))
                 calibratedThisRun = false
             }
@@ -660,11 +668,35 @@ object Tracking : GlassesLink.Listener {
                     val fc0 = floorCalibrator; val fy0 = roomFindings?.floorY ?: Double.NaN
                     if (fc0 != null && !fy0.isNaN() && (roomFindings?.floorSupport ?: 0) >= 60) { for (i in 0 until k) fc0.add(ranges[i], world[i * 3 + 1] - fy0); fc0.addCameraHeight(cam.p[1] - fy0) }
                 }
+                // Dense depth, about once a second: every measured place between knee and head height goes onto a floor
+                // plan, and the straight bright lines on it are the walls (core/WallMap). Far more of a wall is found
+                // this way than from corners alone, and it stays: the plan remembers.
+                if (wallMapReset) { wallMapReset = false; wallMap.clear(); denseWallsNow = emptyList() }
+                val dsNow = dense; val floorNow = roomFindings?.floorY ?: Double.NaN
+                if (denseWalls && dsNow != null && !floorNow.isNaN() && frame % 3 == 0) {
+                    val td = System.nanoTime()
+                    dsNow.compute(l, r); wallMap.add(dsNow, cam, floorNow)
+                    if (wallMap.pictures % 2 == 0) {
+                        denseWallsNow = wallMap.walls().map { w ->
+                            var ux = (w.x1 - w.x0) / w.length; var uz = (w.z1 - w.z0) / w.length
+                            val cx = (w.x0 + w.x1) / 2; val cz = (w.z0 + w.z1) / 2
+                            // its face is towards the wearer: normal = u x up = (-uz, 0, ux)
+                            if (-uz * (cam.p[0] - cx) + ux * (cam.p[2] - cz) < 0) { ux = -ux; uz = -uz }
+                            dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.WALL, cx, floorNow + 1.15, cz, ux, 0.0, uz, 0.0, 1.0, 0.0, w.length / 2, 1.15, w.support.toInt())
+                        }
+                        denseWallCount = denseWallsNow.size
+                    }
+                    denseMs = (System.nanoTime() - td) / 1e6
+                    if (denseWallsNow.size != saidWalls) { saidWalls = denseWallsNow.size; log("room: " + saidWalls + " walls from dense depth (" + wallMap.pictures + " depth pictures, " + dev.ultraxr.core.Fmt.f(denseMs, 0) + " ms each)") }
+                }
                 if (frame % 2 != 0) continue
                 // where the cameras look, seen from above: a surface is only given up when it was looked at and not found
                 val look = Q.rotate(cam.q, doubleArrayOf(0.0, 0.0, 1.0))
-                val f = room.analyse(cam.p[1], cam.p[0], cam.p[2], look[0], look[2])
+                val f0 = room.analyse(cam.p[1], cam.p[0], cam.p[2], look[0], look[2])
                 if (version != head.worldVersion) continue
+                // the walls of the floor plan take the place of the ones found from corners, once there are any
+                val f = if (denseWallsNow.isEmpty()) f0 else dev.ultraxr.core.RoomFindings(f0.floorY, f0.floorSupport,
+                    f0.surfaces.filter { it.kind != dev.ultraxr.core.RoomSurface.Kind.WALL } + denseWallsNow, f0.voxels, f0.confirmed)
                 roomFindings = f
                 // The floor is flat: what it does with distance says whether the angle between the cameras is right.
                 val fc = floorCalibrator
