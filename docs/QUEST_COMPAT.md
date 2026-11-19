@@ -486,6 +486,15 @@ to check against the real ones.
 `--new`). The app's side is checked on the phone (three corners refused, four placed). The tool's placing mode has
 compiled and not yet run on the glasses.
 
+Worn, 18:47: the owner looked at four corners (26 s for the first, then 12, 9 and 4 s) and the kept room was placed
+at the fourth ("room plan placed from 4 corners the wearer looked at"). The glasses showed "Room found" and the
+walls in green; the room model then served 26 walls and 2 table tops to applications. Whether the green walls
+stood on the real ones is the wearer's to say.
+
+Seen in the log and not yet dealt with: the place given to the plan by an earlier test over HTTP was still in
+force when this session began (the plan's place is not dropped when the glasses are plugged in again), and placing
+it anew made the layer take most walls for new ones (25 known and not found, 53 ever made).
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
