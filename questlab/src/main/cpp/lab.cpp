@@ -281,13 +281,19 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
                 if (sound && inward == 0) { meshOk++; indexTipX[h] = bind[XR_HAND_JOINT_INDEX_TIP_EXT].position.x; }
                 line("info  %s hand model: %u joints, %u vertices, %u triangles, %d facing inward", h ? "right" : "left", hm.jointCountOutput, hm.vertexCountOutput, hm.indexCountOutput / 3, inward);
             }
+            int seen0 = active, longestGap = 0, gap = 0; float pinchMax = 0; int pinches = 0; bool pinching = false;
+            __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE reading the %s hand now", h ? "RIGHT" : "LEFT");
             for (int i = 0; i < seconds * 6; i++) {
                 frame();
                 XrHandJointLocationEXT j[XR_HAND_JOINT_COUNT_EXT]; XrHandTrackingAimStateFB aim{XR_TYPE_HAND_TRACKING_AIM_STATE_FB};
                 XrHandJointLocationsEXT hl{XR_TYPE_HAND_JOINT_LOCATIONS_EXT, &aim}; hl.jointCount = XR_HAND_JOINT_COUNT_EXT; hl.jointLocations = j;
                 XrHandJointsLocateInfoEXT hi{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT}; hi.baseSpace = local; hi.time = frameTime;
-                if (XR_SUCCEEDED(lHand(ht, &hi, &hl)) && hl.isActive) { active++; if (aim.status & XR_HAND_TRACKING_AIM_VALID_BIT_FB) withAim++; if (aim.pinchStrengthIndex > maxPinch) maxPinch = aim.pinchStrengthIndex; }
+                if (XR_SUCCEEDED(lHand(ht, &hi, &hl)) && hl.isActive) { active++; gap = 0; if (aim.status & XR_HAND_TRACKING_AIM_VALID_BIT_FB) withAim++; if (aim.pinchStrengthIndex > maxPinch) maxPinch = aim.pinchStrengthIndex;
+                    if (aim.pinchStrengthIndex > pinchMax) pinchMax = aim.pinchStrengthIndex;
+                    bool p = aim.pinchStrengthIndex > 0.8f; if (p && !pinching) pinches++; if (aim.pinchStrengthIndex < 0.4f || p) pinching = p; }
+                else if (++gap > longestGap) longestGap = gap;
             }
+            line("info  %s hand: seen in %d of %d readings (%.0f %%), longest stretch without it %d readings, %d pinches, strongest %.2f", h ? "right" : "left", active - seen0, seconds * 6, 100.0 * (active - seen0) / (seconds * 6 > 0 ? seconds * 6 : 1), longestGap, pinches, pinchMax);
         }
         line("info  hands: %d readings with a hand, %d with a valid aim state, strongest index pinch %.2f (needs a hand held up in front of the glasses)", active, withAim, maxPinch);
         check(active == withAim, "whenever a hand is tracked its aim state is filled in", "%d of %d", withAim, active);

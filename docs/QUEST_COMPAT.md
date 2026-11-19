@@ -73,6 +73,13 @@ reached 1.00. So hand joints reach a native app and the aim state follows them; 
 of three, and this run cannot tell tracking drop-outs from the hand simply being out of view. (The wall check failed
 in this run by design: it waited only 5 s before the scene query.)
 
+A fourth worn run, cued (left hand up for 20 s, then right for 20 s, pinching slowly; the test now counts each hand
+on its own): left hand seen in 0 of 1200 readings; right hand in 1115 of 1200 (93 %), longest stretch without it 85
+readings (1.4 s), every reading with a valid aim state, but 0 pinches and a strongest index pinch of only 0.22.
+Not explained yet: the left hand was never reported as left (not seen at all, or reported as the right hand; the
+test read one hand at a time and cannot tell), and no pinch registered although the third run reached 1.00. The test
+should read both hands every frame before this is run again.
+
 ## Open
 
 1. **Without glasses, a native app whose window is not showing loses the runtime.** Cause found: with no glasses
