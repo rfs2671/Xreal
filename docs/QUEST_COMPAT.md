@@ -409,7 +409,7 @@ measured on the owner's own pinches. Compiled and installed; not yet tried by th
 - Settings, "World scale", now goes to 200 %. Above 100 % the application is told a wider field of view than the
   glasses have, so everything is drawn smaller and such a panel fits; the price is that nothing drawn sits on the
   room or the hands any more. It is a choice for menu-heavy applications, not a fix, and is left at 100 %.
-- What the wearer made of the new pointing ray is not known yet.
+- The wearer's word on the new pointing ray and pinch: better.
 
 ## Open
 
