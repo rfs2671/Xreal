@@ -244,6 +244,23 @@ room model and tracking, not in the Quest layer.
 Not verified in this session: launching from the home view by the wearer (nothing was picked within 90 s),
 unplugging and replugging the glasses.
 
+### Finding the room again after a loss of position (19 November, 13:45 onwards)
+
+`core/RoomRecall`: the walls as they stood before position was lost are remembered, and once two walls that cross
+are found again the world is shifted back onto them (position only, not heading). Refused when the shift is longer
+than the wearer could have walked or when two shifts fit equally well; given up after a minute.
+
+- Made-up rooms (unit tests): 500 of 500 random losses undone, the worst 0.10 m off.
+- On the glasses, three worn runs: **not exercised.** In the first, position was lost before two walls had been
+  found; in the other two there was no loss of more than 2 s. So there is no hardware number for it yet; the
+  runtime's log says "world put back" with the distance the first time it happens.
+- What those runs do show: with no loss between two runs, of two anchors put on walls one was still on its wall
+  and the other 0.25 m off, where that wall had not been found again (before: 0.73 m and 2.70 m).
+- The losses seen come with fast head turns (one at 140 degrees a second, landmarks from 109 to 1): the cameras
+  give 30 pictures a second and the picture smears. That is the tracker's limit, not the room model's.
+- Occlusion varied from run to run: a cube behind a wall hidden in 77 of 111 and 190 of 209 judged frames; a cube
+  in front drawn in 86 of 86 and 310 of 481.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
