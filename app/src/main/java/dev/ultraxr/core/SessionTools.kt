@@ -35,25 +35,52 @@ class RecenterGesture(private val holdNs: Long = 1_500_000_000L) {
  *  - Two results in a row: with [frames] = 2 a single stray result neither starts nor ends a pinch.
  *  - Brief loss: the tracker often loses a hand for a frame or two exactly when the fingers touch, because they hide
  *    each other. [lost] with a time keeps the pinch for [holdNs]; only a longer loss ends it.
+ *  - The closing movement ([stroke]): seen from behind, the fingertips of a pinching hand hide each other and the
+ *    tracker leaves them apart. In the owner's recording of 19 November 2026 his right hand's pinches measured 30 to
+ *    65 mm at their closest (the left hand's 15 to 37 mm), from 80 to 125 mm open: a distance rule caught 1 of 11.
+ *    What every one of them has is the movement: the gap falls by 30 mm or more within twelve results, to under 0.62
+ *    of the widest it was in the last sixty, and then stays there (three results within 12 mm of each other; a
+ *    single stray low result is not a pinch). That starts a pinch too, and such a pinch ends when the gap has come
+ *    back up from its smallest by 20 mm or by three tenths of the way to the open width, whichever is more.
+ *    Replayed on the S21 Ultra (25 results a second) the same recording then gives 15 right-hand pinches two
+ *    seconds apart, as they were made (6 by distance alone), and 9 of the left hand's (7).
  */
 class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Float = RELEASE_M,
                  private val pressRatio: Float = 0.46f, private val releaseRatio: Float = 0.65f,
-                 private val frames: Int = 1, private val holdNs: Long = 250_000_000L) {
+                 private val frames: Int = 1, private val holdNs: Long = 250_000_000L, private val stroke: Boolean = true) {
     var pinching = false; private set
     private var run = 0
     private var lostSinceNs = 0L
+    private val recent = FloatArray(STROKE_WINDOW); private var seen = 0
+    private var smallest = 0f; private var byDistance = false
 
     /** One tracking result. [fingerM] is the index finger's length, 0 when not known. Returns true on the moment the pinch starts. */
     fun update(gapM: Float, fingerM: Float = 0f): Boolean {
         lostSinceNs = 0L
         val scaled = fingerM > 0.03f
-        val together = gapM < pressM || (scaled && gapM < pressRatio * fingerM)
-        val apart = gapM > releaseM && (!scaled || gapM > releaseRatio * fingerM)
+        val near = gapM < pressM || (scaled && gapM < pressRatio * fingerM)
+        val far = gapM > releaseM && (!scaled || gapM > releaseRatio * fingerM)
+        // the widest of the last sixty results; the last three (this one included), which must sit together; and the
+        // widest of the twelve before those, which they must have come down from
+        recent[seen % STROKE_WINDOW] = gapM; seen++
+        var open = 0f; var before = 0f; var lo = gapM; var hi = gapM; val n = minOf(seen, STROKE_WINDOW)
+        for (i in 0 until n) {
+            val g = recent[(seen - 1 - i) % STROKE_WINDOW]; if (g > open) open = g
+            if (i < STROKE_STAY) { if (g < lo) lo = g; if (g > hi) hi = g } else if (i < STROKE_STAY + STROKE_LOOK && g > before) before = g
+        }
+        val closing = stroke && n > STROKE_STAY && hi < STROKE_RATIO * open && hi < STROKE_MAX_M && hi - lo <= STROKE_STEADY_M && before - gapM >= STROKE_DROP_M
         val was = pinching
+        val together = near || closing
+        val apart = if (!was) false else {
+            if (near) byDistance = true
+            if (gapM < smallest) smallest = gapM
+            if (byDistance) far else gapM > smallest + maxOf(STROKE_BACK_M, 0.3f * (open - smallest))
+        }
         val wants = if (was) !apart else together
         if (wants == was) { run = 0; return false }
         if (++run < frames) return false
         run = 0; pinching = wants
+        if (pinching) { smallest = gapM; byDistance = near }
         return pinching && !was
     }
 
@@ -67,13 +94,15 @@ class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Floa
          */
         const val PRESS_M = 0.033f
         const val RELEASE_M = 0.046f
+        const val STROKE_WINDOW = 60; const val STROKE_LOOK = 12; const val STROKE_STAY = 3; const val STROKE_STEADY_M = 0.012f
+        const val STROKE_RATIO = 0.62f; const val STROKE_DROP_M = 0.030f; const val STROKE_MAX_M = 0.070f; const val STROKE_BACK_M = 0.020f
     }
 
     /** The hand was not found. Without a time, or after [holdNs] without the hand, the pinch ends. Returns true while it is kept. */
     fun lost(nowNs: Long = 0L): Boolean {
-        if (nowNs == 0L || !pinching) { pinching = false; run = 0; lostSinceNs = 0L; return false }
+        if (nowNs == 0L || !pinching) { pinching = false; run = 0; lostSinceNs = 0L; seen = 0; return false }
         if (lostSinceNs == 0L) lostSinceNs = nowNs
-        if (nowNs - lostSinceNs > holdNs) { pinching = false; run = 0; lostSinceNs = 0L; return false }
+        if (nowNs - lostSinceNs > holdNs) { pinching = false; run = 0; lostSinceNs = 0L; seen = 0; return false }
         return true
     }
 }

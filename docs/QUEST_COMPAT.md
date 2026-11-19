@@ -108,10 +108,18 @@ A fifth worn run, cued and recorded (raw camera data kept privately, outside Git
 - Right-hand pinches were again not seen: the app's record has 0 right pinches and a smallest gap of 40 mm (50 mm
   in the fourth run), against 18 mm on the left. The one pinch counted in the right window was the left hand's,
   before the change. Two runs now agree: pinching with the right hand does not register.
-- During the left window a right hand was also reported in 1185 of 1200 readings, and the app's record has 970
-  right-hand frames (about 32 s) in a run where the right hand was asked for during 20 s. Whether the wearer's
-  right hand was in the cameras' view then is not known; if it was not, the tracker is reporting a second hand
-  that is not there.
+- During the left window a right hand was also reported in 1185 of 1200 readings. The recording's pictures settle
+  it: the right hand is in view, low and to the right, holding the phone (the cameras see far wider than the
+  display). It is a real hand, correctly labelled; a hand at rest in the cameras' view is reported to games.
+
+**Right-hand pinches, found and changed (app, `core/SessionTools.kt` PinchState).** Replayed through the tracker,
+the right hand's pinches in this recording close only to 30 to 65 mm as the tracker measures them (the hand is seen
+from behind and the fingertips hide each other); the rule was "under 33 mm". Every one of them does show as a fall
+of 30 mm or more to a steady low. PinchState now also starts a pinch on that movement. On the same recording,
+replayed on the S21 Ultra itself at 25 results a second: right hand 6 pinches before, 15 after, two seconds apart
+as they were made; left hand 7 before, 9 after; the two resting hands 1 and 0 before and after. On the recording of
+17 November: right 3 before, 4 after; left 3 before, 8 after (a run of quick dips to about 40 mm, 0.6 s apart). Not
+yet run live with the new build: the count a game gets is still to be measured on the glasses.
 
 ## Open
 
