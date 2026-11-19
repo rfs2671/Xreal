@@ -98,6 +98,16 @@ object LocalSite {
             out.write(("HTTP/1.1 204 No Content\r\n${CORS}Connection: close\r\n\r\n").toByteArray()); out.flush(); return
         }
         if (path == "/room.json") { send(out, "200 OK", "application/json", roomJson().toByteArray()); return }
+        // The room set-up tool hands over the corners the owner marked: /room_plan?c=x,z;x,z;... in the room's frame
+        // (x and z are the application world's), or /room_plan?clear=1 to forget the plan.
+        if (path == "/room_plan") {
+            val q = full.substringAfter('?', "")
+            val said = if (q.startsWith("clear")) Tracking.clearRoomPlan() else {
+                val corners = q.substringAfter("c=", "").split(';').mapNotNull { pt -> val v = pt.split(',').mapNotNull { it.toDoubleOrNull() }; if (v.size == 2 && v.all { it.isFinite() && Math.abs(it) < 100 }) doubleArrayOf(v[0], v[1]) else null }
+                Tracking.saveRoomPlan(corners)
+            }
+            send(out, "200 OK", "application/json", ("{\"ok\":" + said.startsWith("room plan kept") + ",\"said\":\"" + said.replace("\"", "'") + "\"}").toByteArray()); return
+        }
         if (path.startsWith("/p/")) { proxy(full.removePrefix("/p/"), out); return }
         val name = path.trimStart('/').ifEmpty { "index.html" }
         if (name.contains("..")) { send(out, "404 Not Found", "text/plain", ByteArray(0)); return }
@@ -154,6 +164,7 @@ object LocalSite {
         // table tops and walls are only where they are said to be while position is tracked
         val tracked = Tracking.simulateWearer || Tracking.head.predict(System.nanoTime()).mode == dev.ultraxr.core.HeadTracker.Mode.SIX_DOF
         sb.append(",\"tracked\":").append(tracked)
+        sb.append(",\"plan\":{\"corners\":").append(Tracking.roomPlanCorners).append(",\"placed\":").append(Tracking.roomPlanPlaced).append("}")
         val r = Tracking.roomFindings
         val measured = r != null && !r.floorY.isNaN()
         sb.append(",\"floor\":{\"measured\":").append(measured).append(",\"y\":").append(f(if (measured) r!!.floorY - XrHost.floorTrimM + h else 0.0)).append("}")

@@ -150,8 +150,10 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
      * Moves the app world along the floor by ([dx], [dz]) without turning it: the room was found again after a loss
      * of position, this far from where the world had been joined on ([RoomRecall]).
      */
-    @Synchronized fun shiftWorld(dx: Double, dz: Double) {
-        val moved = Pose(doubleArrayOf(dx, 0.0, dz))
+    @Synchronized fun shiftWorld(dx: Double, dz: Double) = moveWorld(Pose(doubleArrayOf(dx, 0.0, dz)))
+
+    /** Moves the app world by [moved] (a turn about the vertical and a shift along the floor): every point p of it is then at moved applied to p. */
+    @Synchronized fun moveWorld(moved: Pose) {
         fix = moved * fix
         worldVersion++
         onWorldMoved?.invoke(moved)

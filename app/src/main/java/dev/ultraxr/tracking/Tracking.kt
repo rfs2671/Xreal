@@ -89,6 +89,53 @@ object Tracking : GlassesLink.Listener {
     @Volatile private var wallMapReset = false
     /** The walls as they stood before position was lost, to put the world back on them (core/RoomRecall). Used under its own lock. */
     private val recall = dev.ultraxr.core.RoomRecall(); @Volatile private var recallShifting = false
+    /**
+     * The room as the owner marked it (core/RoomPlan, files/room_plan.txt), how it lies in the app's world now
+     * ([planFit], null until the cameras have found enough of it), and how it lay before position was last lost
+     * ([planBefore]: the world is put back so that it lies there again). All under [planLock].
+     */
+    private val planLock = Any()
+    private var plan: dev.ultraxr.core.RoomPlan? = null
+    private var planFit: dev.ultraxr.core.RoomPlan.Fit? = null
+    private var planBefore: dev.ultraxr.core.RoomPlan.Fit? = null
+    private var planLostNs = 0L; private var planMaxShift = 0.0
+    @Volatile private var planShifting = false
+    /** For whoever tells applications about the room: corners marked, and whether the plan is placed in the world now. */
+    val roomPlanCorners: Int get() = synchronized(planLock) { plan?.corners?.size ?: 0 }
+    val roomPlanPlaced: Boolean get() = synchronized(planLock) { plan != null && planFit != null }
+
+    /**
+     * The owner has marked the room: [corners] are (x, z) in the app's world as it is now, going round the room once.
+     * The table tops the cameras see at this moment are kept with it as landmarks. Returns what was kept, as a line for the log.
+     */
+    fun saveRoomPlan(corners: List<DoubleArray>): String {
+        val f = roomFindings; val floor = f?.floorY ?: Double.NaN
+        val tables = if (f == null || floor.isNaN()) emptyList() else f.surfaces.filter { it.kind == dev.ultraxr.core.RoomSurface.Kind.TABLE }.map { doubleArrayOf(it.cx, it.cz, it.cy - floor) }
+        val p = dev.ultraxr.core.RoomPlan(corners, tables)
+        if (!p.usable) return "room plan refused: " + corners.size + " corners, " + p.walls.size + " walls (three of each are needed)"
+        synchronized(planLock) { plan = p; planFit = dev.ultraxr.core.RoomPlan.Fit(0.0, 0.0, 0.0, p.walls.size, tables.size); planBefore = null; planMaxShift = 0.0 }
+        try { appContext?.getExternalFilesDir(null)?.let { File(it, "room_plan.txt").writeText(p.toText()) } } catch (e: Exception) { log("room plan not written: $e") }
+        val said = "room plan kept: " + corners.size + " corners, " + p.walls.size + " walls (" + p.walls.joinToString(" ") { dev.ultraxr.core.Fmt.f(it.length, 1) } + " m), " + tables.size + " table tops as landmarks"
+        log(said); return said
+    }
+    fun clearRoomPlan(): String {
+        synchronized(planLock) { plan = null; planFit = null; planBefore = null }
+        try { appContext?.getExternalFilesDir(null)?.let { File(it, "room_plan.txt").delete() } } catch (_: Exception) {}
+        log("room plan forgotten"); return "room plan forgotten"
+    }
+    /** The marked walls as surfaces of the app's world, when the plan is placed; null when there is none or it is not placed. */
+    private fun planWalls(floorY: Double): List<dev.ultraxr.core.RoomSurface>? {
+        val p: dev.ultraxr.core.RoomPlan; val f: dev.ultraxr.core.RoomPlan.Fit
+        synchronized(planLock) { p = plan ?: return null; f = planFit ?: return null }
+        if (floorY.isNaN()) return null
+        var mx = 0.0; var mz = 0.0
+        for (c in p.corners) { val w = f.apply(c[0], c[1]); mx += w[0] / p.corners.size; mz += w[1] / p.corners.size }
+        return p.walls.map { l0 -> val l = f.line(l0)
+            var ux = l.ux; var uz = l.uz
+            // the face of a wall is towards the inside of the room: normal = u x up = (-uz, 0, ux)
+            if (-uz * (mx - l.mx) + ux * (mz - l.mz) < 0) { ux = -ux; uz = -uz }
+            dev.ultraxr.core.RoomSurface(dev.ultraxr.core.RoomSurface.Kind.WALL, l.mx, floorY + p.ceilingM / 2, l.mz, ux, 0.0, uz, 0.0, 1.0, 0.0, l.length / 2, p.ceilingM / 2, 999) }
+    }
     @Volatile var denseMs = 0.0; private set
     @Volatile var denseWallCount = 0; private set
     /** What the last look at the room found; null before the first. */
@@ -395,8 +442,15 @@ object Tracking : GlassesLink.Listener {
         // Head origin between the two cameras.
         head = HeadTracker(doubleArrayOf((c0.p[0] + c1.p[0]) / 2, (c0.p[1] + c1.p[1]) / 2, (c0.p[2] + c1.p[2]) / 2))
         // A recentre moves the app's world; the room found so far moves with it.
-        head.onWorldMoved = { moved -> room.transform(moved); wallMapReset = true; roomFindings = room.analyse(0.0); if (!recallShifting) synchronized(recall) { recall.moved(moved) } }
+        head.onWorldMoved = { moved -> room.transform(moved); wallMapReset = true; roomFindings = room.analyse(0.0); if (!recallShifting) synchronized(recall) { recall.moved(moved) }
+            // a recentre carries the marked room along; putting a slipped world back is exactly what must not
+            if (!planShifting) synchronized(planLock) { planFit = planFit?.moved(moved); planBefore = planBefore?.moved(moved) } }
         room.clear(); wallMapReset = true; roomFindings = null; synchronized(recall) { recall.clear() }
+        synchronized(planLock) {
+            planFit = null; planBefore = null; planMaxShift = 0.0
+            plan = dev.ultraxr.core.RoomPlan.parse(try { appContext?.getExternalFilesDir(null)?.let { File(it, "room_plan.txt").takeIf { f -> f.isFile }?.readText() } } catch (_: Exception) { null })
+            plan?.let { log("room plan read: " + it.corners.size + " corners, " + it.tables.size + " table tops as landmarks; it is placed when the cameras have found two of its walls") }
+        }
     }
 
     /** Display optics from the glasses' factory configuration, when it is there and plausible. */
@@ -550,8 +604,16 @@ object Tracking : GlassesLink.Listener {
                             val headNow = head.appFromEstimator().apply(Q.rotate(HeadTracker.Z_TO_Y, p))[1]
                             room.regained(headNow); wallMapReset = true; roomFindings = room.analyse(headNow)
                             log("room: position was away for " + (now - roomUsedNs) / 1_000_000_000L + " s: surfaces forgotten, floor " + (if (floorY.isNaN()) "unknown again" else dev.ultraxr.core.Fmt.f(headNow - floorY, 2) + " m below the head as before"))
-                            val look = synchronized(recall) { if (recall.lost(now, (now - roomUsedNs) / 1e9)) recall.walls else 0 }
-                            if (look > 0) log("room: " + look + " walls are remembered; the world is put back on them when they are found again")
+                            val planned = synchronized(planLock) {
+                                if (plan == null) false else {
+                                    if (planFit != null) { planBefore = planFit; planFit = null; planMaxShift = 0.0; planLostNs = now }
+                                    if (planBefore != null) planMaxShift = minOf(6.0, planMaxShift + 1.5 * (now - roomUsedNs) / 1e9 + 0.3)
+                                    true } }
+                            if (planned) log("room: the marked room has to be found again; the world is put back on it then")
+                            else {
+                                val look = synchronized(recall) { if (recall.lost(now, (now - roomUsedNs) / 1e9)) recall.walls else 0 }
+                                if (look > 0) log("room: " + look + " walls are remembered; the world is put back on them when they are found again")
+                            }
                         }
                         roomUsedNs = now
                         // This state is the head at the moment of a picture the room is waiting on: hand both over.
@@ -695,7 +757,33 @@ object Tracking : GlassesLink.Listener {
                         val found = wallMap.walls()
                         // Position had been lost: the walls say how far the world slipped meanwhile, and it is put back.
                         val lines = found.map { dev.ultraxr.core.RoomRecall.Line(it.x0, it.z0, it.x1, it.z1) }
-                        val back = synchronized(recall) { if (recall.waiting) recall.find(System.nanoTime(), lines) else { recall.see(lines); null } }
+                        // The marked room: placed in this world from the walls and table tops found, and after a loss of
+                        // position the world is moved (turned and shifted) so that it lies where it lay before.
+                        var planMove: Pose? = null; var planSaid: String? = null
+                        synchronized(planLock) {
+                            val pl = plan
+                            if (pl != null && planFit == null) {
+                                val fy = roomFindings?.floorY ?: Double.NaN
+                                val tablesNow = roomFindings?.surfaces?.filter { it.kind == dev.ultraxr.core.RoomSurface.Kind.TABLE && !fy.isNaN() }?.map { doubleArrayOf(it.cx, it.cz, it.cy - fy) } ?: emptyList()
+                                val before = planBefore
+                                if (before != null && System.nanoTime() - planLostNs > 120_000_000_000L) { planBefore = null; planSaid = "room: the marked room was not found again within two minutes where it should be; it is looked for anywhere now (things placed before may have moved)" }
+                                val fit = pl.fit(lines, tablesNow, near = planBefore, maxShift = if (planBefore != null) planMaxShift else 1e9)
+                                if (fit != null) {
+                                    val b = planBefore
+                                    if (b != null) { planMove = b.worldMoveFrom(fit); planFit = b; planBefore = null; planMaxShift = 0.0 }
+                                    else { planFit = fit; planSaid = "room: the marked room is found (" + fit.walls + " walls, " + fit.tables + " table tops agree)" }
+                                }
+                            }
+                        }
+                        planSaid?.let { log(it) }
+                        val pm = planMove
+                        if (pm != null) {
+                            val far = Math.sqrt(pm.p[0] * pm.p[0] + pm.p[2] * pm.p[2]); val turn = Math.toDegrees(2 * Math.atan2(pm.q[1], pm.q[3]))
+                            log("room: the marked room is found again; the world had slipped " + dev.ultraxr.core.Fmt.f(far, 2) + " m and " + dev.ultraxr.core.Fmt.f(turn, 1) + " degrees and is put back")
+                            planShifting = true; recallShifting = true; try { head.moveWorld(pm) } finally { planShifting = false; recallShifting = false }
+                            continue
+                        }
+                        val back = if (synchronized(planLock) { plan != null }) null else synchronized(recall) { if (recall.waiting) recall.find(System.nanoTime(), lines) else { recall.see(lines); null } }
                         if (back != null) {
                             val far = Math.sqrt(back[0] * back[0] + back[1] * back[1])
                             if (far < 0.10) log("room: found again where it was (" + dev.ultraxr.core.Fmt.f(far, 2) + " m off)")
@@ -724,7 +812,10 @@ object Tracking : GlassesLink.Listener {
                 if (version != head.worldVersion) continue
                 // the walls of the floor plan take the place of the ones found from corners, once there are any
                 // and what comes out twice (the same wall or table top, a few centimetres apart) is made one (core/RoomTidy)
-                val f = dev.ultraxr.core.RoomFindings(f0.floorY, f0.floorSupport, dev.ultraxr.core.RoomTidy.tidy(
+                // and where the owner has marked the room and it is placed, its walls are the walls: whole, and always there
+                val marked = planWalls(f0.floorY)
+                val f = if (marked != null) dev.ultraxr.core.RoomFindings(f0.floorY, f0.floorSupport, f0.surfaces.filter { it.kind != dev.ultraxr.core.RoomSurface.Kind.WALL } + marked, f0.voxels, f0.confirmed)
+                    else dev.ultraxr.core.RoomFindings(f0.floorY, f0.floorSupport, dev.ultraxr.core.RoomTidy.tidy(
                     if (denseWallsNow.isEmpty()) f0.surfaces else f0.surfaces.filter { it.kind != dev.ultraxr.core.RoomSurface.Kind.WALL } + denseWallsNow), f0.voxels, f0.confirmed)
                 roomFindings = f
                 // The floor is flat: what it does with distance says whether the angle between the cameras is right.

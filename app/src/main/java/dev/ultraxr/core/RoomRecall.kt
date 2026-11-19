@@ -69,19 +69,19 @@ class RoomRecall {
         const val WALKING_M_PER_S = 1.5
         const val MAX_SHIFT_M = 6.0
         const val GIVE_UP_NS = 60_000_000_000L
-        private const val PARALLEL_SIN = 0.17          // 10 degrees: the same wall seen again
-        private const val CROSSING_SIN = 0.5           // 30 degrees: two walls that fix a place between them
+        internal const val PARALLEL_SIN = 0.17          // 10 degrees: the same wall seen again
+        internal const val CROSSING_SIN = 0.5           // 30 degrees: two walls that fix a place between them
         private const val ON_WALL_M = 0.15
         private const val OVERLAP_M = 0.5
 
-        private fun cross(a: Line, b: Line) = abs(a.ux * b.uz - a.uz * b.ux)
+        internal fun cross(a: Line, b: Line) = abs(a.ux * b.uz - a.uz * b.ux)
         private fun placeable(w: List<Line>): Boolean { for (i in w.indices) for (j in i + 1 until w.size) if (cross(w[i], w[j]) > CROSSING_SIN) return true; return false }
 
         /** How far [n] has to go across [o] (along o's normal) to lie on o's line. */
-        private fun across(o: Line, n: Line) = -(o.mx - n.mx) * o.uz + (o.mz - n.mz) * o.ux
+        internal fun across(o: Line, n: Line) = -(o.mx - n.mx) * o.uz + (o.mz - n.mz) * o.ux
 
         /** Whether [n] lies on [o]: same direction, on its line, and sharing a stretch of it. */
-        private fun on(o: Line, n: Line): Boolean {
+        internal fun on(o: Line, n: Line): Boolean {
             if (cross(o, n) > PARALLEL_SIN || abs(across(o, n)) > ON_WALL_M) return false
             val t = (n.mx - o.mx) * o.ux + (n.mz - o.mz) * o.uz
             return o.length / 2 + n.length / 2 - abs(t) >= minOf(OVERLAP_M, 0.5 * minOf(o.length, n.length))
