@@ -94,7 +94,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         }
         if (i?.getBooleanExtra("desktop", false) != true) return
         startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_AUTOMATION, i.getBooleanExtra(DesktopActivity.EXTRA_AUTOMATION, false))
-            .putExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, i.getBooleanExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, false)).putExtra("open_app", i.getStringExtra("open_app")))
+            .putExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, i.getBooleanExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, false)).putExtra("open_app", i.getStringExtra("open_app")).putExtra("home_page", i.getIntExtra("home_page", 0)))
     }
 
     override fun onResume() {

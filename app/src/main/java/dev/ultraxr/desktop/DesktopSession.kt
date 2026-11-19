@@ -68,12 +68,37 @@ class DesktopSession(private val activity: Activity) {
 
     // ---- the home view: what it offers, and which icon is looked at
     /** WebXR games that are not known to be broken, then the web apps. */
-    val homeItems: List<HomeItem> = run {
+    private val firstPage: List<HomeItem> = run {
         val games = try { dev.ultraxr.core.GameLibrary.parse(activity.assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { emptyList() }
         val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
         (games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
             HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, tints[i % tints.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
-        } + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) }).take(HomeGrid.MAX)
+        } + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) }).take(HomeGrid.MAX - 1) +
+            HomeItem("All apps", HomeItem.Kind.NAV, "nav:apps", 0xFF607D8B.toInt())
+    }
+    /** What the home view shows now: its first page (games, the web apps, "All apps"), or a page of the phone's apps. */
+    @Volatile var homeItems: List<HomeItem> = firstPage; private set
+    private var homePage = 0
+    private var installedApps: List<dev.ultraxr.shell.AppShell.App>? = null
+    private val appIcons = HashMap<String, Bitmap?>()
+    private fun appIcon(pkg: String): Bitmap? = appIcons.getOrPut(pkg) {
+        try {
+            val d = activity.packageManager.getApplicationIcon(pkg); val b = Bitmap.createBitmap(144, 144, Bitmap.Config.ARGB_8888)
+            d.setBounds(0, 0, 144, 144); d.draw(Canvas(b)); b
+        } catch (_: Throwable) { null }
+    }
+    /** Page 0 is the first page; 1 and up are the phone's apps. */
+    fun showHomePage(page: Int) {
+        val per = HomeGrid.MAX - 2
+        val apps = installedApps ?: dev.ultraxr.shell.AppShell.installed(activity).also { installedApps = it }
+        val pages = maxOf(1, (apps.size + per - 1) / per)
+        homePage = page.coerceIn(0, pages)
+        val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
+        homeItems = if (homePage == 0) firstPage else
+            apps.drop((homePage - 1) * per).take(per).mapIndexed { i, a -> HomeItem(a.label, HomeItem.Kind.APP, "app://" + a.component, tints[i % tints.size], icon = appIcon(a.pkg)) } +
+                HomeItem("Home", HomeItem.Kind.NAV, "nav:home", 0xFF607D8B.toInt()) +
+                (if (homePage < pages) listOf(HomeItem("More", HomeItem.Kind.NAV, "nav:next", 0xFF607D8B.toInt())) else emptyList())
+        homeDrawnHover = -2; keyHover = -1; changed()
     }
     @Volatile var homeHover = -1; private set
     private var homeDrawnHover = -2
@@ -85,6 +110,12 @@ class DesktopSession(private val activity: Activity) {
     /** Opens what the icon stands for. */
     fun activateHome(i: Int) {
         val item = homeItems.getOrNull(i) ?: return
+        if (item.kind == HomeItem.Kind.NAV) { showHomePage(when (item.url) { "nav:apps" -> 1; "nav:next" -> homePage + 1; else -> 0 }); onLookPress?.invoke(); return }
+        if (item.kind == HomeItem.Kind.APP) {
+            if (dev.ultraxr.shell.AppShell.available) openApp(item.title, item.url.removePrefix("app://"))
+            else Tracking.log("apps: " + item.title + " not opened: the app helper is not running (tools/pixel/uxr_helper.sh)")
+            onLookPress?.invoke(); return
+        }
         if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else (HomeApps.all.firstOrNull { it.url == item.url }?.let { open(it) } ?: open(item.title, item.url, item.webKind))
         onLookPress?.invoke()
     }
@@ -489,7 +520,11 @@ class DesktopSession(private val activity: Activity) {
                 p.shader = android.graphics.RadialGradient(cx, cy, r * 1.55f, intArrayOf(0x55FFFFFF, 0x22FFFFFF, 0x00FFFFFF), floatArrayOf(0.62f, 0.8f, 1f), android.graphics.Shader.TileMode.CLAMP)
                 c.drawCircle(cx, cy, r * 1.55f, p); p.shader = null
             }
-            HomeIcon.draw(c, p, cx, cy, r, item.color, item.kind == HomeItem.Kind.GAME, item.title.take(1), item.verified, on)
+            val ic = item.icon
+            if (ic != null) {      // an installed app: its own icon, cut round like the others
+                val save = c.save(); val clip = android.graphics.Path().apply { addCircle(cx, cy, r, android.graphics.Path.Direction.CW) }
+                c.clipPath(clip); p.isFilterBitmap = true; c.drawBitmap(ic, null, RectF(cx - r, cy - r, cx + r, cy + r), p); c.restoreToCount(save)
+            } else HomeIcon.draw(c, p, cx, cy, r, item.color, item.kind == HomeItem.Kind.GAME, if (item.kind == HomeItem.Kind.NAV) (if (item.url == "nav:home") "⌂" else "⋯") else item.title.take(1), item.verified, on)
             p.textAlign = Paint.Align.CENTER
             // looking alone: a thin arc closes around the icon, and it opens when the circle is whole
             if (on && progress > 0f) {

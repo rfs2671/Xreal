@@ -113,6 +113,7 @@ class DesktopActivity : Activity() {
         build()
         dev.ultraxr.shell.AppShell.start(applicationContext)
         session.start()
+        if (intent.getIntExtra("home_page", 0) > 0) window.decorView.postDelayed({ session.showHomePage(intent.getIntExtra("home_page", 0)) }, 2000)
         // "--es open_app package" (through the launcher): that app in a window, for a test without hands on the phone
         intent.getStringExtra("open_app")?.let { pkg -> window.decorView.postDelayed({ dev.ultraxr.shell.AppShell.componentOf(this, pkg)?.let { session.openApp(pkg.substringAfterLast('.'), it) } ?: Tracking.log("apps: $pkg is not installed") }, 4000) }
         // The home view opens on its main menu; windows from last time are put away, not closed (the phone lists them).

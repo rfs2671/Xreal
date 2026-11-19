@@ -4,8 +4,9 @@ import kotlin.math.hypot
 
 /** One thing the in-glasses home can open: a WebXR game (started in the XR browser) or a web app (opened as a window). */
 class HomeItem(val title: String, val kind: Kind, val url: String, val color: Int, val webKind: String = "web",
-    val enter: List<List<Double>> = emptyList(), val verified: Boolean = false) {
-    enum class Kind { GAME, WEB }
+    val enter: List<List<Double>> = emptyList(), val verified: Boolean = false, val icon: android.graphics.Bitmap? = null) {
+    /** GAME: a WebXR game. WEB: a site (or the installed app that stands for it). APP: an installed app, [url] is "app://package/activity". NAV: another page of the home view. */
+    enum class Kind { GAME, WEB, APP, NAV }
 }
 
 /**
