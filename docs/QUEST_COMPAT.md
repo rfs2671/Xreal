@@ -211,6 +211,39 @@ Found and fixed by these runs: the layer made its own floor-level space without 
 the application had not asked for it (the runtime logged a validation failure and the layer fell back to the
 eye-level space). The layer now enables the extension itself.
 
+### Measured through the glasses, worn (19 November, 13:28 to 13:40, S21 Ultra)
+
+Five runs of `worn_test.py` and one of `hello_xr`. In the first the room had no walls yet (the test asked 7 s after
+tracking began); in the second the glasses were put down. The numbers below are from the third and fourth
+(OpenGL ES), the Vulkan run and `hello_xr`.
+
+| Asked | Result |
+|---|---|
+| Stereo on the glasses (3840x1080, one view an eye) | Yes, in every run, OpenGL ES and Vulkan: grids, cubes and `hello_xr` are drawn an eye with the offset between them |
+| Frames | None refused in any run (1018, 1146 OpenGL ES; 1095 Vulkan) |
+| Vulkan eye tints (left red, right blue) | Seen correctly by the wearer; the picture of the glasses agrees |
+| `hello_xr` (Vulkan, its own renderer) | FOCUSED, no failed call, nothing unsupported, cubes in stereo. Its background is opaque grey: an application that clears to a colour hides the room |
+| Hands | Tracked in 98 % of readings when held up (run 3). Told apart poorly when both are up: the hand asked for was often reported as both or as the other |
+| Pinch as a Touch trigger | Arrives: 4 and 10 pulls (run 3), 4 and 6 (run 4), strongest 1.00; aim pose located in about half to two thirds of readings |
+| Walls and tables in the scene | 1 wall and 3 tables (run 3), 1 wall (run 4). The room model itself held up to 4 walls |
+| Environment depth (OpenGL ES) | In every frame. A cube 0.5 m behind a wall was hidden in 147 of 182 judged frames in run 3, in 32 of 129 in run 4 (after the room had been forgotten and found again); a cube in front was seen in 208 of 219 and 128 of 128 |
+| Vulkan depth | Refused cleanly, as designed |
+| Room alignment after a restart of the application | **Fails.** The anchor put on a wall was 0.73 m off the wall in the next run, and 2.70 m off after walking |
+
+Why the alignment fails, from the runtime's log of the same minutes:
+
+- walking, the position was lost twice ("0 landmarks, rotation only", 4 s and 2 s); every loss of more than 2 s
+  makes the room model forget its surfaces and start again;
+- the floor estimate wandered between 0.26 and 0.83 m below the cameras for a minute (a table top taken for the
+  floor) before it came back to 1.6 m;
+- putting the glasses down recentres the view when they are picked up.
+
+So a game that places things on walls keeps them only while tracking holds; this is the next thing to fix, in the
+room model and tracking, not in the Quest layer.
+
+Not verified in this session: launching from the home view by the wearer (nothing was picked within 90 s),
+unplugging and replugging the glasses.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
