@@ -522,8 +522,11 @@ object XrHost : OpenXrGlassesLayer.Host {
         // Grip pose: the palm joint as tracked.
         UltraXrFeed.controller(side, hand.timestampNs, poses[0], poses[1], poses[2], poses[3], poses[4], poses[5], poses[6],
             velX = st.velocity[0].toFloat(), velY = st.velocity[1].toFloat(), velZ = st.velocity[2].toFloat(), buttons = buttons, trigger = trigger, squeeze = squeeze)
-        // Aim pose: from the palm along the wrist-to-knuckles direction, -z forward, y up as far as possible.
-        val d = st.aimDir
+        // Aim pose: along the arm, from the shoulder (taken from the head: 22 cm below the eyes, 17 cm to the hand's
+        // side, 6 cm back) through the hand, as Quest's own hand ray and the Quest layer's (questlab meta_layer.cpp).
+        // Until 19 November 2026 it ran from the wrist to the knuckles, which points wherever the hand is tilted and
+        // was called "really bad" by the wearer next to the arm ray. Smoothed, and held for the first 0.3 s of a pinch.
+        val d = armAim(side, st.aimOrigin, pressed[side], System.nanoTime()) ?: st.aimDir
         val z = doubleArrayOf(-d[0], -d[1], -d[2])
         var x = cross(doubleArrayOf(0.0, 1.0, 0.0), z)
         val xn = sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2])
@@ -532,6 +535,31 @@ object XrHost : OpenXrGlassesLayer.Host {
         val aq = Q.fromMatrix(x[0], y[0], z[0], x[1], y[1], z[1], x[2], y[2], z[2])
         UltraXrFeed.controllerAim(side, hand.timestampNs, st.aimOrigin[0].toFloat(), st.aimOrigin[1].toFloat(), st.aimOrigin[2].toFloat(),
             aq[0].toFloat(), aq[1].toFloat(), aq[2].toFloat(), aq[3].toFloat())
+    }
+
+    private val armDir = arrayOf(DoubleArray(3), DoubleArray(3)); private val armAtNs = LongArray(2); private val armPinchNs = LongArray(2); private val armWasPressed = BooleanArray(2)
+    private fun armAim(side: Int, origin: DoubleArray, pinching: Boolean, nowNs: Long): DoubleArray? {
+        val h = UltraXrFeed.lastHead
+        if (nowNs - UltraXrFeed.lastHeadNs > 500_000_000L) return null
+        val q = doubleArrayOf(h[3].toDouble(), h[4].toDouble(), h[5].toDouble(), h[6].toDouble())
+        var f = Q.rotate(q, doubleArrayOf(0.0, 0.0, -1.0)); var fl = sqrt(f[0] * f[0] + f[2] * f[2])
+        if (fl < 0.2) { f = Q.rotate(q, doubleArrayOf(0.0, 1.0, 0.0)); fl = sqrt(f[0] * f[0] + f[2] * f[2]) }      // looking straight down or up: the top of the head says where forward is
+        if (fl < 1e-3) return null
+        val fx = f[0] / fl; val fz = f[2] / fl; val sd = if (side == UltraXrFeed.RIGHT) 0.17 else -0.17
+        val sx = h[0] + -fz * sd - fx * 0.06; val sy = h[1] - 0.22; val sz = h[2] + fx * sd - fz * 0.06
+        var dx = origin[0] - sx; var dy = origin[1] - sy; var dz = origin[2] - sz
+        val dl = sqrt(dx * dx + dy * dy + dz * dz); if (dl < 0.05) return null
+        dx /= dl; dy /= dl; dz /= dl
+        if (pinching && !armWasPressed[side]) armPinchNs[side] = nowNs
+        armWasPressed[side] = pinching
+        val k = armDir[side]; val fresh = nowNs - armAtNs[side] < 500_000_000L
+        val hold = pinching && fresh && nowNs - armPinchNs[side] < 300_000_000L
+        if (!hold) {
+            if (fresh) { dx = k[0] * 0.7 + dx * 0.3; dy = k[1] * 0.7 + dy * 0.3; dz = k[2] * 0.7 + dz * 0.3; val n = sqrt(dx * dx + dy * dy + dz * dz); dx /= n; dy /= n; dz /= n }
+            k[0] = dx; k[1] = dy; k[2] = dz
+        }
+        armAtNs[side] = nowNs
+        return doubleArrayOf(k[0], k[1], k[2])
     }
 
     private fun cross(a: DoubleArray, b: DoubleArray) = doubleArrayOf(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])

@@ -146,18 +146,21 @@ static bool setupRoomView(XrSystemId sys) {
 static bool setupMode = false, setupClosed = false; static int setupSaved = -1; static std::vector<XrVector3f> setupCorners;
 static bool setupDown[2] = {false, false}; static double setupLastAdd = 0; static XrTime setupClosedAt = 0;
 static double viewNow() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
-static void buildSetup(XrTime t) {
+static void buildSetup(XrTime t, const XrPosef &head) {
     float floorY = -1.6f; for (auto &p : scene) if (p.ok && p.kind == 0) floorY = p.pose.position.y;
     const float top = 2.3f;
-    for (int h = 0; h < 2 && !setupClosed; h++) {
-        bool down = triggerNow[h] > 0.5f, pressed = down && !setupDown[h]; setupDown[h] = down;
-        if (!aimOk[h]) continue;
-        XrVector3f o = aimPose[h].position, e = at(aimPose[h], 0, 0, -1), d{e.x - o.x, e.y - o.y, e.z - o.z};
-        if (d.y > -0.05f) continue;                                    // pointing level or up: no place on the floor
+    // A pinch of either hand (or a tap on the phone's touchpad, which is the right hand's trigger) takes the place.
+    bool pressed = false; for (int h = 0; h < 2; h++) { bool down = triggerNow[h] > 0.5f; if (down && !setupDown[h]) pressed = true; setupDown[h] = down; }
+    // The place is where the wearer looks: the middle of the view, followed down to the floor. The head is tracked
+    // well everywhere; a hand pointing at the floor is below what the cameras see of it.
+    for (int once = 0; once < 1 && !setupClosed; once++) {
+        XrVector3f o = head.position, e = at(head, 0, 0, -1), d{e.x - o.x, e.y - o.y, e.z - o.z};
+        if (d.y > -0.05f) continue;                                    // looking level or up: no place on the floor
         float k = (floorY - o.y) / d.y; if (k < 0.3f || k > 9) continue;
         XrVector3f hit{o.x + d.x * k, floorY, o.z + d.z * k};
-        int first = (int)vtx.size() / 3;                               // the place pointed at: a cross on the floor, and a post
-        lineTo({hit.x - 0.12f, floorY, hit.z}, {hit.x + 0.12f, floorY, hit.z}); lineTo({hit.x, floorY, hit.z - 0.12f}, {hit.x, floorY, hit.z + 0.12f}); lineTo(hit, {hit.x, floorY + 0.5f, hit.z});
+        int first = (int)vtx.size() / 3;                               // the place looked at: a ring on the floor with a cross in it, and a post
+        for (int i = 0; i < 24; i++) { float a0 = i * 0.2618f, a1 = (i + 1) * 0.2618f; lineTo({hit.x + 0.15f * std::cos(a0), floorY, hit.z + 0.15f * std::sin(a0)}, {hit.x + 0.15f * std::cos(a1), floorY, hit.z + 0.15f * std::sin(a1)}); }
+        lineTo({hit.x - 0.15f, floorY, hit.z}, {hit.x + 0.15f, floorY, hit.z}); lineTo({hit.x, floorY, hit.z - 0.15f}, {hit.x, floorY, hit.z + 0.15f}); lineTo(hit, {hit.x, floorY + 1.0f, hit.z});
         if (!setupCorners.empty()) lineTo(setupCorners.back(), hit);   // and the wall it would make from the last corner
         batch(GL_LINES, first, 1, 1, 1, 1, 0);
         if (pressed && viewNow() - setupLastAdd > 0.7) {
@@ -216,7 +219,7 @@ static void buildGeometry(XrTime t, const XrPosef &head) {
         int first = (int)vtx.size() / 3; for (auto &k : j) vtx.insert(vtx.end(), {k.pose.position.x, k.pose.position.y, k.pose.position.z});
         batch(GL_POINTS, first, h ? 1.0f : 0.1f, 0.9f, h ? 0.2f : 1.0f, 1, 0);      // left cyan, right yellow
     }
-    if (setupMode) buildSetup(t);
+    if (setupMode) buildSetup(t, head);
     for (int h = 0; h < 2; h++) if (aimOk[h]) { int first = (int)vtx.size() / 3; lineTo(aimPose[h].position, at(aimPose[h], 0, 0, setupMode ? -6.0f : -1.5f)); float b = triggerNow[h] > 0.5f ? 1.0f : 0.45f; batch(GL_LINES, first, b, 0.1f * b, b, 1, 0); }
 }
 static const XrCompositionLayerBaseHeader *drawRoomView(XrTime t) {

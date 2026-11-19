@@ -5,8 +5,9 @@
   python tools/quest/room_setup.py SERIAL [--seconds 180] [--forget] [--out DIR]
 
 Starts the test app (dev.ultraxr.questlab) in its room set-up mode. The wearer stands in the room and, for each
-corner where a wall meets the floor, points at it (a white cross on the floor shows the place) and pinches. Going
-round the room once; a pinch on the first corner again (the green cross) closes the room. The phone buzzes once for
+corner where a wall meets the floor, LOOKS at it (a white ring on the floor, with a post, is where the middle of
+the view meets the floor) and pinches with either hand held up in view, or taps the phone's touchpad. Going
+round the room once; looking at the first corner again (the green cross) and pinching closes the room. The phone buzzes once for
 every corner taken and three times when the room is closed and kept.
 
 The corners go to the Ultra XR app, which keeps them in files/room_plan.txt and from then on gives applications
@@ -45,7 +46,7 @@ def main():
     for raw in log.stdout:
         l = raw.decode("utf-8", "replace").strip(); now = time.time() - t0
         if "CUE room set-up" in l:
-            print("%5.0f s  set-up is on: point at a corner on the floor and pinch" % now); buzz(2)
+            print("%5.0f s  set-up is on: look at a corner on the floor and pinch" % now); buzz(2)
             if forget: print("        forgetting the plan Ultra XR has: " + qd.sh(serial, "curl -s 'http://127.0.0.1:8765/room_plan?clear=1' 2>/dev/null || toybox wget -q -O - 'http://127.0.0.1:8765/room_plan?clear=1'").strip()[:120])
         elif "CUE corner" in l:
             print("%5.0f s  %s" % (now, l[4:])); buzz(1)
