@@ -58,6 +58,9 @@ object Tracking : GlassesLink.Listener {
 
     // --- hands
     @Volatile private var handsHandle = 0L
+    /** Whether hands are being tracked now. Off: no pictures go to the hand tracker, no hand is reported, and the battery is spared. */
+    @Volatile var handsOn = true; private set
+    fun setHandTracking(on: Boolean) { settings.handTracking = on; if (handsOn != on) { handsOn = on; log(if (on) "hand tracking switched on" else "hand tracking switched off") } }
     @Volatile var handsError = ""; private set
     @Volatile var handsFrames = 0L; private set
     @Volatile var handsProcessMs = 0.0; private set
@@ -309,7 +312,10 @@ object Tracking : GlassesLink.Listener {
                 if (oldVio != 0L) head.onVioEpochReset()
             }
         } catch (e: Throwable) { vioError = e.toString(); log("6DoF init failed: $e") }
-        if (settings.handTracking) try {
+        // The hand tracker is always made ready; whether it is given pictures is the switch ([handsOn]), which can
+        // then be turned at any moment, in a game too.
+        handsOn = settings.handTracking
+        try {
             handOptions = dev.ultraxr.core.HandOptions.parse(try { File(app.getExternalFilesDir(null), "hand_options.txt").takeIf { it.isFile }?.readText() } catch (_: Exception) { null })
             handOptions.qualityFilter?.let { try { android.system.Os.setenv("MERCURY_XR_QUALITY_FILTER", if (it) "1" else "0", true) } catch (_: Throwable) {} }
             log("hand options: $handOptions")
@@ -427,7 +433,7 @@ object Tracking : GlassesLink.Listener {
         }
         // Hands at 30, 15 or 10 Hz depending on heat and the battery saver.
         val every = 1 + throttle + if (settings.batterySaver) 1 else 0
-        if (handsHandle != 0L && pairIndex % every == 0L) synchronized(handLock) {
+        if (handsHandle != 0L && handsOn && pairIndex % every == 0L) synchronized(handLock) {
             System.arraycopy(left, 0, handLeft, 0, left.size); System.arraycopy(right, 0, handRight, 0, right.size)
             if (handOptions.stretch) { dev.ultraxr.core.HandImage.stretch(handLeft); dev.ultraxr.core.HandImage.stretch(handRight) }
             handT = tNs; handPending = true; handLock.notifyAll()

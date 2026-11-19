@@ -320,6 +320,7 @@ class DesktopActivity : Activity() {
         box("Dim windows that are not focused", session.dimUnfocused) { session.dimUnfocused = it }
         box("Dark pages (easier on see-through glasses; applies to new windows)", session.darkPages) { session.darkPages = it }
         box("Use position tracking (experimental; off = rotation only)", session.usePosition) { session.usePosition = it }
+        box("Hand tracking (pinch to select, grab to move windows; off = touchpad and looking only)", Tracking.settings.handTracking) { Tracking.setHandTracking(it) }
         box("3D depth (each eye gets half the sharpness across; returns to 2D by itself if the link fails)", session.depth3d) {
             session.depth3d = it; Tracking.link?.stereo?.reset(); Tracking.stereoWant("desktop", it)
         }

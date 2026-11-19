@@ -32,7 +32,7 @@ class SettingsActivity : Activity() {
         root.add(toggle("Smoother display (90 Hz)", "Uses more battery. Falls back to 60 Hz if the phone does not offer it.", s.refresh90) {
             s.refresh90 = it; Tracking.link?.applyDisplayMode(Tracking.wantedMode())
         }, topDp = 10)
-        root.add(toggle("Hand tracking", "Turn off to save battery; games then use your gaze. Takes effect next time the app starts.", s.handTracking) { s.handTracking = it }, topDp = 10)
+        root.add(toggle("Hand tracking", "Turn off to save battery; games then use your gaze and the touchpad. Takes effect at once.", s.handTracking) { Tracking.setHandTracking(it) }, topDp = 10)
         root.add(toggle("Show my hands", "Draws a light outline over your tracked hands.", s.showHands) { s.showHands = it }, topDp = 10)
         root.add(toggle("Battery saver", "Tracks hands half as often.", s.batterySaver) { s.batterySaver = it }, topDp = 10)
 
