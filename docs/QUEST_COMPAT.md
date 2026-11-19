@@ -313,6 +313,33 @@ pinch as a click and the change to passthrough all work in a real Unity build.
 
 Not yet done with it: its planes on real walls, its anchors, spawning its objects.
 
+### What the wearer said of Unity's example, and what came of it (19 November, 16:20 to 16:40)
+
+"The panel moved with me, started way too close. Once the video started playing hand tracking disappeared
+completely. Screen is upside down. Hand gestures won't recognise unless I'm reaching far."
+
+- **Upside down.** True of the whole view for the first 45 s of the fourth run (three pictures), righted with a
+  jump of the head's position. It began when the glasses were picked up from lying still. The log had no
+  orientation in it, so the cause is inferred: the estimator's idea of down. `core/HeadTracker` now compares the
+  estimator's tilt with the accelerometer's (past 25 degrees only its heading is used, and it is restarted after
+  half a second), takes its own tilt afresh when it is far wrong, and logs both every 10 s. Unit tests; not yet
+  seen on the glasses.
+- **Hands going.** The layer now counts, for each hand, how often the game asks and how often a hand is there
+  (`HANDS` lines), and where the palm was when found (distance and height from the line of sight). In the fourth
+  run Unity asked for both hands every frame throughout: the right hand was there in 5337 of 8816 readings, the
+  left in 37 (the wearer holds the phone in it). So it is the tracking that loses them, not the game.
+- **Why hands are lost**, from the pictures of the recording of 17 November: the hand tracker needs the hand in
+  both cameras. Held up in front of the face it is in both; lowered to the side it is in one camera only (the left
+  hand at the left edge of the left picture, the right at the lower right of the right one) and cannot be found.
+  In the replays hands were found from 0.24 to 0.60 m away, so nearness alone is not the limit; "reaching far"
+  brings the hand up and inwards, into the part both cameras see. The pictures are also dark where the hand is
+  (the exposure follows the lamps).
+- **Heat.** At thermal status "moderate" hand tracking was halved (15 to 7 results a second, where a pinch is two
+  or three results long at 15). Now the room is looked at a third as often first and hands are halved only at
+  "severe". Not measured for heat yet.
+- **The panel's distance.** About half a metre by the offset between the two eyes' pictures, which is where
+  Unity's template puts it for a headset with twice the field of view. Nothing was changed.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,

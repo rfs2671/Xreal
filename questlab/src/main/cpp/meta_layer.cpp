@@ -153,7 +153,10 @@ PFN_xrVoidFunction stubFor(const char *name) {      // lock not needed: the load
 }
 // Hands, as the game gets them: how often it asks for each hand's joints and how often a hand is there. A game that
 // stops asking has turned its hands off itself; a game that asks and gets none has lost them to the tracking.
-struct HandStat { uint64_t tracker = 0; std::atomic<long> asked{0}, there{0}; long askedSaid = 0, thereSaid = 0; int said = -1; double saidAt = 0; };
+struct HandStat { uint64_t tracker = 0; std::atomic<long> asked{0}, there{0}; long askedSaid = 0, thereSaid = 0; int said = -1; double saidAt = 0;
+    // where the palm was, seen from the head, each time it was looked at: metres away in 10 cm steps (the last: 70 cm
+    // and more), and degrees above the line of sight in 15 degree steps from -75 (the last: +30 and more)
+    std::atomic<int> far[8], high[8]; };
 HandStat handStats[4];
 double nowS() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 void noteHand(uint64_t tracker, bool active) {
@@ -170,7 +173,11 @@ void noteHand(uint64_t tracker, bool active) {
 void diagSummary(const char *when) {
     std::string called; int kinds = 0;
     for (int i = 0; i < 4; i++) { HandStat &h = handStats[i]; if (!h.tracker) continue; long a = h.asked.load(), b = h.there.load();
-        diag("HANDS  hand tracker %d since the last summary: asked %ld times, a hand there %ld times%s", i + 1, a - h.askedSaid, b - h.thereSaid, a == h.askedSaid ? "  (the game has stopped asking for this hand)" : ""); h.askedSaid = a; h.thereSaid = b; }
+        diag("HANDS  hand tracker %d since the last summary: asked %ld times, a hand there %ld times%s", i + 1, a - h.askedSaid, b - h.thereSaid, a == h.askedSaid ? "  (the game has stopped asking for this hand)" : ""); h.askedSaid = a; h.thereSaid = b;
+        int n = 0; for (auto &x : h.far) n += x.load();
+        if (n) { diag("HANDS  hand tracker %d, where it was found (palm from the head, %d looks): cm away 0-10:%d 10-20:%d 20-30:%d 30-40:%d 40-50:%d 50-60:%d 60-70:%d 70+:%d | degrees up from the line of sight -75..-60:%d -60..-45:%d -45..-30:%d -30..-15:%d -15..0:%d 0..15:%d 15..30:%d 30+:%d",
+            i + 1, n, h.far[0].load(), h.far[1].load(), h.far[2].load(), h.far[3].load(), h.far[4].load(), h.far[5].load(), h.far[6].load(), h.far[7].load(),
+            h.high[0].load(), h.high[1].load(), h.high[2].load(), h.high[3].load(), h.high[4].load(), h.high[5].load(), h.high[6].load(), h.high[7].load()); } }
     for (int i = 0; i < stubCount; i++) { int c = stubs[i].calls.load(); if (c) { kinds++; char b[112]; snprintf(b, sizeof b, " %s x%d", stubs[i].name, c); called += b; } }
     diag("SUMMARY (%s)  %ld frames, %ld failed xrEndFrame, %d unsupported functions called%s%s", when, frameCount.load(), endFrameFails.load(), kinds, kinds ? ":" : "", called.c_str());
 }
@@ -967,6 +974,17 @@ XrResult XRAPI_CALL uLocateHandJointsEXT(XrHandTrackerEXT t, const XrHandJointsL
     if (!rLocateHandJoints) return XR_ERROR_FUNCTION_UNSUPPORTED;
     XrResult r = rLocateHandJoints(t, info, out); if (XR_FAILED(r)) return r;
     noteHand((uint64_t)t, out->isActive == XR_TRUE);
+    static std::atomic<int> looks{0};
+    if (out->isActive && out->jointCount > XR_HAND_JOINT_PALM_EXT && viewRef != XR_NULL_HANDLE && (looks++ % 6) == 0) {
+        XrSpaceLocation vl{XR_TYPE_SPACE_LOCATION};
+        if (XR_SUCCEEDED(rLocateSpace(viewRef, info->baseSpace, info->time, &vl)) && (vl.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && (vl.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
+            XrPosef palm = compose(inverse(vl.pose), out->jointLocations[XR_HAND_JOINT_PALM_EXT].pose); XrVector3f p = palm.position;
+            float d = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z), up = std::atan2(p.y, std::sqrt(p.x * p.x + p.z * p.z)) * 57.2958f;
+            int fb = (int)(d * 10); if (fb > 7) fb = 7; if (fb < 0) fb = 0;
+            int hb = (int)std::floor((up + 75) / 15); if (hb > 7) hb = 7; if (hb < 0) hb = 0;
+            for (auto &h : handStats) if (h.tracker == (uint64_t)t) { h.far[fb]++; h.high[hb]++; }
+        }
+    }
     for (XrBaseOutStructure *n = (XrBaseOutStructure *)out->next; n; n = n->next) {
         // the hand model above is made life-size and the joints are not rescaled: the scale is one
         if (n->type == XR_TYPE_HAND_TRACKING_SCALE_FB) { auto *sc = (XrHandTrackingScaleFB *)n; sc->sensorOutput = 1; sc->currentOutput = 1; continue; }

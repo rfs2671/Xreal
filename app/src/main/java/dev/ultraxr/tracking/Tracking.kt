@@ -441,13 +441,16 @@ object Tracking : GlassesLink.Listener {
         // the head was when it was taken.
         if (settings.roomScan && stereoRig != null) synchronized(roomLock) {
             if (roomHave && !roomReady && tNs - roomT > 400_000_000L) roomHave = false      // the estimator skipped that picture
-            if (!roomHave && tNs - roomLastNs >= 330_000_000L * (1 + throttle)) {
+            // warm: the room is looked at a third as often first (walls do not move); hands keep their rate
+            if (!roomHave && tNs - roomLastNs >= 330_000_000L * (1 + 2 * throttle)) {
                 System.arraycopy(left, 0, roomLeft, 0, left.size); System.arraycopy(right, 0, roomRight, 0, right.size)
                 roomT = tNs; roomLastNs = tNs; roomHave = true; roomReady = false
             }
         }
-        // Hands at 30, 15 or 10 Hz depending on heat and the battery saver.
-        val every = 1 + throttle + if (settings.batterySaver) 1 else 0
+        // Hands at 30 or 15 Hz: halved only when the phone is hot (thermal status severe), or by the battery saver.
+        // Merely warm, they keep their rate: a pinch is two or three results long at 15 a second, and at half
+        // that it is missed. (Until 19 November they were halved from "moderate" on.)
+        val every = 1 + (if (throttle >= 2) 1 else 0) + if (settings.batterySaver) 1 else 0
         if (handsHandle != 0L && handsOn && pairIndex % every == 0L) synchronized(handLock) {
             System.arraycopy(left, 0, handLeft, 0, left.size); System.arraycopy(right, 0, handRight, 0, right.size)
             if (handOptions.stretch) { dev.ultraxr.core.HandImage.stretch(handLeft); dev.ultraxr.core.HandImage.stretch(handRight) }
@@ -822,7 +825,7 @@ object Tracking : GlassesLink.Listener {
             status >= PowerManager.THERMAL_STATUS_MODERATE || (!headroom.isNaN() && headroom > 0.95f) -> 1
             else -> 0
         }
-        if (t != throttle) { throttle = t; log("thermal status $status, headroom $headroom: hand tracking every ${1 + t} frames") }
+        if (t != throttle) { throttle = t; log("thermal status $status, headroom $headroom: the room looked at every ${1 + 2 * t} thirds of a second, hand tracking every ${if (t >= 2) 2 else 1} frames") }
     }
 
     private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
