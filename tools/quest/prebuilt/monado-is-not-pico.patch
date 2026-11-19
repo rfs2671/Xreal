@@ -1,0 +1,15 @@
+diff --git a/src/instance.c b/src/instance.c
+index f2aef49..f7f0c0f 100644
+--- a/src/instance.c
++++ b/src/instance.c
+@@ -95,7 +95,9 @@ static void log_runtime_extensions(void)
+         log_list("runtime extensions", names, n);
+     free(names);
+     xd_runtime_local_floor = xd_runtime_has_extension("XR_EXT_local_floor");
+-    xd_runtime_bd = xd_runtime_has_extension("XR_BD_controller_interaction");
++    /* Ultra XR: Monado also lists Pico's controller extension (it lists every controller it can stand in for),
++     * but it is not Pico's runtime: it takes Meta's structures and Touch bindings. XR_MND_headless marks Monado. */
++    xd_runtime_bd = xd_runtime_has_extension("XR_BD_controller_interaction") && !xd_runtime_has_extension("XR_MND_headless");
+     xd_log(XD_INFO, "runtime has %u extensions; local floor %d, Pico controllers %d", n, xd_runtime_local_floor,
+            xd_runtime_bd);
+ }

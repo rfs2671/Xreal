@@ -14,11 +14,20 @@ object XrRuntime {
     @Volatile var available = false
     @Volatile var detail = "not initialised"
 
+    /** What a Meta Quest game's main activity is marked with (a converted Quest game keeps it). */
+    const val CATEGORY_QUEST = "com.oculus.intent.category.VR"
+
+    /** The immersive apps on this phone: OpenXR's own category, and Quest games. One entry a package. */
     fun installedApps(c: Context): List<ResolveInfo> {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(CATEGORY_IMMERSIVE)
-        return c.packageManager.queryIntentActivities(intent, 0).filter { it.activityInfo.packageName != c.packageName }
+        val found = ArrayList<ResolveInfo>()
+        for (cat in arrayOf(CATEGORY_IMMERSIVE, CATEGORY_QUEST))
+            try { found.addAll(c.packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(cat), 0)) } catch (_: Exception) {}
+        return found.filter { it.activityInfo != null && it.activityInfo.packageName != c.packageName }.distinctBy { it.activityInfo.packageName }
             .sortedBy { it.loadLabel(c.packageManager).toString().lowercase() }
     }
+
+    /** The immersive activity of [pkg], or null when that package is an ordinary app. */
+    fun nativeApp(c: Context, pkg: String): ResolveInfo? = installedApps(c).firstOrNull { it.activityInfo.packageName == pkg }
 
     /** The WebXR browser, if one that uses this runtime is installed (Wolvic's generic OpenXR builds). */
     fun browser(c: Context): ResolveInfo? = installedApps(c).firstOrNull { it.activityInfo.packageName.startsWith("com.igalia.wolvic") }
@@ -44,7 +53,10 @@ object XrRuntime {
         TrackingService.start(c)
         XrHost.openShell()
         dev.ultraxr.openxr.OpenXrGlassesLayer.clientPackage = info.activityInfo.packageName
-        val i = Intent(Intent.ACTION_MAIN).addCategory(CATEGORY_IMMERSIVE).setClassName(info.activityInfo.packageName, info.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try { c.startActivity(i) } catch (e: Exception) { Tracking.log("could not start ${info.activityInfo.packageName}: $e") }
+        // On the phone's own screen: the game's window is only where Android keeps it; its picture goes to the glasses
+        // through the runtime. (From the home view, which is on the glasses, it would otherwise open there.)
+        val i = Intent(Intent.ACTION_MAIN).setClassName(info.activityInfo.packageName, info.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val onPhone = android.app.ActivityOptions.makeBasic().setLaunchDisplayId(android.view.Display.DEFAULT_DISPLAY).toBundle()
+        try { c.startActivity(i, onPhone); Tracking.log("OpenXR: started ${info.activityInfo.packageName} (native)") } catch (e: Exception) { Tracking.log("could not start ${info.activityInfo.packageName}: $e") }
     }
 }

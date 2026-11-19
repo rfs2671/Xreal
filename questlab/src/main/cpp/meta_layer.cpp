@@ -592,6 +592,17 @@ XrResult XRAPI_CALL uPollEvent(XrInstance i, XrEventDataBuffer *buf) {
 }
 XrResult XRAPI_CALL uGetSystemProperties(XrInstance i, XrSystemId id, XrSystemProperties *p) {
     XrResult r = rGetSystemProperties(i, id, p);
+    if (XR_FAILED(r) && p->next) {
+        // The runtime refuses the whole call over one chained structure it does not like (one for an extension the
+        // application did not enable, say). Quest games chain many. Ask again without them and fill in what is ours.
+        void *chain = p->next; p->next = nullptr; XrResult plain = rGetSystemProperties(i, id, p); p->next = chain;
+        static bool said = false; if (!said) { said = true; LOGI("xrGetSystemProperties: the runtime answered %d with the application's chained structures, %d without them", (int)r, (int)plain); }
+        if (XR_SUCCEEDED(plain)) {
+            r = plain;
+            for (XrBaseOutStructure *n = (XrBaseOutStructure *)p->next; n; n = n->next)
+                if (n->type == XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT) ((XrSystemHandTrackingPropertiesEXT *)n)->supportsHandTracking = rLocateHandJoints ? XR_TRUE : XR_FALSE;
+        }
+    }
     for (XrBaseOutStructure *n = (XrBaseOutStructure *)p->next; XR_SUCCEEDED(r) && n; n = n->next) {
         if (n->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB) ((XrSystemPassthroughPropertiesFB *)n)->supportsPassthrough = XR_TRUE;
         if (n->type == XR_TYPE_SYSTEM_SPATIAL_ENTITY_PROPERTIES_FB) ((XrSystemSpatialEntityPropertiesFB *)n)->supportsSpatialEntity = XR_TRUE;

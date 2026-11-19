@@ -377,7 +377,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
         row.add(ImageView(this).apply { setImageDrawable(info.loadIcon(packageManager)) }, Ui.dp(this, 44), Ui.dp(this, 44))
         val col = Ui.column(this)
         col.add(Ui.text(this, info.loadLabel(packageManager), 16f, bold = true))
-        col.add(Ui.text(this, "OpenXR", 12f, Ui.MUTED), topDp = 4)
+        val quest = try { packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(XrRuntime.CATEGORY_QUEST).setPackage(info.activityInfo.packageName), 0).isNotEmpty() } catch (_: Exception) { false }
+        col.add(Ui.text(this, if (quest) "Quest game (converted)" else "OpenXR", 12f, Ui.MUTED), topDp = 4)
         row.add(col, 0, weight = 1f, startDp = 14)
         row.add(Ui.text(this, "Play", 14f, Ui.ACCENT, bold = true).apply { gravity = Gravity.END }, ViewGroup.LayoutParams.WRAP_CONTENT)
         row.isClickable = true

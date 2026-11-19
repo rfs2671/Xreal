@@ -124,6 +124,8 @@ class DesktopSession(private val activity: Activity) {
     private var homePinchWas = false
     /** A game was chosen in the home view: the activity starts it in the XR browser. */
     var onLaunchGame: ((HomeItem) -> Unit)? = null
+    /** An installed immersive app (an OpenXR app, a converted Quest game) was chosen: the activity hands it the glasses. */
+    var onLaunchNative: ((String) -> Unit)? = null
 
     /** Opens what the icon stands for. */
     fun activateHome(i: Int) {
@@ -134,6 +136,9 @@ class DesktopSession(private val activity: Activity) {
             onLookPress?.invoke(); return
         }
         if (item.kind == HomeItem.Kind.APP) {
+            // an immersive app is not opened in a window: it gets the glasses, as a game does
+            val pkg = item.url.removePrefix("app://").substringBefore('/')
+            if (dev.ultraxr.xr.XrRuntime.nativeApp(activity, pkg) != null && onLaunchNative != null) { onLaunchNative?.invoke(pkg); onLookPress?.invoke(); return }
             if (dev.ultraxr.shell.AppShell.available) openApp(item.title, item.url.removePrefix("app://"))
             else Tracking.log("apps: " + item.title + " not opened: the app helper is not running (tools/pixel/uxr_helper.sh)")
             onLookPress?.invoke(); return

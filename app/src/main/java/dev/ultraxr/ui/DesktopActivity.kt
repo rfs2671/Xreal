@@ -109,6 +109,18 @@ class DesktopActivity : Activity() {
                 }
             }
         }
+        // An installed OpenXR app or converted Quest game: the same hand-over, then the app itself is started.
+        session.onLaunchNative = { pkg ->
+            runOnUiThread {
+                val info = dev.ultraxr.xr.XrRuntime.nativeApp(this, pkg)
+                if (info != null) {
+                    handedOver = true
+                    dismissGlasses()
+                    Tracking.noteGraphics("desktop left the glasses for $pkg")
+                    ui.postDelayed({ dev.ultraxr.xr.XrRuntime.launch(this, info, true) }, 300)
+                }
+            }
+        }
         if (intent.getBooleanExtra(EXTRA_STEREO_PREVIEW, false) && applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) session.forceStereo = true
         build()
         dev.ultraxr.shell.AppShell.start(applicationContext)
