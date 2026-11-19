@@ -87,6 +87,8 @@ object Tracking : GlassesLink.Listener {
     /** Walls from dense depth (core/WallMap): on unless files/vio_options.txt says dense_walls=0. */
     @Volatile var denseWalls = true
     @Volatile private var wallMapReset = false
+    /** The walls as they stood before position was lost, to put the world back on them (core/RoomRecall). Used under its own lock. */
+    private val recall = dev.ultraxr.core.RoomRecall(); @Volatile private var recallShifting = false
     @Volatile var denseMs = 0.0; private set
     @Volatile var denseWallCount = 0; private set
     /** What the last look at the room found; null before the first. */
@@ -393,8 +395,8 @@ object Tracking : GlassesLink.Listener {
         // Head origin between the two cameras.
         head = HeadTracker(doubleArrayOf((c0.p[0] + c1.p[0]) / 2, (c0.p[1] + c1.p[1]) / 2, (c0.p[2] + c1.p[2]) / 2))
         // A recentre moves the app's world; the room found so far moves with it.
-        head.onWorldMoved = { moved -> room.transform(moved); wallMapReset = true; roomFindings = room.analyse(0.0) }
-        room.clear(); wallMapReset = true; roomFindings = null
+        head.onWorldMoved = { moved -> room.transform(moved); wallMapReset = true; roomFindings = room.analyse(0.0); if (!recallShifting) synchronized(recall) { recall.moved(moved) } }
+        room.clear(); wallMapReset = true; roomFindings = null; synchronized(recall) { recall.clear() }
     }
 
     /** Display optics from the glasses' factory configuration, when it is there and plausible. */
@@ -537,6 +539,8 @@ object Tracking : GlassesLink.Listener {
                             val headNow = head.appFromEstimator().apply(Q.rotate(HeadTracker.Z_TO_Y, p))[1]
                             room.regained(headNow); wallMapReset = true; roomFindings = room.analyse(headNow)
                             log("room: position was away for " + (now - roomUsedNs) / 1_000_000_000L + " s: surfaces forgotten, floor " + (if (floorY.isNaN()) "unknown again" else dev.ultraxr.core.Fmt.f(headNow - floorY, 2) + " m below the head as before"))
+                            val look = synchronized(recall) { if (recall.lost(now, (now - roomUsedNs) / 1e9)) recall.walls else 0 }
+                            if (look > 0) log("room: " + look + " walls are remembered; the world is put back on them when they are found again")
                         }
                         roomUsedNs = now
                         // This state is the head at the moment of a picture the room is waiting on: hand both over.
@@ -677,7 +681,20 @@ object Tracking : GlassesLink.Listener {
                     val td = System.nanoTime()
                     dsNow.compute(l, r); wallMap.add(dsNow, cam, floorNow)
                     if (wallMap.pictures % 2 == 0) {
-                        denseWallsNow = wallMap.walls().map { w ->
+                        val found = wallMap.walls()
+                        // Position had been lost: the walls say how far the world slipped meanwhile, and it is put back.
+                        val lines = found.map { dev.ultraxr.core.RoomRecall.Line(it.x0, it.z0, it.x1, it.z1) }
+                        val back = synchronized(recall) { if (recall.waiting) recall.find(System.nanoTime(), lines) else { recall.see(lines); null } }
+                        if (back != null) {
+                            val far = Math.sqrt(back[0] * back[0] + back[1] * back[1])
+                            if (far < 0.10) log("room: found again where it was (" + dev.ultraxr.core.Fmt.f(far, 2) + " m off)")
+                            else {
+                                log("room: found again " + dev.ultraxr.core.Fmt.f(far, 2) + " m from where the world was joined on: world put back")
+                                recallShifting = true; try { head.shiftWorld(back[0], back[1]) } finally { recallShifting = false }
+                                continue
+                            }
+                        }
+                        denseWallsNow = found.map { w ->
                             var ux = (w.x1 - w.x0) / w.length; var uz = (w.z1 - w.z0) / w.length
                             val cx = (w.x0 + w.x1) / 2; val cz = (w.z0 + w.z1) / 2
                             // its face is towards the wearer: normal = u x up = (-uz, 0, ux)

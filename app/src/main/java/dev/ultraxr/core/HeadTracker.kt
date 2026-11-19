@@ -120,6 +120,17 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     /** Makes the current head position and heading the origin of the app world. */
     @Synchronized fun recenter() { recenterPending = true }
 
+    /**
+     * Moves the app world along the floor by ([dx], [dz]) without turning it: the room was found again after a loss
+     * of position, this far from where the world had been joined on ([RoomRecall]).
+     */
+    @Synchronized fun shiftWorld(dx: Double, dz: Double) {
+        val moved = Pose(doubleArrayOf(dx, 0.0, dz))
+        fix = moved * fix
+        worldVersion++
+        onWorldMoved?.invoke(moved)
+    }
+
     /** Called when a recentre moves the app world: every point p of the old world is now at the given pose applied to p. */
     @Volatile var onWorldMoved: ((Pose) -> Unit)? = null
     /** Counts recentres, so work begun in the old world can be told from work begun in the new one. */
