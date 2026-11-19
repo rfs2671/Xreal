@@ -450,6 +450,26 @@ walls from 0.4 to 2.8 m long: an irregular room with its nooks, not a rectangle,
 tell apart from itself. The wearer's word on the posts against the real corners: close enough. Not yet seen: a later
 session placing this plan.
 
+### A fresh session did not find the marked room (19 November, 18:22)
+
+Ultra XR restarted, the plan read ("26 corners, 2 table tops as landmarks"), the room view run worn for 90 s. The
+cameras found two walls; the plan was not placed.
+
+Why: the first matcher asked every found wall to be one of the plan's walls. The owner's plan follows the nooks in
+walls of 0.4 to 2.8 m; the cameras find the long straight run of a wall, which passes several of them. `fit()` now
+takes a point every 20 cm along each found wall and asks that four fifths of them come within 20 cm of the plan's
+outline, tries the places that lay two crossing found walls along two walls of the plan, takes the best only when
+no different place does nearly as well, and settles it finely against the outline.
+
+On made-up views of the owner's own plan (straight runs of 1.2 m or more, parts of them, 4 cm of noise, 200 random
+places): **never placed wrongly**; placed with two runs 2 of 66, three runs 11 of 56, four runs 30 of 78. The L
+of the earlier test: 190 of 300, none wrongly. So from walls alone a fresh session will place this room seldom and
+slowly; the cameras found two walls in that minute. While the plan is not placed, the log now lists the walls and
+table tops found every 8 s, so a fit that does not come can be studied from the log.
+
+What would make it dependable: the wearer looks at two of the marked corners and taps at each (a turn and a shift
+are two points), and the walls then only keep it in place. Not built.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,

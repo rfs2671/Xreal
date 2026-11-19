@@ -40,78 +40,118 @@ class RoomPlan(val corners: List<DoubleArray>, val tables: List<DoubleArray> = e
 
     /**
      * How the plan lies in the world in which the cameras now find the walls [now] and table tops [tablesNow]
-     * (x, z, height above the floor); null when two walls that cross do not settle it, or when two different places
-     * do equally well (a plain rectangle looks the same from both ends: its table tops, or [near], have to say).
+     * (x, z, height above the floor); null when it cannot be said.
+     *
+     * A marked plan follows every nook, in walls a few decimetres long; what the cameras find is the long straight
+     * run of a wall, which may pass several of the plan's walls and their steps. So a found wall is not asked to be
+     * one of the plan's walls: every 20 cm along each found wall a point is taken, and a place for the plan is good
+     * when at least four fifths of those points come to lie within 20 cm of the plan's outline. Places to try come
+     * from laying two found walls that cross along two walls of the plan that run the same way. The best place is
+     * taken only when no different place does nearly as well (a plain rectangle looks the same from both ends: its
+     * table tops, or [near], have to say).
+     *
      * [near], when known (the fit before a loss of position: heading comes from the gyroscope and does not slip),
      * keeps the answer within [yawWithin] radians of it and the shift within [maxShift] metres of it.
      */
     fun fit(now: List<RoomRecall.Line>, tablesNow: List<DoubleArray> = emptyList(), near: Fit? = null, yawWithin: Double = 0.35, maxShift: Double = 1e9): Fit? {
         if (!usable || now.size < 2) return null
-        class Cand(val f: Fit, val score: Int)
-        val cands = ArrayList<Cand>()
+        // the points along what was found, and what there is to lay them against
+        val px = ArrayList<Double>(); val pz = ArrayList<Double>()
+        for (n in now) { val k = maxOf(2, (n.length / 0.2).toInt()); for (i in 0..k) { px.add(n.x0 + (n.x1 - n.x0) * i / k); pz.add(n.z0 + (n.z1 - n.z0) * i / k) } }
+        if (px.size < 12) return null
+        val guides = walls.filter { it.length >= 0.6 }.ifEmpty { walls }
+        val pairs = ArrayList<IntArray>(); for (i in now.indices) for (j in i + 1 until now.size) if (RoomRecall.cross(now[i], now[j]) >= RoomRecall.CROSSING_SIN) pairs.add(intArrayOf(i, j))
+        if (pairs.isEmpty()) return null
         val yaws = ArrayList<Double>()
-        for (p in walls) for (n in now) for (flip in 0..1) {
+        for (g in guides) for (n in now) for (flip in 0..1) {
             // a turn of the plan by yaw takes a direction at angle a (atan2(uz, ux)) to the angle a - yaw
-            val y = wrap(atan2(p.uz, p.ux) - atan2(n.uz, n.ux) + flip * Math.PI)
+            val y = wrap(atan2(g.uz, g.ux) - atan2(n.uz, n.ux) + flip * Math.PI)
             if (near != null && abs(wrap(y - near.yaw)) > yawWithin) continue
-            if (yaws.none { abs(wrap(it - y)) < 0.035 }) yaws.add(y)
+            if (yaws.none { abs(wrap(it - y)) < 0.05 }) yaws.add(y)
         }
-        for (y0 in yaws) {
-            var yaw = y0
-            for (pass in 0..1) {
-                val turned = walls.map { Fit(yaw, 0.0, 0.0, 0, 0).line(it) }
-                var best: DoubleArray? = null; var bestScore = 0
-                for (i1 in now.indices) for (j1 in turned.indices) {
-                    if (RoomRecall.cross(turned[j1], now[i1]) > RoomRecall.PARALLEL_SIN) continue
-                    for (i2 in i1 + 1 until now.size) for (j2 in turned.indices) {
-                        if (j2 == j1 || RoomRecall.cross(turned[j2], now[i2]) > RoomRecall.PARALLEL_SIN || RoomRecall.cross(turned[j1], turned[j2]) < RoomRecall.CROSSING_SIN) continue
-                        // the shift of the plan that lays its two walls onto the two found ones
-                        val ax = -now[i1].uz; val az = now[i1].ux; val bx = -now[i2].uz; val bz = now[i2].ux
-                        val ca = RoomRecall.across(now[i1], turned[j1]); val cb = RoomRecall.across(now[i2], turned[j2])
+        class Cand(val yaw: Double, val sx: Double, val sz: Double, val score: Double)
+        val cands = ArrayList<Cand>()
+        val ex0 = DoubleArray(walls.size); val ez0 = DoubleArray(walls.size); val ex1 = DoubleArray(walls.size); val ez1 = DoubleArray(walls.size)
+        /** The share of the found points within 20 cm of the plan's outline, turned (already in ex, ez) and shifted by (sx, sz). */
+        fun share(sx: Double, sz: Double, enough: Double): Double {
+            var hit = 0; val n = px.size
+            for (i in 0 until n) {
+                val x = px[i] - sx; val z = pz[i] - sz; var near2 = false
+                for (e in walls.indices) {
+                    val dx = ex1[e] - ex0[e]; val dz = ez1[e] - ez0[e]; val l2 = dx * dx + dz * dz
+                    var t = ((x - ex0[e]) * dx + (z - ez0[e]) * dz) / l2; if (t < 0) t = 0.0; if (t > 1) t = 1.0
+                    val qx = ex0[e] + dx * t - x; val qz = ez0[e] + dz * t - z
+                    if (qx * qx + qz * qz < 0.04) { near2 = true; break }
+                }
+                if (near2) hit++
+                if (hit + (n - 1 - i) < enough * n) return 0.0      // cannot reach what is asked any more
+            }
+            return hit.toDouble() / n
+        }
+        for (y0 in yaws) for (dy in doubleArrayOf(0.0, -0.035, 0.035)) {
+            val yaw = y0 + dy; val f0 = Fit(yaw, 0.0, 0.0, 0, 0)
+            for (e in walls.indices) { val l = f0.line(walls[e]); ex0[e] = l.x0; ez0[e] = l.z0; ex1[e] = l.x1; ez1[e] = l.z1 }
+            val turned = guides.map { f0.line(it) }
+            val seen = HashSet<Long>()
+            for (pr in pairs) {
+                val n1 = now[pr[0]]; val n2 = now[pr[1]]
+                for (g1 in turned) { if (RoomRecall.cross(g1, n1) > RoomRecall.PARALLEL_SIN) continue
+                    for (g2 in turned) { if (g2 === g1 || RoomRecall.cross(g2, n2) > RoomRecall.PARALLEL_SIN) continue
+                        // the shift of the plan that lays g1 along n1 and g2 along n2
+                        val ax = -n1.uz; val az = n1.ux; val bx = -n2.uz; val bz = n2.ux
+                        val ca = RoomRecall.across(n1, g1); val cb = RoomRecall.across(n2, g2)
                         val det = ax * bz - az * bx; if (abs(det) < 1e-6) continue
-                        var sx = (ca * bz - az * cb) / det; var sz = (ax * cb - ca * bx) / det
-                        var score = 0; var sxx = 0.0; var sxz = 0.0; var szz = 0.0; var rx = 0.0; var rz = 0.0
-                        for (n in now) {
-                            val o = turned.firstOrNull { landed(it.shifted(sx, sz), n) } ?: continue
-                            score++
-                            val nx = -n.uz; val nz = n.ux; val c = RoomRecall.across(n, o)
-                            sxx += nx * nx; sxz += nx * nz; szz += nz * nz; rx += nx * c; rz += nz * c
-                        }
-                        if (score < 2) continue
-                        val d2 = sxx * szz - sxz * sxz
-                        if (abs(d2) > 0.05) { sx = (rx * szz - sxz * rz) / d2; sz = (sxx * rz - rx * sxz) / d2 }
-                        val b0 = best
-                        if (score > bestScore || (score == bestScore && b0 != null && near != null && dist(sx, sz, near) < dist(b0[0], b0[1], near))) { best = doubleArrayOf(sx, sz); bestScore = score }
+                        val sx = (ca * bz - az * cb) / det; val sz = (ax * cb - ca * bx) / det
+                        if (near != null && sqrt((sx - near.tx) * (sx - near.tx) + (sz - near.tz) * (sz - near.tz)) > maxShift) continue
+                        val key = (Math.round(sx / 0.1) + 5000) * 100000L + (Math.round(sz / 0.1) + 5000)
+                        if (!seen.add(key)) continue
+                        val sc = share(sx, sz, 0.8)
+                        if (sc >= 0.8) cands.add(Cand(yaw, sx, sz, sc))
                     }
                 }
-                val b = best ?: break
-                if (pass == 0) {
-                    // the turn, from all the walls that landed: the mean of how far each is still turned from its own
-                    var sum = 0.0; var k = 0
-                    for (n in now) { val o = turned.firstOrNull { landed(it.shifted(b[0], b[1]), n) } ?: continue
-                        var d = wrap(atan2(o.uz, o.ux) - atan2(n.uz, n.ux)); if (d > Math.PI / 2) d -= Math.PI; if (d < -Math.PI / 2) d += Math.PI; sum += d; k++ }
-                    if (k > 0) yaw = wrap(yaw + sum / k)
-                    continue
-                }
-                if (near != null && dist(b[0], b[1], near) > maxShift) break
-                val f0 = Fit(yaw, b[0], b[1], bestScore, 0)
-                var t = 0
-                for (pt in tables) { val w = f0.apply(pt[0], pt[1]); if (tablesNow.any { abs(it[0] - w[0]) < 0.4 && abs(it[1] - w[1]) < 0.4 && abs(it[2] - pt[2]) < 0.2 }) t++ }
-                cands.add(Cand(Fit(yaw, b[0], b[1], bestScore, t), bestScore * 10 + t))
             }
         }
-        val top = cands.maxByOrNull { it.score } ?: return null
-        // another place that does as well and is not the same place: not known
-        for (c in cands) if (c !== top && c.score == top.score && (abs(wrap(c.f.yaw - top.f.yaw)) > 0.17 || abs(c.f.tx - top.f.tx) > 0.4 || abs(c.f.tz - top.f.tz) > 0.4)) return null
-        return top.f
+        if (cands.isEmpty()) return null
+        fun tablesAt(c: Cand): Int { val f = Fit(c.yaw, c.sx, c.sz, 0, 0); var t = 0
+            for (pt in tables) { val w = f.apply(pt[0], pt[1]); if (tablesNow.any { abs(it[0] - w[0]) < 0.4 && abs(it[1] - w[1]) < 0.4 && abs(it[2] - pt[2]) < 0.2 }) t++ }
+            return t }
+        fun total(c: Cand) = c.score + 0.08 * tablesAt(c)
+        val top = cands.maxByOrNull { total(it) }!!
+        // another place that does nearly as well and is not the same place: not known
+        for (c in cands) if (c !== top && total(top) - total(c) < 0.08 && (abs(wrap(c.yaw - top.yaw)) > 0.17 || abs(c.sx - top.sx) > 0.45 || abs(c.sz - top.sz) > 0.45)) return null
+        // the places that are this place, averaged by how well they did: steadier than the best alone
+        var sw = 0.0; var ax = 0.0; var az = 0.0; var ay = 0.0
+        for (c in cands) if (abs(wrap(c.yaw - top.yaw)) <= 0.17 && abs(c.sx - top.sx) <= 0.45 && abs(c.sz - top.sz) <= 0.45 && c.score >= top.score - 0.05) { val w = c.score; sw += w; ax += w * c.sx; az += w * c.sz; ay += w * wrap(c.yaw - top.yaw) }
+        // and settled finely: each found point is drawn to the nearest place on the outline, and the turn and shift
+        // that bring them all nearest together are taken, three times over
+        var yaw = wrap(top.yaw + ay / sw); var tx = ax / sw; var tz = az / sw
+        repeat(3) {
+            val f = Fit(yaw, tx, tz, 0, 0)
+            for (e in walls.indices) { val l = f.line(walls[e]); ex0[e] = l.x0; ez0[e] = l.z0; ex1[e] = l.x1; ez1[e] = l.z1 }
+            var n = 0; var mpx = 0.0; var mpz = 0.0; var mqx = 0.0; var mqz = 0.0
+            val qx = DoubleArray(px.size); val qz = DoubleArray(px.size); val use = BooleanArray(px.size)
+            for (i in px.indices) {
+                var bd = 0.09; var bx = 0.0; var bz = 0.0; var got = false
+                for (e in walls.indices) {
+                    val dx = ex1[e] - ex0[e]; val dz = ez1[e] - ez0[e]; val l2 = dx * dx + dz * dz
+                    var t = ((px[i] - ex0[e]) * dx + (pz[i] - ez0[e]) * dz) / l2; if (t < 0) t = 0.0; if (t > 1) t = 1.0
+                    val cx = ex0[e] + dx * t; val cz = ez0[e] + dz * t; val d = (cx - px[i]) * (cx - px[i]) + (cz - pz[i]) * (cz - pz[i])
+                    if (d < bd) { bd = d; bx = cx; bz = cz; got = true }
+                }
+                if (got) { use[i] = true; qx[i] = bx; qz[i] = bz; n++; mpx += px[i]; mpz += pz[i]; mqx += bx; mqz += bz }
+            }
+            if (n < 8) return@repeat
+            mpx /= n; mpz /= n; mqx /= n; mqz /= n
+            var sc = 0.0; var ss = 0.0
+            for (i in px.indices) if (use[i]) { val ux = qx[i] - mqx; val uz = qz[i] - mqz; val vx = px[i] - mpx; val vz = pz[i] - mpz; sc += ux * vx + uz * vz; ss += ux * vz - uz * vx }
+            val th = atan2(ss, sc)      // the turn (x towards z) that takes the outline's points onto the found ones
+            val c = cos(th); val sn = sin(th)
+            val ntx = c * tx - sn * tz + (mpx - (c * mqx - sn * mqz)); val ntz = sn * tx + c * tz + (mpz - (sn * mqx + c * mqz))
+            yaw = wrap(yaw - th); tx = ntx; tz = ntz
+        }
+        val best = Cand(yaw, tx, tz, top.score)
+        return Fit(best.yaw, best.sx, best.sz, now.size, tablesAt(best))
     }
-    /** A found wall [n] lies on the wall [o] of the plan: on its line, and inside its length (a marked wall is whole; what the cameras find is a part of it). */
-    private fun landed(o: RoomRecall.Line, n: RoomRecall.Line): Boolean {
-        if (!RoomRecall.on(o, n)) return false
-        val t = (n.mx - o.mx) * o.ux + (n.mz - o.mz) * o.uz
-        return abs(t) + n.length / 2 <= o.length / 2 + 0.3
-    }
-    private fun dist(sx: Double, sz: Double, near: Fit) = sqrt((sx - near.tx) * (sx - near.tx) + (sz - near.tz) * (sz - near.tz))
 
     /** A few lines of text, one thing a line: kept in the files folder of the app. */
     fun toText(): String {

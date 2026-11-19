@@ -98,7 +98,7 @@ object Tracking : GlassesLink.Listener {
     private var plan: dev.ultraxr.core.RoomPlan? = null
     private var planFit: dev.ultraxr.core.RoomPlan.Fit? = null
     private var planBefore: dev.ultraxr.core.RoomPlan.Fit? = null
-    private var planLostNs = 0L; private var planMaxShift = 0.0
+    private var planLostNs = 0L; private var planMaxShift = 0.0; private var planSaidNs = 0L
     @Volatile private var planShifting = false
     /** For whoever tells applications about the room: corners marked, and whether the plan is placed in the world now. */
     val roomPlanCorners: Int get() = synchronized(planLock) { plan?.corners?.size ?: 0 }
@@ -768,6 +768,11 @@ object Tracking : GlassesLink.Listener {
                                 val before = planBefore
                                 if (before != null && System.nanoTime() - planLostNs > 120_000_000_000L) { planBefore = null; planSaid = "room: the marked room was not found again within two minutes where it should be; it is looked for anywhere now (things placed before may have moved)" }
                                 val fit = pl.fit(lines, tablesNow, near = planBefore, maxShift = if (planBefore != null) planMaxShift else 1e9)
+                                // what the cameras have to go on, written down now and then while the plan is not placed: a fit that
+                                // does not come can then be looked into from the log alone
+                                val nowNs = System.nanoTime()
+                                if (fit == null && lines.size >= 2 && nowNs - planSaidNs > 8_000_000_000L) { planSaidNs = nowNs
+                                    planSaid = "room: the marked room is not placed yet; walls found now: " + lines.joinToString("; ") { dev.ultraxr.core.Fmt.f(it.x0, 2) + "," + dev.ultraxr.core.Fmt.f(it.z0, 2) + " to " + dev.ultraxr.core.Fmt.f(it.x1, 2) + "," + dev.ultraxr.core.Fmt.f(it.z1, 2) } + " | table tops: " + tablesNow.joinToString("; ") { dev.ultraxr.core.Fmt.f(it[0], 2) + "," + dev.ultraxr.core.Fmt.f(it[1], 2) + "," + dev.ultraxr.core.Fmt.f(it[2], 2) } }
                                 if (fit != null) {
                                     val b = planBefore
                                     if (b != null) { planMove = b.worldMoveFrom(fit); planFit = b; planBefore = null; planMaxShift = 0.0 }
