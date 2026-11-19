@@ -395,6 +395,22 @@ to the side, 6 cm back) through the hand, starts between the thumb's and index f
 and is held for the first 0.3 s of a pinch; the pinch bit starts under 33 mm and ends over 46 mm, the rule
 measured on the owner's own pinches. Compiled and installed; not yet tried by the wearer.
 
+### Unity's example with the new pointer, and a zoom-out setting (19 November, 17:25)
+
+- A start made while the glasses were being plugged in was covered by Android's USB permission prompts and never
+  drew; started again it ran: 3600 frames in 60 s, no failed `xrEndFrame`. The right hand was there in 3428 of
+  3600 readings in the second half minute.
+- Position was lost for 11 s and the room recall armed for the first time on the glasses ("5 walls are
+  remembered"). Two walls were not found again within its minute, so it gave up without shifting anything: still
+  no hardware number for it.
+- The wearer: "looking straight I only see the top of the black panel and it moves with me, so I can't even move
+  back." That is the template's panel, placed for a headset with about 100 degrees of view, half a metre away and
+  below the line of sight, following the head. A runtime cannot move it.
+- Settings, "World scale", now goes to 200 %. Above 100 % the application is told a wider field of view than the
+  glasses have, so everything is drawn smaller and such a panel fits; the price is that nothing drawn sits on the
+  room or the hands any more. It is a choice for menu-heavy applications, not a fix, and is left at 100 %.
+- What the wearer made of the new pointing ray is not known yet.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,

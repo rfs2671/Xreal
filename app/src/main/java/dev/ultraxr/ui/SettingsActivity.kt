@@ -37,7 +37,7 @@ class SettingsActivity : Activity() {
         root.add(toggle("Battery saver", "Tracks hands half as often.", s.batterySaver) { s.batterySaver = it }, topDp = 10)
 
         root.add(slider("Eye distance", "Match your own (most adults: 58 to 70 mm).", 54, 74, s.ipdMm.toInt(), { "$it mm" }) { s.ipdMm = it.toFloat() }, topDp = 10)
-        root.add(slider("World scale", "If virtual objects drift against the room when you turn your head, nudge this.", 80, 120, (s.fovScale * 100).toInt(), { "$it %" }) { s.fovScale = it / 100f }, topDp = 10)
+        root.add(slider("World scale", "100 %: what is drawn sits on the real room and on your hands. More than that zooms out: an app made for a wide headset, whose panels are too big and too close for these glasses, then fits, but nothing drawn lines up with the room or your hands any more. Takes effect when the app is next started.", 80, 200, (s.fovScale * 100).toInt(), { "$it %" }) { s.fovScale = it / 100f }, topDp = 10)
         root.add(slider("Your height", "Sets where the floor grid sits.", 120, 200, (s.standingHeightM * 100).toInt(), { "$it cm" }) { s.standingHeightM = it / 100f }, topDp = 10)
 
         val checkCard = card("Hardware check", "A one-minute check of the glasses' display, cameras, motion sensor and hand tracking, with a report.")
