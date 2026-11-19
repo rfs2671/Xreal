@@ -137,27 +137,41 @@ and without tracking, the application draws in its own window on the phone and g
 nothing says so. Reopening Ultra XR does not mend it: the runtime is made once a process. The app had to be
 restarted with the glasses attached. To fix in the app (make the runtime again, or refuse the session).
 
+## Later on 19 November: what was closed
+
+| What | How it stands now | Checked how |
+|---|---|---|
+| A game started while the runtime was made for another display state (glasses plugged in or out since) got no glasses, head, room or hands | The binder applications get now stays and the Monado server behind it is made again when an application arrives and the display is not the one it was made for (`openxr/OpenXrRuntimeService.kt`) | S21 Ultra, forced display change while another application was attached: the newcomer passed 59 of 60. Not yet with a real unplug and replug |
+| The test process crashed after its report | Its OpenXR thread no longer ends (the runtime library leaves thread-local clean-up behind when it is unloaded; a game's render thread lives as long as its process) | No fatal signal in four runs |
+| Walls and table tops came out twice | `core/RoomTidy`: same-facing walls within 25 cm, and table tops over each other at one height, are made one | Unit tests with the positions of the worn run. Not yet worn |
+| "The floor height wobbles" (written above) | Withdrawn: that was the head moving. In replays the floor's height in the room's frame stays within 2 to 5 cm (standard deviation about 1 cm) | Three replays |
+| Anchors lasted one run | Saved anchors are written to the game's data folder and read back at the next session. There is no saved map of the room, so they come back where they were relative to where the session started: start in the same place facing the same way | S21 Ultra: saved in one run, found 0.50 m from the origin in the next |
+| With the dispatcher in front the system did not report spatial entities | The open dispatcher took Monado for Pico's runtime (Monado lists Pico's controller extension) and withheld Meta's structures. One-line patch (`tools/quest/prebuilt/monado-is-not-pico.patch`), prebuilt vendored | Test packaged like a converted game: 67 of 68 |
+| XR_META_environment_depth not offered | Offered for OpenGL ES sessions: a 160x160 depth picture an eye drawn from the scene's planes. It hides game objects behind the walls, tables, floor and ceiling the room model has, and nothing else (no hands, people or furniture that is not a plane). Vulkan sessions are told the feature is unsupported | S21 Ultra: 30 of 30 frames, no GL error, the floor 8.2 m ahead at the lower edge of a level view |
+| No installer or launcher for games | `tools/quest/quest_pack.py GAME.apk OUT.apk --install SERIAL` adds the layer (and the loader chain where missing), aligns, signs with the debug key and installs. Installed OpenXR apps and Quest games (marked `com.oculus.intent.category.VR`) are listed on the phone's launcher and in the home view's app pages and are started as games, not in a window | Packaged and installed the test with it; started it from the phone's launcher (67 of 68). Starting one from the home view on the glasses: not yet run |
+| Right-hand pinches | See above: the closing movement now starts a pinch | Replay, then live |
+
+Regression suites on the emulator with this build: desktop 40 of 40, room 21 of 21, enter 3 of 3. Unit tests: 137.
+
+Every extension in the test's "Quest games also ask for" list is now offered when the dispatcher is in front.
+
 ## Open
 
-1. **Without glasses, a native app whose window is not showing loses the runtime.** Cause found: with no glasses
-   window Monado's client makes a surface in the application's own activity and waits two seconds for it
-   (`Client.blockingConnect`, "Failed to create surface" in the log). If the phone's screen is asleep, or something
-   is in front, no surface comes, the client unbinds the service ("the application left") and the app stops serving
-   the room, so the scene comes back empty. With the phone awake the same build passes. With glasses plugged in this
-   path is not taken (the runtime draws on the glasses window); that case is still to be run.
-2. **With the dispatcher in front, the system does not say it supports spatial entities**: the dispatcher answers
-   xrGetSystemProperties itself and the layer's answer is lost. To fix in the layer or the dispatcher.
-3. **Not offered by anything yet**: XR_META_environment_depth (a depth picture per eye per frame, for hiding game
-   objects behind real ones). The app's dense depth runs about once a second at 240x320, so this would be far slower
-   and coarser than a Quest 3's. Also not offered: XR_FB_triangle_mesh, XR_FB_hand_tracking_capsules,
-   XR_FB_composition_layer_alpha_blend and _settings, XR_META_passthrough_preferences, XR_FB_body_tracking (and,
-   without the dispatcher in front, colour space, foveation, swapchain state and performance metrics, which the
-   dispatcher answers). A game that requires one of these will stop.
-4. **The test process crashes when its thread ends** (after the report is written): a thread-local destructor in a
-   library that has been unloaded. Not yet traced.
-5. Anchors are kept for one run only. The ceiling is assumed 2.5 m over the floor. The room's walls need the glasses.
-6. Stereo output of a native app on the glasses: checked from a capture of the glasses display (above), not yet
-   by eye. hello_xr clears to opaque grey, which the glasses show as a bright haze; a mixed-reality game clears to
-   transparent black.
-7. OVRPort removes some of a game's ownership checks as part of its patching. Nothing in this repo does that, and
-   whether to run OVRPort on a game is its owner's decision.
+1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
+   which asks what a mixed-reality game asks but draws nothing and is not a game engine. What a real game adds:
+   its own engine's start-up (Unity or Unreal), Meta's platform library (entitlement, achievements, user id), a
+   Vulkan renderer in most titles, composition layers and input bindings the test does not use. The first run of
+   Wall Town Wonders will show which of these stop it; that cannot be known before.
+2. **A game must be converted before `quest_pack.py` is of use.** A Quest game as bought talks to Meta's runtime
+   and platform; OVRPort makes it an OpenXR app that asks for the dispatcher. OVRPort removes some of a game's
+   ownership checks as part of that. Nothing in this repo does, and whether to run OVRPort on a game is for its
+   owner to decide.
+3. **Environment depth for Vulkan games** is not provided (the feature is reported unsupported to them), and the
+   depth there is has only the room's planes in it.
+4. **Anchors across runs** depend on starting in the same place (no saved map of the room).
+5. **The hand model has not been drawn by a game**; hand tracking's left/right labels and steadiness were good in
+   the cued runs, but two recordings are little to judge false pinches from.
+6. **Not yet seen through the glasses:** the merged walls and tables, a game started from the home view, the
+   runtime made again after a real unplug and replug, and any picture a native app draws (judged from a capture).
+7. Without glasses, an application whose window is not showing still loses the runtime (Monado's client waits two
+   seconds for a surface). It does not arise with the glasses attached.
