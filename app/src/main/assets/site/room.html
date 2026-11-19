@@ -110,6 +110,7 @@ function frame(t, f) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
   gl.clearColor(0, 0, 0, session.environmentBlendMode === 'opaque' ? 1 : 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   if (!pose) return;
+  if (!R.fb) { try { R.fb = { w: layer.framebufferWidth, h: layer.framebufferHeight, native: XRWebGLLayer.getNativeFramebufferScaleFactor(session), views: pose.views.map((v) => { const p = layer.getViewport(v); return [p.x, p.y, p.width, p.height]; }), canvas: [gl.drawingBufferWidth, gl.drawingBufferHeight], dpr: window.devicePixelRatio }; } catch (e) { R.fb = String(e); } }
   R.frames++; R.ready = room.ready; R.measured = room.measured; R.packets = room.packets; R.roomError = room.error;
   const hp = pose.transform.position, head = [hp.x, hp.y, hp.z];
   R.floorY = +room.floorY.toFixed(3); R.eyeHeight = +(hp.y - room.floorY).toFixed(3);

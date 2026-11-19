@@ -169,6 +169,15 @@ object XrHost : OpenXrGlassesLayer.Host {
         val s = Tracking.settings
         // Read by the compositor when it is created, a moment from now, in this process.
         try { android.system.Os.setenv("ULTRAXR_DISPLAY_TIMING", if (s.paceByDisplay) "1" else "0", true) } catch (_: Throwable) {}
+        // The size the runtime asks an application to draw each eye at, as a percentage of the eye's pixels. Monado's
+        // own default is 140. For a 1920-wide eye that is 2688, and two of them side by side (how a browser draws a
+        // WebXR page) are 5376: more than the 4096 a texture may be wide on these phones. The browser then makes
+        // its drawing buffer smaller (4096 x 1152) but still gives the page the two 2688 x 1512 drawing areas, and
+        // shows half the buffer to each eye: every eye saw three quarters of a picture, a third too large and off
+        // centre, and in 3D the right eye got the end of the left picture. Measured on a Galaxy S21 Ultra on
+        // 18 November 2026; the Pixel in 2D had the same sizes. So: the eye's own pixels.
+        // Monado reads this from a system property on Android (debug.xrt.XRT_COMPOSITOR_SCALE_PERCENTAGE), which an app
+        // cannot set, so the default itself is changed in libmonado-service.so: 140 became 100 (native/monado/NOTES.md).
         val d = shell?.display ?: glassesDisplay()
         val scale = s.fovScale
         val tanH = (Tracking.displayTanH * scale).toFloat(); val tanV = (Tracking.displayTanV * scale).toFloat()
@@ -310,6 +319,9 @@ object XrHost : OpenXrGlassesLayer.Host {
         // 7 degrees: the angle the cameras are pitched down from the motion sensor, to within what was judged.
         if (st.pictureTiltDeg == 10f && !st.tiltRejudged) st.pictureTiltDeg = 7.2f
         st.tiltRejudged = true
+        // Every tilt so far was judged while each eye was shown a picture a third too large and off centre (see
+        // XRT_COMPOSITOR_SCALE_PERCENTAGE below). With the picture the right size they mean nothing: back to none, once.
+        if (!st.tiltClearedForSize) { st.pictureTiltDeg = 0f; st.tiltClearedForSize = true }
         pictureTiltDeg = st.pictureTiltDeg
         UltraXrFeed.displayPitchRad = Math.toRadians(pictureTiltDeg.toDouble()).toFloat()
     }

@@ -564,3 +564,17 @@ One ABI per run. A changed CMake argument makes a new build folder: delete `.cxx
 `app/src/main/jniLibs`, the x86-64 ones (for the emulator build, `-Pemu`) in `app/src/emu/jniLibs`. Section 8 is out
 of date: an x86-64 emulator image with arm translation runs the arm64 runtime, and the x86-64 build runs natively.
 The host test of section 12 was not rerun for patch 0004.
+
+## 13. The default drawing size: 100 %, changed in the built library (18 November 2026)
+
+Monado asks applications to draw each eye at `XRT_COMPOSITOR_SCALE_PERCENTAGE` of its pixels, 140 by default. For a
+1920-wide eye that is 2688; a browser draws both eyes of a WebXR page side by side in one texture, 5376 wide, more
+than the 4096 these phones allow. Wolvic then made the texture 4096 x 1152 and still gave the page 2688 x 1512
+drawing areas (measured on a Galaxy S21 Ultra: `layer.framebufferWidth` 4096, viewports 0 and 2688), and each eye was
+shown half the texture: three quarters of a picture, a third too large, off centre.
+
+On Android the option is read from the system property `debug.xrt.XRT_COMPOSITOR_SCALE_PERCENTAGE`, which only a
+shell can set. So the default was changed in `libmonado-service.so` itself: the instruction at file offset 1156576,
+`mov w1, #140` (`0x52801181`, right after the address of the option's name), is now `mov w1, #100` (`0x52800C81`).
+With it the page gets a 3840 x 1080 texture and two 1920 x 1080 areas. A rebuild from source must make the same
+change: the default of `scale_percentage` in `monado/src/xrt/compositor/main/comp_settings.c`.
