@@ -370,3 +370,21 @@ active DisplayPort monitor at 1920x1080@60, mirroring the laptop screen.
 So the glasses leave half-width 3D by themselves with a PC as the source too. The Pixel's signal is not what they
 reject; this firmware does not keep mode 8. Not established: whether the stock (unpatched) firmware keeps it, and
 whether the full-width mode (3840x1080), which the Pixel cannot send, is kept from a PC.
+
+## 18 November 2026, 20:40: full-width 3D from the laptop works
+
+`tools/ultra-diag/ultra_mode_test.py --full --yes`, glasses worn, plugged into the Windows laptop:
+
+- 0.0 s: "set display mode 3" accepted (status 0)
+- 0.26 s: the glasses report mode 3 (full-width 3D, 3840x1080@60)
+- 29 s: still mode 3; no change back at any point
+- the owner: "each eye had half the screen (wrong halves) but separate pictures on each lens"
+
+So the glasses do show a different picture to each eye, and keep the mode, when the source sends 3840x1080.
+Half-width 3D (mode 8) is the only stereo mode this firmware abandons. What stands between this and stereo on
+the Pixel is the Pixel's DisplayPort driver alone, which drops 3840x1080@60 (297 MHz) on a link that has room
+for it.
+
+Not established: which eye gets which half ("wrong halves" may be the desktop simply split down the middle, or
+the eyes swapped; a labelled test picture would say), and what Windows was sending during the test (the tool's
+display listing showed only the laptop's own panel).
