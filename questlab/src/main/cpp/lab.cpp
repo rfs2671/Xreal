@@ -6,8 +6,10 @@
 #include <android/log.h>
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#include <vulkan/vulkan.h>
 #define XR_USE_PLATFORM_ANDROID
 #define XR_USE_GRAPHICS_API_OPENGL_ES
+#define XR_USE_GRAPHICS_API_VULKAN
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include "meta_extra.h"
@@ -51,18 +53,23 @@ static void pump() {
         e = {XR_TYPE_EVENT_DATA_BUFFER};
     }
 }
-// One frame: no picture of our own, only (when there is one) the passthrough layer, as a game's first frames have.
+static const XrCompositionLayerBaseHeader *(*renderHook)(XrTime) = nullptr;      // draws, when the test has something to draw
+static void readInput(); static int endFails = 0, framesEnded = 0;
+// One frame: the passthrough layer (when there is one) and over it whatever the test is drawing just now.
 static void frame() {
     pump();
     if (!begun) { usleep(20000); return; }
+    readInput();
     XrFrameState fs{XR_TYPE_FRAME_STATE}; if (XR_FAILED(xrWaitFrame(sess, nullptr, &fs))) { usleep(20000); return; }
     frameTime = fs.predictedDisplayTime;
     xrBeginFrame(sess, nullptr);
     XrCompositionLayerPassthroughFB pl{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB}; pl.layerHandle = passLayer; pl.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-    const XrCompositionLayerBaseHeader *layers[1] = {(const XrCompositionLayerBaseHeader *)&pl};
+    const XrCompositionLayerBaseHeader *layers[2]; uint32_t nl = 0;
+    if (passLayer) layers[nl++] = (const XrCompositionLayerBaseHeader *)&pl;
+    if (renderHook && fs.shouldRender) { const XrCompositionLayerBaseHeader *drawnLayer = renderHook(fs.predictedDisplayTime); if (drawnLayer) layers[nl++] = drawnLayer; }
     XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO}; ei.displayTime = fs.predictedDisplayTime; ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    ei.layerCount = passLayer ? 1 : 0; ei.layers = passLayer ? layers : nullptr;
-    static int endFails = 0; XrResult r = xrEndFrame(sess, &ei); if (XR_FAILED(r) && endFails++ == 0) line("note  xrEndFrame answered %s", res(r));
+    ei.layerCount = nl; ei.layers = nl ? layers : nullptr;
+    XrResult r = xrEndFrame(sess, &ei); framesEnded++; if (XR_FAILED(r) && endFails++ == 0) line("note  xrEndFrame answered %s", res(r));
 }
 static bool waitEvent(XrStructureType type, XrAsyncRequestIdFB id, XrEventDataBuffer *out, int frames = 90) {
     for (int i = 0; i < frames; i++) {
@@ -76,10 +83,19 @@ static bool waitEvent(XrStructureType type, XrAsyncRequestIdFB id, XrEventDataBu
     return false;
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(JNIEnv *env, jobject, jobject activity, jint seconds, jint roomSeconds) {
+#include "lab_view.h"
+
+static std::string hexOf(const XrUuidEXT &u) { char b[40]; for (int i = 0; i < 16; i++) snprintf(b + 2 * i, 3, "%02x", u.data[i]); return b; }
+static double nowSeconds() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+
+extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(JNIEnv *env, jobject, jobject activity, jint seconds, jint roomSeconds, jint drawSeconds, jboolean vulkan) {
     report.clear(); passed = failed = 0; seen.clear(); state = XR_SESSION_STATE_UNKNOWN; begun = false; passLayer = XR_NULL_HANDLE;
     JavaVM *vm; env->GetJavaVM(&vm); jobject act = env->NewGlobalRef(activity);
-    line("Quest API test: what a Quest mixed-reality game asks of its runtime, asked here");
+    line("Quest API test (%s): what a Quest mixed-reality game asks of its runtime, asked here", vulkan ? "Vulkan" : "OpenGL ES");
+    // this test's own files: the anchors it put on walls in the run before, and one picture of what it draws
+    std::string filesDir; { char name[256] = ""; if (FILE *f = fopen("/proc/self/cmdline", "r")) { fread(name, 1, sizeof name - 1, f); fclose(f); } filesDir = std::string("/sdcard/Android/data/") + name + "/files"; }
+    std::string wallFile = filesDir + "/wall_anchors.txt"; ppmPath = filesDir + "/room_view_left.ppm"; std::vector<std::string> wallIds;
+    if (FILE *f = fopen(wallFile.c_str(), "r")) { char id[64]; while (fscanf(f, "%40s", id) == 1) wallIds.push_back(id); fclose(f); }
 
     // ---- the loader and what is on offer
     PFN_xrInitializeLoaderKHR init = nullptr; xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction *)&init);
@@ -90,7 +106,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     auto offered = [&](const char *name) { for (auto &e : ext) if (strcmp(e.extensionName, name) == 0) return true; return false; };
     const char *meta[] = {"XR_FB_passthrough", "XR_FB_spatial_entity", "XR_FB_spatial_entity_query", "XR_FB_spatial_entity_storage", "XR_FB_spatial_entity_container", "XR_FB_scene", "XR_FB_hand_tracking_aim",
                           "XR_FB_hand_tracking_mesh", "XR_FB_scene_capture", "XR_FB_spatial_entity_sharing", "XR_FB_spatial_entity_user", "XR_META_spatial_entity_mesh", "XR_META_boundary_visibility", "XR_META_environment_depth"};
-    const char *base[] = {"XR_KHR_android_create_instance", "XR_KHR_opengl_es_enable", "XR_EXT_hand_tracking"};
+    const char *base[] = {"XR_KHR_android_create_instance", vulkan ? "XR_KHR_vulkan_enable2" : "XR_KHR_opengl_es_enable", "XR_EXT_hand_tracking"};
     // what Quest games commonly also ask for; listed so a missing one is known before a real game trips on it
     const char *alsoAsked[] = {"XR_FB_display_refresh_rate", "XR_FB_color_space", "XR_FB_swapchain_update_state", "XR_FB_swapchain_update_state_opengl_es", "XR_FB_foveation", "XR_FB_foveation_configuration",
         "XR_FB_composition_layer_alpha_blend", "XR_FB_composition_layer_settings", "XR_KHR_composition_layer_color_scale_bias", "XR_KHR_composition_layer_cylinder", "XR_KHR_composition_layer_equirect2",
@@ -126,12 +142,15 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     const EGLint pa[] = {EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE}; EGLSurface pb = eglCreatePbufferSurface(dpy, cfg, pa); eglMakeCurrent(dpy, pb, pb, ctx);
     auto greq = fn<PFN_xrGetOpenGLESGraphicsRequirementsKHR>("xrGetOpenGLESGraphicsRequirementsKHR"); XrGraphicsRequirementsOpenGLESKHR gr{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR}; if (greq) greq(inst, sys, &gr);
     XrGraphicsBindingOpenGLESAndroidKHR gb{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR}; gb.display = dpy; gb.config = cfg; gb.context = ctx;
-    XrSessionCreateInfo si{XR_TYPE_SESSION_CREATE_INFO}; si.next = &gb; si.systemId = sys; r = xrCreateSession(inst, &si, &sess);
-    if (!check(XR_SUCCEEDED(r), "a session (OpenGL ES)", "%s", res(r))) { xrDestroyInstance(inst); return env->NewStringUTF(report.c_str()); }
+    XrSessionCreateInfo si{XR_TYPE_SESSION_CREATE_INFO}; si.next = &gb; si.systemId = sys; r = vulkan ? vulkanSession(sys) : xrCreateSession(inst, &si, &sess);
+    if (!check(XR_SUCCEEDED(r), vulkan ? "a session (Vulkan)" : "a session (OpenGL ES)", "%s", res(r))) { xrDestroyInstance(inst); return env->NewStringUTF(report.c_str()); }
     XrReferenceSpaceCreateInfo rs{XR_TYPE_REFERENCE_SPACE_CREATE_INFO}; rs.poseInReferenceSpace = {{0, 0, 0, 1}, {0, 0, 0}};
     rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL; xrCreateReferenceSpace(sess, &rs, &local); rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW; xrCreateReferenceSpace(sess, &rs, &view);
     for (int i = 0; i < 150 && !begun; i++) frame();
     check(begun, "the session begins", "state %d", (int)state);
+    setupInput();
+    // on Vulkan every frame of the test carries a drawn layer (a tint an eye) over the passthrough layer
+    if (vulkan && setupVulkanView(sys)) renderHook = drawVulkan;
 
     // ---- passthrough, as a game turns it on
     auto cPass = fn<PFN_xrCreatePassthroughFB>("xrCreatePassthroughFB"); auto cLayer = fn<PFN_xrCreatePassthroughLayerFB>("xrCreatePassthroughLayerFB");
@@ -164,7 +183,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     }
     // anchors saved by an earlier run of this test come back in the query: each is found again and then erased, so
     // the next run starts clean but for the one this run saves
-    auto eraseFn = fn<PFN_xrEraseSpaceFB>("xrEraseSpaceFB"); int oldAnchors = 0, oldLocated = 0; float oldDist = -1;
+    auto eraseFn = fn<PFN_xrEraseSpaceFB>("xrEraseSpaceFB"); int oldAnchors = 0, oldLocated = 0, oldWallAnchors = 0; float oldDist = -1; std::vector<XrVector3f> oldWallAt; scene.clear();
     int floors = 0, ceilings = 0, walls = 0, tables = 0, rooms = 0, located = 0, meshes = 0; XrSpace roomSpace = XR_NULL_HANDLE, meshSpace = XR_NULL_HANDLE; float floorY = NAN;
     for (auto &f : found) {
         uint32_t cn = 0; XrSpaceComponentTypeFB comps[16]; enumComp(f.space, 16, &cn, comps);
@@ -172,11 +191,14 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         for (uint32_t i = 0; i < cn; i++) { loc |= comps[i] == XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB; sem |= comps[i] == XR_SPACE_COMPONENT_TYPE_SEMANTIC_LABELS_FB; b2 |= comps[i] == XR_SPACE_COMPONENT_TYPE_BOUNDED_2D_FB; lay |= comps[i] == XR_SPACE_COMPONENT_TYPE_ROOM_LAYOUT_FB; }
         if (lay) { rooms++; roomSpace = f.space; continue; }
         if (loc && !sem && !b2) {      // a bare locatable entity: a saved anchor
-            oldAnchors++;
+            bool onWall = false; { std::string id = hexOf(f.uuid); for (auto &w : wallIds) if (w == id) onWall = true; }
+            if (!onWall) oldAnchors++;
             XrSpaceComponentStatusSetInfoFB set{XR_TYPE_SPACE_COMPONENT_STATUS_SET_INFO_FB}; set.componentType = XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB; set.enabled = XR_TRUE; XrAsyncRequestIdFB id = 0;
             XrEventDataBuffer ev; if (XR_SUCCEEDED(setComp(f.space, &set, &id))) waitEvent(XR_TYPE_EVENT_DATA_SPACE_SET_STATUS_COMPLETE_FB, id, &ev, 30);
             XrSpaceLocation al{XR_TYPE_SPACE_LOCATION};
-            if (XR_SUCCEEDED(xrLocateSpace(f.space, local, frameTime, &al)) && (al.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) { oldLocated++; oldDist = std::sqrt(al.pose.position.x * al.pose.position.x + al.pose.position.y * al.pose.position.y + al.pose.position.z * al.pose.position.z); }
+            bool got = XR_SUCCEEDED(xrLocateSpace(f.space, local, frameTime, &al)) && (al.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT);
+            if (onWall) { oldWallAnchors++; if (got) oldWallAt.push_back(al.pose.position); }
+            else if (got) { oldLocated++; oldDist = std::sqrt(al.pose.position.x * al.pose.position.x + al.pose.position.y * al.pose.position.y + al.pose.position.z * al.pose.position.z); }
             if (eraseFn) { XrSpaceEraseInfoFB er{XR_TYPE_SPACE_ERASE_INFO_FB}; er.space = f.space; er.location = XR_SPACE_STORAGE_LOCATION_LOCAL_FB; XrAsyncRequestIdFB eid = 0; if (XR_SUCCEEDED(eraseFn(sess, &er, &eid))) waitEvent(XR_TYPE_EVENT_DATA_SPACE_ERASE_COMPLETE_FB, eid, &ev, 30); }
             continue;
         }
@@ -189,13 +211,26 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
             ok = XR_SUCCEEDED(xrLocateSpace(f.space, local, frameTime, &l)) && (l.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT);
         }
         if (ok) located++;
+        { int kind = !strcmp(lab, "FLOOR") ? 0 : !strcmp(lab, "CEILING") ? 1 : !strcmp(lab, "WALL_FACE") ? 2 : !strcmp(lab, "TABLE") ? 3 : -1; if (kind >= 0 && b2) scene.push_back({f.space, rect, kind, l.pose, ok}); }
         if (!strcmp(lab, "FLOOR")) { floors++; if (ok) floorY = l.pose.position.y; } else if (!strcmp(lab, "CEILING")) ceilings++; else if (!strcmp(lab, "WALL_FACE")) walls++; else if (!strcmp(lab, "TABLE")) tables++; else if (!strcmp(lab, "GLOBAL_MESH")) { meshes++; meshSpace = f.space; }
         line("info  entity %-9s %.2f x %.2f m at (%.2f, %.2f, %.2f) in the local space%s", lab, rect.extent.width, rect.extent.height, l.pose.position.x, l.pose.position.y, l.pose.position.z, ok ? "" : "  (not located)");
     }
     check(rooms == 1 && floors == 1 && ceilings == 1, "the scene has one room, one floor and one ceiling", "%d rooms, %d floors, %d ceilings, %d walls, %d tables", rooms, floors, ceilings, walls, tables);
     line("info  anchors saved by an earlier run: %d found, %d located%s", oldAnchors, oldLocated, oldAnchors ? "" : " (none: the first run after installing, or the run before saved none)");
     if (oldAnchors) check(oldLocated == oldAnchors && oldDist > 0.2f && oldDist < 1.5f, "an anchor saved by the run before is found again, where it was relative to the start", "%.2f m from this run's origin (it was made 0.5 m in front of the head)", oldDist);
-    check(located == (int)found.size() - rooms - oldAnchors && located > 0, "every plane can be made locatable and is located", "%d of %d", located, (int)found.size() - rooms - oldAnchors);
+    check(located == (int)found.size() - rooms - oldAnchors - oldWallAnchors && located > 0, "every plane can be made locatable and is located", "%d of %d", located, (int)found.size() - rooms - oldAnchors - oldWallAnchors);
+    // Anchors the run before put on its walls: each should still lie on a wall this run finds. How far off the
+    // nearest wall's plane they are now is how far the room has moved between the two runs, as a game would see it.
+    if (oldWallAnchors) {
+        float worst = 0; int judged = 0; std::string each;
+        for (auto &a : oldWallAt) { float best = 1e9f;
+            for (auto &p : scene) { if (p.kind != 2 || !p.ok) continue; XrVector3f X = at({p.pose.orientation, {0, 0, 0}}, 1, 0, 0), Y = at({p.pose.orientation, {0, 0, 0}}, 0, 1, 0), Z = at({p.pose.orientation, {0, 0, 0}}, 0, 0, 1);
+                float dx = a.x - p.pose.position.x, dy = a.y - p.pose.position.y, dz = a.z - p.pose.position.z, x = dx * X.x + dy * X.y + dz * X.z, y = dx * Y.x + dy * Y.y + dz * Y.z, d = std::fabs(dx * Z.x + dy * Z.y + dz * Z.z);
+                if (std::fabs(x) < p.rect.extent.width / 2 + 0.3f && std::fabs(y) < p.rect.extent.height / 2 + 0.3f && d < best) best = d; }
+            char b[32]; if (best < 1e8f) { judged++; if (best > worst) worst = best; snprintf(b, sizeof b, " %.3f", best); } else snprintf(b, sizeof b, " (no wall there)"); each += b; }
+        line("info  anchors the run before put on walls: %d found, %d located; metres off the nearest wall now:%s", oldWallAnchors, (int)oldWallAt.size(), each.c_str());
+        if (walls > 0) check(judged == oldWallAnchors && worst < 0.10f, "anchors put on walls by the run before are still on a wall (the room has not moved between runs)", "%d of %d on a wall, the worst %.3f m off", judged, oldWallAnchors, worst);
+    }
     check(!std::isnan(floorY) && floorY < -0.5f && floorY > -2.5f, "the floor is below the local space's origin by a person's eye height", "%.2f m", floorY);
     if (roomSpace != XR_NULL_HANDLE) {
         XrUuidEXT w[32]; XrRoomLayoutFB rl{XR_TYPE_ROOM_LAYOUT_FB}; rl.wallUuidCapacityInput = 32; rl.wallUuids = w; r = layout(sess, roomSpace, &rl);
@@ -243,7 +278,10 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     check(dp.supportsEnvironmentDepth, "the system says it supports environment depth");
     if (check(dCreate && dStart && dSwap && dEnum && dState && dAcquire, "the environment depth calls exist")) {
         XrEnvironmentDepthProviderCreateInfoMETA dci{XR_TYPE_ENVIRONMENT_DEPTH_PROVIDER_CREATE_INFO_META}; XrEnvironmentDepthProviderMETA prov = XR_NULL_HANDLE;
-        r = dCreate(sess, &dci, &prov); check(XR_SUCCEEDED(r), "xrCreateEnvironmentDepthProviderMETA", "%s", res(r));
+        r = dCreate(sess, &dci, &prov);
+        if (vulkan) check(r == XR_ERROR_FEATURE_UNSUPPORTED, "on a Vulkan session the depth provider is refused cleanly with 'feature unsupported' (a known limit: no environment depth for Vulkan games)", "%s", res(r));
+        else {
+        check(XR_SUCCEEDED(r), "xrCreateEnvironmentDepthProviderMETA", "%s", res(r));
         XrEnvironmentDepthSwapchainCreateInfoMETA dsi{XR_TYPE_ENVIRONMENT_DEPTH_SWAPCHAIN_CREATE_INFO_META}; XrEnvironmentDepthSwapchainMETA dsw = XR_NULL_HANDLE;
         XrResult r2 = XR_SUCCEEDED(r) ? dSwap(prov, &dsi, &dsw) : r; XrEnvironmentDepthSwapchainStateMETA dst{XR_TYPE_ENVIRONMENT_DEPTH_SWAPCHAIN_STATE_META}; if (XR_SUCCEEDED(r2)) dState(dsw, &dst);
         XrSwapchainImageOpenGLESKHR di{XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR}; uint32_t dn = 0; if (XR_SUCCEEDED(r2)) dEnum(dsw, 1, &dn, (XrSwapchainImageBaseHeader *)&di);
@@ -258,6 +296,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
             if (void *lh = dlopen("libuxr_meta_layer.so", RTLD_NOW)) { auto probe = (int (*)(float *, float *))dlsym(lh, "uxrMetaLayerDepthProbe"); if (probe) n = probe(&centre, &low); }
             // near the lower edge of the left eye's picture the floor is seen: from eye height, some metres ahead
             check(n > 0 && low > 1.0f && low < 12.f, "the depth picture has the floor in its lower part", "%.2f m ahead near the lower edge, %.2f m at the centre (0 = nothing there)", low, centre);
+            viewDepth = prov; viewDepthAcquire = dAcquire; viewDepthTex = di.image;
+        }
         }
     }
 
@@ -275,6 +315,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
             ex += 0.5f * fx; ey += 0.5f * fy; ez += 0.5f * fz;
             float d = std::sqrt((al.pose.position.x - ex) * (al.pose.position.x - ex) + (al.pose.position.y - ey) * (al.pose.position.y - ey) + (al.pose.position.z - ez) * (al.pose.position.z - ez));
             check(XR_SUCCEEDED(r) && (before.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && d < 0.05f, "the anchor is located where it was made", "%.3f m off", d);
+            thisRunAnchor = ac->space;
             XrSpaceSaveInfoFB svi{XR_TYPE_SPACE_SAVE_INFO_FB}; svi.space = ac->space; svi.location = XR_SPACE_STORAGE_LOCATION_LOCAL_FB; svi.persistenceMode = XR_SPACE_PERSISTENCE_MODE_INDEFINITE_FB; XrAsyncRequestIdFB sid = 0;
             r = save ? save(sess, &svi, &sid) : XR_ERROR_FUNCTION_UNSUPPORTED; check(XR_SUCCEEDED(r) && waitEvent(XR_TYPE_EVENT_DATA_SPACE_SAVE_COMPLETE_FB, sid, &ev), "the anchor is saved (kept for the next run)", "%s", res(r));
             // sharing with another player: there is no service behind it, and the game must be told so rather than left waiting
@@ -289,6 +330,21 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
                 check(got && ((XrEventDataSpaceShareCompleteFB *)&ev)->result == XR_ERROR_SPACE_CLOUD_STORAGE_DISABLED_FB, "a share request completes with 'cloud storage disabled' (sharing itself is not possible here)", "%s", got ? res(((XrEventDataSpaceShareCompleteFB *)&ev)->result) : "no event");
             }
         }
+    }
+
+    // ---- an anchor on each wall (four at most), saved: the next run reads them back and sees whether they are still on a wall
+    if (cAnchor && save) {
+        int put = 0, wanted = 0; std::string ids;
+        for (auto &p : scene) {
+            if (p.kind != 2 || !p.ok || wanted >= 4) continue; wanted++;
+            XrSpatialAnchorCreateInfoFB aci{XR_TYPE_SPATIAL_ANCHOR_CREATE_INFO_FB}; aci.space = local; aci.poseInSpace = p.pose; aci.time = frameTime; XrAsyncRequestIdFB id = 0; XrEventDataBuffer ev;
+            if (XR_FAILED(cAnchor(sess, &aci, &id)) || !waitEvent(XR_TYPE_EVENT_DATA_SPATIAL_ANCHOR_CREATE_COMPLETE_FB, id, &ev)) continue;
+            auto *ac = (XrEventDataSpatialAnchorCreateCompleteFB *)&ev; XrUuidEXT uu = ac->uuid;
+            XrSpaceSaveInfoFB svi{XR_TYPE_SPACE_SAVE_INFO_FB}; svi.space = ac->space; svi.location = XR_SPACE_STORAGE_LOCATION_LOCAL_FB; svi.persistenceMode = XR_SPACE_PERSISTENCE_MODE_INDEFINITE_FB; XrAsyncRequestIdFB sid = 0;
+            if (XR_SUCCEEDED(save(sess, &svi, &sid)) && waitEvent(XR_TYPE_EVENT_DATA_SPACE_SAVE_COMPLETE_FB, sid, &ev)) { put++; ids += hexOf(uu) + "\n"; }
+        }
+        if (FILE *f = fopen(wallFile.c_str(), "w")) { fputs(ids.c_str(), f); fclose(f); }
+        if (wanted) check(put == wanted, "an anchor is put on each wall and saved, for the next run to judge the room's alignment by", "%d of %d", put, wanted);
     }
 
     // ---- hands with Meta's aim state
@@ -322,7 +378,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
                 if (sound && inward == 0) { meshOk++; indexTipX[h] = bind[XR_HAND_JOINT_INDEX_TIP_EXT].position.x; }
                 line("info  %s hand model: %u joints, %u vertices, %u triangles, %d facing inward", h ? "right" : "left", hm.jointCountOutput, hm.vertexCountOutput, hm.indexCountOutput / 3, inward);
             }
-            trk[h] = ht;
+            trk[h] = ht; viewTrackers[h] = ht;
         }
         // Each hand in turn is asked for (the log line is the cue), and BOTH trackers are read every frame: a hand
         // held up but reported as the other one is then seen as such, not as "no hand".
@@ -353,6 +409,20 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         check(handMeshFn && meshOk == 2, "xrGetHandMeshFB gives a sound hand model for each hand (made here, not Meta's)", "%d of 2", meshOk);
         check(indexTipX[0] > 0 && indexTipX[1] < 0, "the left and right models are mirror images", "index tip x %.3f and %.3f", indexTipX[0], indexTipX[1]);
     }
+
+    // ---- the room view: the scene drawn where the Scene API says it is, in stereo, through OpenGL ES
+    if (drawSeconds > 0 && !vulkan && setupRoomView(sys)) {
+        renderHook = drawRoomView; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE the room view is being drawn now, for %d seconds", (int)drawSeconds);
+        int failsBefore = endFails, endedBefore = framesEnded; double until = nowSeconds() + drawSeconds; while (nowSeconds() < until) frame();
+        renderHook = nullptr;
+        check(drawn > drawSeconds * 20 && endFails == failsBefore, "the room view is drawn in stereo and every frame is accepted", "%d pictures in %d s, %d of %d frames refused", drawn, (int)drawSeconds, endFails - failsBefore, framesEnded - endedBefore);
+        line("info  room view: environment depth in %d of %d pictures; cubes judged in the left eye's picture: behind a wall hidden %d, seen %d; in front of a wall seen %d, hidden %d", depthFrames, drawn, behindHidden, behindSeen, frontSeen, frontHidden);
+        if (behindSeen + behindHidden >= 30) check(behindHidden >= 0.95 * (behindSeen + behindHidden), "a cube half a metre behind a wall is hidden by the environment depth picture", "%d of %d", behindHidden, behindSeen + behindHidden);
+        if (frontSeen + frontHidden >= 30) check(frontSeen >= 0.7 * (frontSeen + frontHidden), "a cube in front of a wall is drawn", "%d of %d", frontSeen, frontSeen + frontHidden);
+        if (ppmSaved) line("info  one picture of the left eye saved: %s", ppmPath.c_str());
+    }
+    if (vulkan) check(vkDrawn > 60 && vkFailed == 0 && endFails == 0, "Vulkan frames with a drawn layer over the passthrough layer are accepted", "%d drawn, %d Vulkan or swapchain failures, %d frames refused", vkDrawn, vkFailed, endFails);
+    reportInput();
 
     // ---- what the layer did meanwhile
     if (void *h = dlopen("libuxr_meta_layer.so", RTLD_NOW)) {

@@ -7,4 +7,4 @@ add_library(uxr_meta_layer SHARED meta_layer.cpp)
 target_link_libraries(uxr_meta_layer OpenXR::headers log EGL GLESv3)
 # The test: calls those extensions as a Quest game would.
 add_library(questlab SHARED lab.cpp)
-target_link_libraries(questlab OpenXR::openxr_loader log EGL GLESv3 android)
+target_link_libraries(questlab OpenXR::openxr_loader log EGL GLESv3 android vulkan)

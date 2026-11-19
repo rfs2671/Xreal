@@ -41,6 +41,14 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <array>
+#include <cstdarg>
+#include <cstdio>
+#include <utility>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -74,6 +82,106 @@ PFN_xrLocateHandJointsEXT rLocateHandJoints; PFN_xrCreateHandTrackerEXT rCreateH
 bool sessionGles = false;
 
 std::mutex lock;
+
+// ---------------------------------------------------------------- diagnostics: what a game asked for and did not get
+// Everything here goes to logcat under the tag UltraXRQuest and to a file the game's process can write:
+// /sdcard/Android/data/<package>/files/uxr_quest_diag.txt (or /data/data/<package>/ when that folder cannot be made).
+// tools/quest/quest_diag.py collects both, with the crash dump Android itself writes.
+PFN_xrCreateSwapchain rCreateSwapchain; PFN_xrSuggestInteractionProfileBindings rSuggestBindings; PFN_xrAttachSessionActionSets rAttachActionSets;
+PFN_xrBeginSession rBeginSession; PFN_xrSyncActions rSyncActions; PFN_xrPathToString rPathToString; PFN_xrStringToPath rStringToPath;
+PFN_xrGetCurrentInteractionProfile rCurrentProfile; PFN_xrEnumerateSwapchainFormats rSwapchainFormats; PFN_xrEnumerateEnvironmentBlendModes rBlendModes;
+std::string packageName() {
+    char name[256] = ""; FILE *f = fopen("/proc/self/cmdline", "r"); if (f) { fread(name, 1, sizeof name - 1, f); fclose(f); }
+    for (char *c = name; *c; c++) if (*c == ':') { *c = 0; break; }      // a process name may be package:suffix
+    return name;
+}
+int diagFd = -1; std::mutex diagLock; std::string diagPath; timespec diagStart{};
+void diagOpen() {      // diagLock held
+    if (diagFd >= 0 || diagStart.tv_sec) return;
+    clock_gettime(CLOCK_MONOTONIC, &diagStart); std::string pkg = packageName(); if (pkg.empty()) return;
+    std::string dir = "/sdcard/Android/data/" + pkg; mkdir(dir.c_str(), 0770); dir += "/files"; mkdir(dir.c_str(), 0770);
+    for (std::string p : {dir + "/uxr_quest_diag.txt", "/data/data/" + pkg + "/uxr_quest_diag.txt"}) {
+        diagFd = open(p.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0660); if (diagFd >= 0) { diagPath = p; break; }
+    }
+}
+void diag(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void diag(const char *fmt, ...) {
+    char b[1100]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b - 2, fmt, a); va_end(a);
+    __android_log_print(ANDROID_LOG_WARN, "UltraXRQuest", "%s", b);
+    std::lock_guard<std::mutex> g(diagLock); diagOpen(); if (diagFd < 0) return;
+    timespec now; clock_gettime(CLOCK_MONOTONIC, &now); char t[32]; int n = snprintf(t, sizeof t, "%8.2f  ", (now.tv_sec - diagStart.tv_sec) + (now.tv_nsec - diagStart.tv_nsec) / 1e9);
+    write(diagFd, t, n); size_t l = strlen(b); b[l] = '\n'; write(diagFd, b, l + 1);
+}
+#define ONCE(...) do { static std::atomic<bool> said_{false}; if (!said_.exchange(true)) diag(__VA_ARGS__); } while (0)
+const char *resultName(XrResult r) {
+    switch (r) {
+    case XR_SUCCESS: return "XR_SUCCESS"; case XR_ERROR_VALIDATION_FAILURE: return "XR_ERROR_VALIDATION_FAILURE"; case XR_ERROR_RUNTIME_FAILURE: return "XR_ERROR_RUNTIME_FAILURE";
+    case XR_ERROR_OUT_OF_MEMORY: return "XR_ERROR_OUT_OF_MEMORY"; case XR_ERROR_API_VERSION_UNSUPPORTED: return "XR_ERROR_API_VERSION_UNSUPPORTED"; case XR_ERROR_INITIALIZATION_FAILED: return "XR_ERROR_INITIALIZATION_FAILED";
+    case XR_ERROR_FUNCTION_UNSUPPORTED: return "XR_ERROR_FUNCTION_UNSUPPORTED"; case XR_ERROR_FEATURE_UNSUPPORTED: return "XR_ERROR_FEATURE_UNSUPPORTED"; case XR_ERROR_EXTENSION_NOT_PRESENT: return "XR_ERROR_EXTENSION_NOT_PRESENT";
+    case XR_ERROR_LIMIT_REACHED: return "XR_ERROR_LIMIT_REACHED"; case XR_ERROR_SIZE_INSUFFICIENT: return "XR_ERROR_SIZE_INSUFFICIENT"; case XR_ERROR_HANDLE_INVALID: return "XR_ERROR_HANDLE_INVALID";
+    case XR_ERROR_INSTANCE_LOST: return "XR_ERROR_INSTANCE_LOST"; case XR_ERROR_SESSION_RUNNING: return "XR_ERROR_SESSION_RUNNING"; case XR_ERROR_SESSION_NOT_RUNNING: return "XR_ERROR_SESSION_NOT_RUNNING";
+    case XR_ERROR_SESSION_LOST: return "XR_ERROR_SESSION_LOST"; case XR_ERROR_SYSTEM_INVALID: return "XR_ERROR_SYSTEM_INVALID"; case XR_ERROR_PATH_INVALID: return "XR_ERROR_PATH_INVALID";
+    case XR_ERROR_PATH_UNSUPPORTED: return "XR_ERROR_PATH_UNSUPPORTED"; case XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED: return "XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED"; case XR_ERROR_LAYER_INVALID: return "XR_ERROR_LAYER_INVALID";
+    case XR_ERROR_LAYER_LIMIT_EXCEEDED: return "XR_ERROR_LAYER_LIMIT_EXCEEDED"; case XR_ERROR_SWAPCHAIN_RECT_INVALID: return "XR_ERROR_SWAPCHAIN_RECT_INVALID"; case XR_ERROR_ACTION_TYPE_MISMATCH: return "XR_ERROR_ACTION_TYPE_MISMATCH";
+    case XR_ERROR_SESSION_NOT_READY: return "XR_ERROR_SESSION_NOT_READY"; case XR_ERROR_REFERENCE_SPACE_UNSUPPORTED: return "XR_ERROR_REFERENCE_SPACE_UNSUPPORTED"; case XR_ERROR_FILE_ACCESS_ERROR: return "XR_ERROR_FILE_ACCESS_ERROR";
+    case XR_ERROR_FORM_FACTOR_UNSUPPORTED: return "XR_ERROR_FORM_FACTOR_UNSUPPORTED"; case XR_ERROR_FORM_FACTOR_UNAVAILABLE: return "XR_ERROR_FORM_FACTOR_UNAVAILABLE"; case XR_ERROR_API_LAYER_NOT_PRESENT: return "XR_ERROR_API_LAYER_NOT_PRESENT";
+    case XR_ERROR_CALL_ORDER_INVALID: return "XR_ERROR_CALL_ORDER_INVALID"; case XR_ERROR_GRAPHICS_DEVICE_INVALID: return "XR_ERROR_GRAPHICS_DEVICE_INVALID"; case XR_ERROR_POSE_INVALID: return "XR_ERROR_POSE_INVALID";
+    case XR_ERROR_ENVIRONMENT_BLEND_MODE_UNSUPPORTED: return "XR_ERROR_ENVIRONMENT_BLEND_MODE_UNSUPPORTED"; case XR_ERROR_VIEW_CONFIGURATION_TYPE_UNSUPPORTED: return "XR_ERROR_VIEW_CONFIGURATION_TYPE_UNSUPPORTED";
+    case XR_ERROR_ACTIONSET_NOT_ATTACHED: return "XR_ERROR_ACTIONSET_NOT_ATTACHED"; case XR_ERROR_ACTIONSETS_ALREADY_ATTACHED: return "XR_ERROR_ACTIONSETS_ALREADY_ATTACHED"; case XR_ERROR_NAME_INVALID: return "XR_ERROR_NAME_INVALID";
+    case XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING: return "XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING"; case XR_ERROR_RUNTIME_UNAVAILABLE: return "XR_ERROR_RUNTIME_UNAVAILABLE";
+    default: { static thread_local char b[24]; snprintf(b, sizeof b, "result %d", (int)r); return b; }
+    }
+}
+// A function the runtime does not have. The game gets something it can call (answering "unsupported") in place of
+// nothing, and the call is written down: a null function pointer called by a game is a crash with no name on it.
+const int STUBS = 320;
+struct Stub { char name[72]; std::atomic<int> calls; } stubs[STUBS]; int stubCount = 0; std::atomic<int> unsupportedCalls{0};
+volatile const char *lastCall = "none"; std::atomic<long> frameCount{0}, endFrameFails{0};
+void stubCalled(int n) {
+    int c = stubs[n].calls.fetch_add(1); unsupportedCalls++; lastCall = stubs[n].name;
+    if (c == 0) diag("UNSUPPORTED CALL  %s: neither the runtime nor the layer has this function; the game was answered XR_ERROR_FUNCTION_UNSUPPORTED", stubs[n].name);
+}
+template <int N> XrResult XRAPI_CALL stubFn() { stubCalled(N); return XR_ERROR_FUNCTION_UNSUPPORTED; }
+template <size_t... I> std::array<PFN_xrVoidFunction, sizeof...(I)> makeStubs(std::index_sequence<I...>) { return {{(PFN_xrVoidFunction)&stubFn<(int)I>...}}; }
+const std::array<PFN_xrVoidFunction, STUBS> stubTable = makeStubs(std::make_index_sequence<STUBS>());
+PFN_xrVoidFunction stubFor(const char *name) {      // lock not needed: the loader asks from one thread at a time
+    static std::mutex m; std::lock_guard<std::mutex> g(m);
+    for (int i = 0; i < stubCount; i++) if (strcmp(stubs[i].name, name) == 0) return stubTable[i];
+    if (stubCount >= STUBS || strlen(name) >= sizeof stubs[0].name) return nullptr;
+    strcpy(stubs[stubCount].name, name); return stubTable[stubCount++];
+}
+void diagSummary(const char *when) {
+    std::string called; int kinds = 0;
+    for (int i = 0; i < stubCount; i++) { int c = stubs[i].calls.load(); if (c) { kinds++; char b[112]; snprintf(b, sizeof b, " %s x%d", stubs[i].name, c); called += b; } }
+    diag("SUMMARY (%s)  %ld frames, %ld failed xrEndFrame, %d unsupported functions called%s%s", when, frameCount.load(), endFrameFails.load(), kinds, kinds ? ":" : "", called.c_str());
+}
+// A crash: one line saying where the game was in OpenXR terms, then on to whoever handled the signal before us
+// (Android's own crash dump, which has the stack).
+const int CRASH_SIGNALS[] = {SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE};
+struct sigaction oldAction[32]; std::atomic<bool> crashSeen{false}, crashHooked{false};
+void onCrash(int sig, siginfo_t *info, void *ctx) {
+    if (!crashSeen.exchange(true)) {
+        char b[400]; int n = snprintf(b, sizeof b, "CRASH  signal %d (%s) at address %p in thread %d, after %ld frames; the last OpenXR call the layer saw: %s; unsupported calls so far: %d\n",
+            sig, sig == SIGSEGV ? "SIGSEGV" : sig == SIGABRT ? "SIGABRT" : sig == SIGBUS ? "SIGBUS" : sig == SIGILL ? "SIGILL" : "SIGFPE", info ? info->si_addr : nullptr, (int)gettid(), frameCount.load(), (const char *)lastCall, unsupportedCalls.load());
+        if (diagFd >= 0 && n > 0) { write(diagFd, "          ", 10); write(diagFd, b, (size_t)n); fsync(diagFd); }
+        __android_log_write(ANDROID_LOG_ERROR, "UltraXRQuest", b);
+    }
+    struct sigaction &o = oldAction[sig];
+    if ((o.sa_flags & SA_SIGINFO) && o.sa_sigaction) { o.sa_sigaction(sig, info, ctx); return; }
+    if (!(o.sa_flags & SA_SIGINFO) && o.sa_handler != SIG_DFL && o.sa_handler != SIG_IGN) { o.sa_handler(sig); return; }
+    signal(sig, SIG_DFL); if (sig == SIGABRT || !info || info->si_code <= 0) raise(sig);      // a fault happens again on return
+}
+void hookCrashes() {
+    if (crashHooked.exchange(true)) return;
+    for (int s : CRASH_SIGNALS) { struct sigaction a{}; a.sa_sigaction = onCrash; a.sa_flags = SA_SIGINFO | SA_ONSTACK; sigemptyset(&a.sa_mask); sigaction(s, &a, &oldAction[s]); }
+}
+std::string pathName(XrPath p) {
+    char b[XR_MAX_PATH_LENGTH] = "?"; uint32_t n = 0; if (p == XR_NULL_PATH) return "(none)";
+    if (rPathToString && instance) rPathToString(instance, p, sizeof b, &n, b); return b;
+}
+const char *stateName(XrSessionState s) {
+    const char *n[] = {"UNKNOWN", "IDLE", "READY", "SYNCHRONIZED", "VISIBLE", "FOCUSED", "STOPPING", "LOSS_PENDING", "EXITING"}; return (int)s >= 0 && (int)s <= 8 ? n[(int)s] : "?";
+}
 
 // ---------------------------------------------------------------- small maths
 struct V3 { float x, y, z; };
@@ -293,7 +401,10 @@ XrResult XRAPI_CALL uPassthroughLayerPauseFB(XrPassthroughLayerFB) { return XR_S
 XrResult XRAPI_CALL uPassthroughLayerResumeFB(XrPassthroughLayerFB) { return XR_SUCCESS; }
 XrResult XRAPI_CALL uPassthroughLayerSetStyleFB(XrPassthroughLayerFB, const XrPassthroughStyleFB *) { return XR_SUCCESS; }
 // surface-projected passthrough (a picture of the world on a mesh) has no meaning on see-through glasses
-XrResult XRAPI_CALL uCreateGeometryInstanceFB(XrSession, const XrGeometryInstanceCreateInfoFB *, XrGeometryInstanceFB *) { return XR_ERROR_FEATURE_UNSUPPORTED; }
+XrResult XRAPI_CALL uCreateGeometryInstanceFB(XrSession, const XrGeometryInstanceCreateInfoFB *, XrGeometryInstanceFB *) {
+    ONCE("UNSUPPORTED FEATURE  xrCreateGeometryInstanceFB (passthrough shown on a game's own surface): answered XR_ERROR_FEATURE_UNSUPPORTED; the real world is seen everywhere the game draws nothing");
+    return XR_ERROR_FEATURE_UNSUPPORTED;
+}
 XrResult XRAPI_CALL uDestroyGeometryInstanceFB(XrGeometryInstanceFB) { return XR_SUCCESS; }
 XrResult XRAPI_CALL uGeometryInstanceSetTransformFB(XrGeometryInstanceFB, const XrGeometryInstanceTransformFB *) { return XR_ERROR_FEATURE_UNSUPPORTED; }
 
@@ -489,7 +600,11 @@ struct PlaneInEye { V3 c, u, v, n; float hu, hv; };
 
 XrResult XRAPI_CALL uCreateEnvironmentDepthProviderMETA(XrSession, const XrEnvironmentDepthProviderCreateInfoMETA *, XrEnvironmentDepthProviderMETA *out) {
     if (!out) return XR_ERROR_VALIDATION_FAILURE;
-    if (!sessionGles) return XR_ERROR_FEATURE_UNSUPPORTED;      // the texture is made with OpenGL ES, in the application's context
+    if (!sessionGles) {      // the texture is made with OpenGL ES, in the application's context
+        ONCE("UNSUPPORTED FEATURE  xrCreateEnvironmentDepthProviderMETA in a Vulkan session: answered XR_ERROR_FEATURE_UNSUPPORTED (environment depth is made for OpenGL ES sessions only); the game gets no occlusion by the room");
+        return XR_ERROR_FEATURE_UNSUPPORTED;
+    }
+    diag("ok  xrCreateEnvironmentDepthProviderMETA (depth from the room's planes)");
     *out = (XrEnvironmentDepthProviderMETA)(uintptr_t) new DepthProvider; return XR_SUCCESS;
 }
 void dropDepthTexture(DepthProvider *p) { if (p->tex && eglGetCurrentContext() != EGL_NO_CONTEXT) glDeleteTextures(1, &p->tex); p->tex = 0; }
@@ -517,7 +632,7 @@ XrResult XRAPI_CALL uEnumerateEnvironmentDepthSwapchainImagesMETA(XrEnvironmentD
     ((XrSwapchainImageOpenGLESKHR *)images)->image = p->tex; return XR_SUCCESS;
 }
 XrResult XRAPI_CALL uGetEnvironmentDepthSwapchainStateMETA(XrEnvironmentDepthSwapchainMETA h, XrEnvironmentDepthSwapchainStateMETA *st) { if (!h || !st) return XR_ERROR_HANDLE_INVALID; st->width = DEPTH_N; st->height = DEPTH_N; return XR_SUCCESS; }
-XrResult XRAPI_CALL uSetEnvironmentDepthHandRemovalMETA(XrEnvironmentDepthProviderMETA, const XrEnvironmentDepthHandRemovalSetInfoMETA *) { return XR_ERROR_FEATURE_UNSUPPORTED; }      // there are no hands in it to remove
+XrResult XRAPI_CALL uSetEnvironmentDepthHandRemovalMETA(XrEnvironmentDepthProviderMETA, const XrEnvironmentDepthHandRemovalSetInfoMETA *) { ONCE("UNSUPPORTED FEATURE  xrSetEnvironmentDepthHandRemovalMETA: answered XR_ERROR_FEATURE_UNSUPPORTED (the depth picture has no hands in it)"); return XR_ERROR_FEATURE_UNSUPPORTED; }      // there are no hands in it to remove
 XrResult XRAPI_CALL uAcquireEnvironmentDepthImageMETA(XrEnvironmentDepthProviderMETA h, const XrEnvironmentDepthImageAcquireInfoMETA *info, XrEnvironmentDepthImageMETA *image) {
     auto *p = (DepthProvider *)(uintptr_t)h; if (!p || !info || !image) return XR_ERROR_VALIDATION_FAILURE;
     if (!p->running || !p->tex || !rLocateViews || eglGetCurrentContext() == EGL_NO_CONTEXT) return XR_ENVIRONMENT_DEPTH_NOT_AVAILABLE_META;
@@ -657,6 +772,44 @@ XrResult XRAPI_CALL uGetHandMeshFB(XrHandTrackerEXT t, XrHandTrackingMeshFB *out
     return XR_SUCCESS;
 }
 
+// ---------------------------------------------------------------- calls passed on, written down for the diagnostics
+XrResult XRAPI_CALL uCreateSwapchain(XrSession s, const XrSwapchainCreateInfo *ci, XrSwapchain *out) {
+    lastCall = "xrCreateSwapchain"; XrResult r = rCreateSwapchain(s, ci, out);
+    if (ci) diag("%s  xrCreateSwapchain format 0x%llx, %ux%u, %u samples, %u array layers, %u faces, %u mips, usage 0x%llx: %s", XR_FAILED(r) ? "FAILED" : "ok", (unsigned long long)ci->format, ci->width, ci->height, ci->sampleCount, ci->arraySize, ci->faceCount, ci->mipCount, (unsigned long long)ci->usageFlags, resultName(r));
+    if (XR_FAILED(r) && rSwapchainFormats) { int64_t f[64]; uint32_t n = 0; if (XR_SUCCEEDED(rSwapchainFormats(s, 64, &n, f))) { std::string l; char b[24]; for (uint32_t i = 0; i < n; i++) { snprintf(b, sizeof b, " 0x%llx", (unsigned long long)f[i]); l += b; } diag("        the runtime's swapchain formats:%s", l.c_str()); } }
+    return r;
+}
+XrResult XRAPI_CALL uCreateReferenceSpace(XrSession s, const XrReferenceSpaceCreateInfo *ci, XrSpace *out) {
+    lastCall = "xrCreateReferenceSpace"; XrResult r = rCreateReferenceSpace(s, ci, out);
+    if (ci) { const char *n = ci->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_VIEW ? "VIEW" : ci->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL ? "LOCAL" : ci->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_STAGE ? "STAGE" : ci->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR_EXT ? "LOCAL_FLOOR" : "other";
+        if (XR_FAILED(r)) diag("FAILED  xrCreateReferenceSpace type %d (%s): %s", (int)ci->referenceSpaceType, n, resultName(r)); else diag("ok  xrCreateReferenceSpace %s", n); }
+    return r;
+}
+XrResult XRAPI_CALL uSuggestBindings(XrInstance i, const XrInteractionProfileSuggestedBinding *b) {
+    lastCall = "xrSuggestInteractionProfileBindings"; XrResult r = rSuggestBindings(i, b);
+    if (b) diag("%s  xrSuggestInteractionProfileBindings %s, %u bindings: %s", XR_FAILED(r) ? "FAILED" : "ok", pathName(b->interactionProfile).c_str(), b->countSuggestedBindings, resultName(r));
+    if (b && XR_FAILED(r) && b->suggestedBindings) for (uint32_t k = 0; k < b->countSuggestedBindings && k < 80; k++) diag("        binding %s", pathName(b->suggestedBindings[k].binding).c_str());
+    return r;
+}
+XrResult XRAPI_CALL uAttachActionSets(XrSession s, const XrSessionActionSetsAttachInfo *i) {
+    lastCall = "xrAttachSessionActionSets"; XrResult r = rAttachActionSets(s, i);
+    diag("%s  xrAttachSessionActionSets %u sets: %s", XR_FAILED(r) ? "FAILED" : "ok", i ? i->countActionSets : 0, resultName(r)); return r;
+}
+XrResult XRAPI_CALL uBeginSession(XrSession s, const XrSessionBeginInfo *i) {
+    lastCall = "xrBeginSession"; XrResult r = rBeginSession(s, i);
+    diag("%s  xrBeginSession view configuration %d: %s", XR_FAILED(r) ? "FAILED" : "ok", i ? (int)i->primaryViewConfigurationType : 0, resultName(r)); return r;
+}
+XrResult XRAPI_CALL uSyncActions(XrSession s, const XrActionsSyncInfo *i) {
+    XrResult r = rSyncActions(s, i); if (XR_FAILED(r)) { lastCall = "xrSyncActions"; ONCE("FAILED  xrSyncActions: %s (said once)", resultName(r)); } return r;
+}
+void noteProfiles(XrSession s) {
+    if (!rCurrentProfile || !rStringToPath || !instance) return;
+    for (const char *hand : {"/user/hand/left", "/user/hand/right"}) {
+        XrPath p = XR_NULL_PATH; rStringToPath(instance, hand, &p); XrInteractionProfileState st{XR_TYPE_INTERACTION_PROFILE_STATE};
+        XrResult r = rCurrentProfile(s, p, &st); diag("INPUT  %s is now %s", hand, XR_SUCCEEDED(r) ? pathName(st.interactionProfile).c_str() : resultName(r));
+    }
+}
+
 // ---------------------------------------------------------------- calls we pass on, with a hand in them
 XrResult XRAPI_CALL uLocateSpace(XrSpace space, XrSpace base, XrTime time, XrSpaceLocation *loc) {
     Entity *a = entity(space), *b = entity(base);
@@ -674,8 +827,10 @@ XrResult XRAPI_CALL uLocateSpace(XrSpace space, XrSpace base, XrTime time, XrSpa
 }
 XrResult XRAPI_CALL uDestroySpace(XrSpace s) { if (isEntity(s)) return XR_SUCCESS; return rDestroySpace(s); }
 XrResult XRAPI_CALL uWaitFrame(XrSession s, const XrFrameWaitInfo *i, XrFrameState *st) {
-    XrResult r = rWaitFrame(s, i, st);
+    lastCall = "xrWaitFrame"; XrResult r = rWaitFrame(s, i, st);
     if (XR_SUCCEEDED(r)) { std::lock_guard<std::mutex> g(lock); lastTime = st->predictedDisplayTime; align(); }
+    else ONCE("FAILED  xrWaitFrame: %s (said once)", resultName(r));
+    long n = ++frameCount; if (n == 1) diag("FRAMES  the game's first frame"); else if (n % 1800 == 0) diagSummary("running");
     return r;
 }
 XrResult XRAPI_CALL uEndFrame(XrSession s, const XrFrameEndInfo *info) {
@@ -683,11 +838,29 @@ XrResult XRAPI_CALL uEndFrame(XrSession s, const XrFrameEndInfo *info) {
     std::vector<const XrCompositionLayerBaseHeader *> keep; keep.reserve(info->layerCount);
     for (uint32_t i = 0; i < info->layerCount; i++) { if (info->layers[i] && info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB) passthroughLayersDropped++; else keep.push_back(info->layers[i]); }
     XrFrameEndInfo e = *info; e.layerCount = (uint32_t)keep.size(); e.layers = keep.empty() ? nullptr : keep.data();
-    return rEndFrame(s, &e);
+    lastCall = "xrEndFrame"; XrResult r = rEndFrame(s, &e);
+    static std::atomic<int> said{0}; static std::atomic<uint32_t> lastShape{0xffffffffu};
+    uint32_t shape = (uint32_t)info->environmentBlendMode * 131u + info->layerCount; for (uint32_t i = 0; i < info->layerCount; i++) shape = shape * 31u + (info->layers[i] ? (uint32_t)info->layers[i]->type : 0u);
+    if ((XR_FAILED(r) || lastShape.exchange(shape) != shape) && said++ < 12) {      // the first frame, and whenever what is sent changes
+        std::string l; char b[48];
+        for (uint32_t i = 0; i < info->layerCount; i++) { int t = info->layers[i] ? (int)info->layers[i]->type : 0;
+            snprintf(b, sizeof b, " %s", t == XR_TYPE_COMPOSITION_LAYER_PROJECTION ? "projection" : t == XR_TYPE_COMPOSITION_LAYER_QUAD ? "quad" : t == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB ? "passthrough(taken out)" : t == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR ? "cylinder" : t == XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR ? "equirect2" : t == XR_TYPE_COMPOSITION_LAYER_CUBE_KHR ? "cube" : "");
+            if (!b[1]) snprintf(b, sizeof b, " type-%d", t); l += b; }
+        diag("%s  xrEndFrame blend mode %d, %u layers:%s: %s", XR_FAILED(r) ? "FAILED" : "ok", (int)info->environmentBlendMode, info->layerCount, l.c_str(), resultName(r));
+    }
+    if (XR_FAILED(r)) endFrameFails++;
+    return r;
 }
 XrResult XRAPI_CALL uPollEvent(XrInstance i, XrEventDataBuffer *buf) {
     { std::lock_guard<std::mutex> g(lock); if (!events.empty()) { memcpy(buf, events.front().data(), events.front().size()); events.pop_front(); return XR_SUCCESS; } }
-    return rPollEvent(i, buf);
+    XrResult r = rPollEvent(i, buf);
+    if (r == XR_SUCCESS) {
+        if (buf->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) diag("SESSION  state %s", stateName(((XrEventDataSessionStateChanged *)buf)->state));
+        else if (buf->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) noteProfiles(((XrEventDataInteractionProfileChanged *)buf)->session);
+        else if (buf->type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) diag("LOST  the runtime says the instance is about to be lost");
+        else if (buf->type == XR_TYPE_EVENT_DATA_EVENTS_LOST) diag("EVENTS  the runtime dropped %u events", ((XrEventDataEventsLost *)buf)->lostEventCount);
+    }
+    return r;
 }
 XrResult XRAPI_CALL uGetSystemProperties(XrInstance i, XrSystemId id, XrSystemProperties *p) {
     XrResult r = rGetSystemProperties(i, id, p);
@@ -711,7 +884,12 @@ XrResult XRAPI_CALL uGetSystemProperties(XrInstance i, XrSystemId id, XrSystemPr
     return r;
 }
 XrResult XRAPI_CALL uCreateSession(XrInstance i, const XrSessionCreateInfo *info, XrSession *out) {
-    XrResult r = rCreateSession(i, info, out); if (XR_FAILED(r)) return r;
+    lastCall = "xrCreateSession"; XrResult r = rCreateSession(i, info, out);
+    const char *api = "no graphics binding";
+    for (const XrBaseInStructure *n = (const XrBaseInStructure *)info->next; n; n = n->next) { if (n->type == XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR) api = "OpenGL ES"; if (n->type == XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR) api = "Vulkan"; }
+    diag("%s  xrCreateSession with %s: %s", XR_FAILED(r) ? "FAILED" : "ok", api, resultName(r));
+    if (XR_FAILED(r)) return r;
+    if (rBlendModes) { XrEnvironmentBlendMode m[8]; uint32_t n = 0; if (XR_SUCCEEDED(rBlendModes(i, info->systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 8, &n, m))) { std::string l; char b[16]; for (uint32_t k = 0; k < n; k++) { snprintf(b, sizeof b, " %d", (int)m[k]); l += b; } diag("        blend modes the runtime takes:%s (1 opaque, 2 additive, 3 alpha blend)", l.c_str()); } }
     std::lock_guard<std::mutex> g(lock);
     session = *out; aligned = false; lastTime = 0; loadAnchors();
     sessionGles = false; for (const XrBaseInStructure *n = (const XrBaseInStructure *)info->next; n; n = n->next) if (n->type == XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR) sessionGles = true;
@@ -724,6 +902,7 @@ XrResult XRAPI_CALL uCreateSession(XrInstance i, const XrSessionCreateInfo *info
     return r;
 }
 XrResult XRAPI_CALL uDestroySession(XrSession s) {
+    diagSummary("session destroyed");
     if (running.exchange(false) && poller.joinable()) poller.join();
     { std::lock_guard<std::mutex> g(lock); if (roomRef) rDestroySpace(roomRef); if (viewRef) rDestroySpace(viewRef); roomRef = viewRef = XR_NULL_HANDLE; session = XR_NULL_HANDLE; }
     return rDestroySession(s);
@@ -757,6 +936,8 @@ struct Entry { const char *name; PFN_xrVoidFunction fn; };
 #define E(n, f) {n, (PFN_xrVoidFunction)f}
 const Entry table[] = {
     E("xrDestroyInstance", uDestroyInstance), E("xrGetSystemProperties", uGetSystemProperties), E("xrCreateSession", uCreateSession), E("xrDestroySession", uDestroySession),
+    E("xrCreateSwapchain", uCreateSwapchain), E("xrCreateReferenceSpace", uCreateReferenceSpace), E("xrSuggestInteractionProfileBindings", uSuggestBindings),
+    E("xrAttachSessionActionSets", uAttachActionSets), E("xrBeginSession", uBeginSession), E("xrSyncActions", uSyncActions),
     E("xrLocateSpace", uLocateSpace), E("xrDestroySpace", uDestroySpace), E("xrWaitFrame", uWaitFrame), E("xrEndFrame", uEndFrame), E("xrPollEvent", uPollEvent),
     E("xrLocateHandJointsEXT", uLocateHandJointsEXT), E("xrCreateHandTrackerEXT", uCreateHandTrackerEXT), E("xrGetHandMeshFB", uGetHandMeshFB),
     E("xrGetSpaceTriangleMeshMETA", uGetSpaceTriangleMeshMETA), E("xrRequestSceneCaptureFB", uRequestSceneCaptureFB), E("xrShareSpacesFB", uShareSpacesFB),
@@ -785,23 +966,53 @@ XrResult XRAPI_CALL uGetInstanceProcAddr(XrInstance i, const char *name, PFN_xrV
     }
     // asked before the instance exists (the loader looks the layer over first): nothing below us yet
     if (!nextGipa) { *fn = nullptr; return XR_ERROR_FUNCTION_UNSUPPORTED; }
-    return nextGipa(i, name, fn);
+    XrResult r = nextGipa(i, name, fn);
+    // not there: a stand-in that answers "unsupported" and writes the call down (see stubFor)
+    if ((XR_FAILED(r) || !*fn) && i != XR_NULL_HANDLE && name && name[0] == 'x' && name[1] == 'r') { PFN_xrVoidFunction s = stubFor(name); if (s) { *fn = s; return XR_SUCCESS; } }
+    return r;
 }
 XrResult XRAPI_CALL uCreateApiLayerInstance(const XrInstanceCreateInfo *info, const XrApiLayerCreateInfo *layerInfo, XrInstance *out) {
     if (!layerInfo || !layerInfo->nextInfo) return XR_ERROR_INITIALIZATION_FAILED;
     // our extensions are ours: the runtime is not asked for them
-    std::vector<const char *> ext;
-    for (uint32_t i = 0; i < info->enabledExtensionCount; i++) { bool mine = false; for (auto o : OURS) if (strcmp(o, info->enabledExtensionNames[i]) == 0) mine = true; if (!mine) ext.push_back(info->enabledExtensionNames[i]); }
+    hookCrashes();
+    std::vector<const char *> ext; std::string mineList;
+    for (uint32_t i = 0; i < info->enabledExtensionCount; i++) { bool mine = false; for (auto o : OURS) if (strcmp(o, info->enabledExtensionNames[i]) == 0) mine = true; if (!mine) ext.push_back(info->enabledExtensionNames[i]); else { mineList += " "; mineList += info->enabledExtensionNames[i] + 3; } }
+    diag("GAME  %s (package %s), engine %s %u, asks for OpenXR %u.%u.%u", info->applicationInfo.applicationName, packageName().c_str(), info->applicationInfo.engineName, info->applicationInfo.engineVersion,
+         (unsigned)XR_VERSION_MAJOR(info->applicationInfo.apiVersion), (unsigned)XR_VERSION_MINOR(info->applicationInfo.apiVersion), (unsigned)XR_VERSION_PATCH(info->applicationInfo.apiVersion));
+    if (!diagPath.empty()) diag("LOG  this file: %s", diagPath.c_str());
+    // The layer keeps the room in a floor-level space of its own: that needs XR_EXT_local_floor enabled, whether or
+    // not the application asked for it. (A runtime without it refuses the instance: then it is asked again without.)
+    bool addedFloor = false; { bool has = false; for (auto e : ext) if (strcmp(e, "XR_EXT_local_floor") == 0) has = true; if (!has) { ext.push_back("XR_EXT_local_floor"); addedFloor = true; } }
     XrInstanceCreateInfo ci = *info; ci.enabledExtensionCount = (uint32_t)ext.size(); ci.enabledExtensionNames = ext.data();
     XrApiLayerCreateInfo li = *layerInfo; li.nextInfo = layerInfo->nextInfo->next;
     nextGipa = layerInfo->nextInfo->nextGetInstanceProcAddr;
     XrResult r = layerInfo->nextInfo->nextCreateApiLayerInstance(&ci, &li, out);
-    if (XR_FAILED(r)) return r;
+    if (r == XR_ERROR_EXTENSION_NOT_PRESENT && addedFloor) { ext.pop_back(); addedFloor = false; ci.enabledExtensionCount = (uint32_t)ext.size(); ci.enabledExtensionNames = ext.data(); r = layerInfo->nextInfo->nextCreateApiLayerInstance(&ci, &li, out); }
+    std::vector<const char *> refused;
+    if (r == XR_ERROR_EXTENSION_NOT_PRESENT) {
+        // The game enabled an extension nobody has. A Quest game does that when what stands in front of it promised
+        // more than there is. Find which, say so, and go on without them: what the game then calls is written down too.
+        PFN_xrEnumerateInstanceExtensionProperties en = nullptr; nextGipa(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", (PFN_xrVoidFunction *)&en);
+        uint32_t n = 0; std::vector<XrExtensionProperties> have;
+        if (en && XR_SUCCEEDED(en(nullptr, 0, &n, nullptr)) && n) { have.assign(n, {XR_TYPE_EXTENSION_PROPERTIES}); if (XR_FAILED(en(nullptr, n, &n, have.data()))) have.clear(); }
+        if (!have.empty()) {
+            std::vector<const char *> kept;
+            for (auto e : ext) { bool ok = false; for (auto &h : have) if (strcmp(h.extensionName, e) == 0) ok = true; (ok ? kept : refused).push_back(e); }
+            for (auto e : refused) diag("UNSUPPORTED EXTENSION  %s: enabled by the game, in neither the runtime nor the layer; left out so the game can go on", e);
+            if (!refused.empty()) { ext = kept; ci.enabledExtensionCount = (uint32_t)ext.size(); ci.enabledExtensionNames = ext.data(); r = layerInfo->nextInfo->nextCreateApiLayerInstance(&ci, &li, out); }
+        } else diag("FAILED  the runtime refused an extension and its list could not be read to say which");
+    }
+    { std::string l; for (auto e : ext) { l += " "; l += e + 3; }
+      diag("EXTENSIONS  %u enabled by the game: answered by the layer:%s | passed to the runtime:%s%s | unsupported: %u", info->enabledExtensionCount, mineList.empty() ? " none" : mineList.c_str(), l.empty() ? " none" : l.c_str(), addedFloor ? " (local_floor added by the layer)" : "", (unsigned)refused.size()); }
+    if (XR_FAILED(r)) { diag("FAILED  xrCreateInstance: %s (the game cannot start)", resultName(r)); return r; }
     instance = *out;
 #define R(n, v) nextGipa(instance, n, (PFN_xrVoidFunction *)&v)
     R("xrDestroyInstance", rDestroyInstance); R("xrGetSystemProperties", rGetSystemProperties); R("xrCreateSession", rCreateSession); R("xrDestroySession", rDestroySession);
     R("xrCreateReferenceSpace", rCreateReferenceSpace); R("xrDestroySpace", rDestroySpace); R("xrLocateSpace", rLocateSpace); R("xrPollEvent", rPollEvent);
     R("xrWaitFrame", rWaitFrame); R("xrEndFrame", rEndFrame); R("xrLocateViews", rLocateViews);
+    R("xrCreateSwapchain", rCreateSwapchain); R("xrSuggestInteractionProfileBindings", rSuggestBindings); R("xrAttachSessionActionSets", rAttachActionSets); R("xrBeginSession", rBeginSession);
+    R("xrSyncActions", rSyncActions); R("xrPathToString", rPathToString); R("xrStringToPath", rStringToPath); R("xrGetCurrentInteractionProfile", rCurrentProfile);
+    R("xrEnumerateSwapchainFormats", rSwapchainFormats); R("xrEnumerateEnvironmentBlendModes", rBlendModes);
     rLocateHandJoints = nullptr; R("xrLocateHandJointsEXT", rLocateHandJoints); rCreateHandTracker = nullptr; R("xrCreateHandTrackerEXT", rCreateHandTracker);
     LOGI("layer active over the runtime (%u of the application's %u extensions passed down)", (unsigned)ext.size(), info->enabledExtensionCount);
     return r;
