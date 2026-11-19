@@ -92,6 +92,27 @@ seen is not settled. And a test of hands must keep the phone's screen untouched,
 right hand. The test now reads both hands every frame and reports "as the other hand" separately (checked on the
 phone without glasses, 59 of 60); hand steadiness has not yet been measured with it.
 
+A fifth worn run, cued and recorded (raw camera data kept privately, outside Git), both hands read every frame,
+20 s a hand, 60 readings a second:
+
+| Asked for | As that hand | As the other only | As both | No hand | Pinches | Strongest pinch |
+|---|---|---|---|---|---|---|
+| left | 15 | 0 | 1185 | 0 | 6 | 1.00 |
+| right | 820 | 232 | 0 | 148 | 1 | 1.00 |
+
+- The left hand was reported in every reading of its window, with no gap, and its pinches registered (the app's
+  record: 7 pinches, smallest thumb-to-index gap 18 mm).
+- In the right window, the first 232 readings (3.9 s) as "left only" and the 148 with no hand (2.5 s) are the
+  wearer still holding the left hand up until the cue arrived and then changing hands; after that the right hand
+  was reported in every reading (820, 13.7 s).
+- Right-hand pinches were again not seen: the app's record has 0 right pinches and a smallest gap of 40 mm (50 mm
+  in the fourth run), against 18 mm on the left. The one pinch counted in the right window was the left hand's,
+  before the change. Two runs now agree: pinching with the right hand does not register.
+- During the left window a right hand was also reported in 1185 of 1200 readings, and the app's record has 970
+  right-hand frames (about 32 s) in a run where the right hand was asked for during 20 s. Whether the wearer's
+  right hand was in the cameras' view then is not known; if it was not, the tracker is reporting a second hand
+  that is not there.
+
 ## Open
 
 1. **Without glasses, a native app whose window is not showing loses the runtime.** Cause found: with no glasses
