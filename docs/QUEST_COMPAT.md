@@ -340,6 +340,22 @@ completely. Screen is upside down. Hand gestures won't recognise unless I'm reac
 - **The panel's distance.** About half a metre by the offset between the two eyes' pictures, which is where
   Unity's template puts it for a headset with twice the field of view. Nothing was changed.
 
+### Unity's example again, with the new logging (19 November, 16:50)
+
+Worn, 80 s recorded. The first start of this session never reached OpenXR (no line from Unity or the loader, cause
+not found); stopped and started again it ran: 5400 frames, no failed `xrEndFrame`, nothing unsupported.
+
+- The view was upright from the start; the estimator's down stayed within 0.4 degrees of the accelerometer's in
+  every check. The guard was therefore not exercised.
+- Where the right hand was found (543 looks): 40 to 50 cm from the head in 465, 30 to 40 cm in 45, 50 to 60 cm in
+  29, 20 to 30 cm in 4, never nearer; between level with the line of sight and 15 degrees below it in 360, 15 to
+  30 below in 167, lower in 16, never above. The left hand was never found (the wearer holds the phone in it).
+- The right hand was there in 1958 of 3599 readings in the first half minute, 1298 of 3600 in the second, none in
+  the third.
+- The phone was hot: thermal status 3 (severe) 20 s in, skin 41.8 C, processor 49.8 C, after an afternoon of runs.
+  At severe hand tracking is halved and the room is looked at every 1.7 s; dense depth took up to 0.9 s a picture.
+  Numbers from this run are numbers from a hot phone.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
