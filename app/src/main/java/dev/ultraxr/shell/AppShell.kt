@@ -20,6 +20,8 @@ object AppShell {
     private val queue = LinkedBlockingQueue<Pair<String, ((String) -> Unit)?>>()
     private var thread: Thread? = null
     private var token = ""
+    private var app: Context? = null
+    private var startTriedNs = 0L
 
     /** Writes the token the helper must be given (it reads the file when it starts) and starts trying to reach it. */
     @Synchronized fun start(context: Context) {
@@ -30,6 +32,7 @@ object AppShell {
             val r = java.security.SecureRandom(); token = (1..32).map { "0123456789abcdef"[r.nextInt(16)] }.joinToString("")
             try { f.writeText(token) } catch (e: Exception) { lastError = e.toString() }
         }
+        app = context.applicationContext
         thread = Thread({ loop() }, "app-shell").apply { isDaemon = true; start() }
     }
 
@@ -44,6 +47,9 @@ object AppShell {
                 w.write((token + "\n").toByteArray()); w.flush()
                 val hello = r.readLine() ?: throw java.io.IOException("closed")
                 if (!hello.startsWith("ok")) throw java.io.IOException("refused: $hello")
+                // a helper left from before an update runs from a file that is gone: it ends, and the new one is started
+                val from = hello.split(' ').getOrElse(2) { "" }; val mine = app?.applicationInfo?.sourceDir ?: ""
+                if (from.isNotEmpty() && mine.isNotEmpty() && from != mine) { w.write("quit\n".toByteArray()); w.flush(); r.readLine(); throw java.io.IOException("helper from an older install, replaced") }
                 if (!available) Tracking.log("apps: the shell helper answers ($hello): other apps can run in windows")
                 available = true; lastError = ""
                 while (true) {
@@ -59,6 +65,13 @@ object AppShell {
                 // what was asked of a helper that is not there is not kept for one that may come later
                 while (true) { val c = queue.poll() ?: break; try { c.second?.invoke("error no helper") } catch (_: Throwable) {} }
             } finally { try { s?.close() } catch (_: Exception) {} }
+            // No helper: start it from the phone itself, if its owner has debugging over the network on. Not more
+            // often than every 20 s; the first time Android asks the owner on the screen.
+            val c = app; val now = System.nanoTime()
+            if (!available && c != null && now - startTriedNs > 20_000_000_000L) {
+                startTriedNs = now
+                if (AdbStarter.startHelper(c)) { try { Thread.sleep(1500) } catch (_: InterruptedException) { return }; continue }
+            }
             try { Thread.sleep(3000) } catch (_: InterruptedException) { return }
         }
     }

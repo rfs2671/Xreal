@@ -183,3 +183,27 @@ may refuse to play or play at low quality.
     *Pass:* the same windows return in the same places.
 
 Report the step numbers that failed and what you saw.
+
+## Other apps in windows (18 November 2026)
+
+A window can hold another installed app instead of a page. It is a virtual display of this app with nothing of ours
+on it; a helper process (`dev.ultraxr.shell.ShellMain`) running as the phone's "shell" user starts the app's activity
+on that display and passes it touches, keys and typed text. Android allows only that user both. The helper listens
+on 127.0.0.1 and obeys only a caller with the token in the app's own folder.
+
+How the helper gets started:
+
+- from a computer: `adb push tools/pixel/uxr_helper.sh /data/local/tmp/ && adb shell sh /data/local/tmp/uxr_helper.sh`;
+- by the app itself (`AdbStarter`), when the owner has debugging over the network on (`adb tcpip 5555`, which lasts
+  until the phone restarts): it speaks adb to 127.0.0.1:5555. The first time Android asks on the screen whether this
+  app's key may debug the phone. The app changes no setting to get there.
+
+After an update the app ends a helper that runs from the old install and starts the new one.
+
+Seen on a Galaxy S21 Ultra (Android 13), on the phone's preview and on the glasses' display: the YouTube app in a
+window; Settings in a window, a tap opening one of its pages (even one from another package), Back returning;
+the window turned upright (720 x 1280) with the app laid out as on a phone. Not tried: typed text, video that
+insists on a protected screen, a game controller. Not built: a window of any other size than those two.
+
+In the glasses: the home view has "All apps" (every app with a launcher icon, twelve to a page) and "System"
+(hands on or off, recentre, gather windows, close all); the dock under the windows has "Menu", back to the home view.

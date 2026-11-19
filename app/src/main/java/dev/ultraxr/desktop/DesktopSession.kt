@@ -73,8 +73,8 @@ class DesktopSession(private val activity: Activity) {
         val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
         (games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
             HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, tints[i % tints.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
-        } + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) }).take(HomeGrid.MAX - 1) +
-            HomeItem("All apps", HomeItem.Kind.NAV, "nav:apps", 0xFF607D8B.toInt())
+        } + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) }).take(HomeGrid.MAX - 2) +
+            HomeItem("All apps", HomeItem.Kind.NAV, "nav:apps", 0xFF607D8B.toInt()) + HomeItem("System", HomeItem.Kind.NAV, "nav:system", 0xFF455A64.toInt())
     }
     /** What the home view shows now: its first page (games, the web apps, "All apps"), or a page of the phone's apps. */
     @Volatile var homeItems: List<HomeItem> = firstPage; private set
@@ -87,14 +87,32 @@ class DesktopSession(private val activity: Activity) {
             d.setBounds(0, 0, 144, 144); d.draw(Canvas(b)); b
         } catch (_: Throwable) { null }
     }
-    /** Page 0 is the first page; 1 and up are the phone's apps. */
+    /** The system page: what otherwise needs the phone's screen. Each tile says what it is now and does the other. */
+    private fun systemPage(): List<HomeItem> = listOf(
+        HomeItem(if (Tracking.handsOn) "Hands: on" else "Hands: off", HomeItem.Kind.NAV, "sys:hands", if (Tracking.handsOn) 0xFF2E7D32.toInt() else 0xFF8D6E63.toInt()),
+        HomeItem("Recentre", HomeItem.Kind.NAV, "sys:recentre", 0xFF1E88E5.toInt()),
+        HomeItem("Gather windows", HomeItem.Kind.NAV, "sys:gather", 0xFF8E24AA.toInt()),
+        HomeItem("Close all", HomeItem.Kind.NAV, "sys:closeall", 0xFFE53935.toInt()),
+        HomeItem(if (dev.ultraxr.shell.AppShell.available) "Apps: ready" else "Apps: helper off", HomeItem.Kind.NAV, "sys:apps", if (dev.ultraxr.shell.AppShell.available) 0xFF2E7D32.toInt() else 0xFF8D6E63.toInt()),
+        HomeItem("Home", HomeItem.Kind.NAV, "nav:home", 0xFF607D8B.toInt()))
+    private fun system(what: String) {
+        when (what) {
+            "sys:hands" -> Tracking.setHandTracking(!Tracking.handsOn)
+            "sys:recentre" -> recenter()
+            "sys:gather" -> gather()
+            "sys:closeall" -> for (w in desktop.windows.toList()) close(w.id)
+        }
+        showHomePage(-1)
+    }
+
+    /** Page 0 is the first page; 1 and up are the phone's apps; -1 is the system page. */
     fun showHomePage(page: Int) {
         val per = HomeGrid.MAX - 2
         val apps = installedApps ?: dev.ultraxr.shell.AppShell.installed(activity).also { installedApps = it }
         val pages = maxOf(1, (apps.size + per - 1) / per)
         homePage = page.coerceIn(0, pages)
         val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
-        homeItems = if (homePage == 0) firstPage else
+        homeItems = if (page < 0) systemPage() else if (homePage == 0) firstPage else
             apps.drop((homePage - 1) * per).take(per).mapIndexed { i, a -> HomeItem(a.label, HomeItem.Kind.APP, "app://" + a.component, tints[i % tints.size], icon = appIcon(a.pkg)) } +
                 HomeItem("Home", HomeItem.Kind.NAV, "nav:home", 0xFF607D8B.toInt()) +
                 (if (homePage < pages) listOf(HomeItem("More", HomeItem.Kind.NAV, "nav:next", 0xFF607D8B.toInt())) else emptyList())
@@ -110,7 +128,11 @@ class DesktopSession(private val activity: Activity) {
     /** Opens what the icon stands for. */
     fun activateHome(i: Int) {
         val item = homeItems.getOrNull(i) ?: return
-        if (item.kind == HomeItem.Kind.NAV) { showHomePage(when (item.url) { "nav:apps" -> 1; "nav:next" -> homePage + 1; else -> 0 }); onLookPress?.invoke(); return }
+        if (item.kind == HomeItem.Kind.NAV) {
+            if (item.url.startsWith("sys:")) system(item.url)
+            else showHomePage(when (item.url) { "nav:apps" -> 1; "nav:next" -> homePage + 1; "nav:system" -> -1; else -> 0 })
+            onLookPress?.invoke(); return
+        }
         if (item.kind == HomeItem.Kind.APP) {
             if (dev.ultraxr.shell.AppShell.available) openApp(item.title, item.url.removePrefix("app://"))
             else Tracking.log("apps: " + item.title + " not opened: the app helper is not running (tools/pixel/uxr_helper.sh)")
@@ -148,7 +170,7 @@ class DesktopSession(private val activity: Activity) {
                 if (m.title != t || m.url != ww.url) { m.title = t; m.url = ww.url; desktop.touch() }
             }
             onChanged?.invoke()
-        }.also { ww -> surfaces[w.id]?.let { ww.attach(it) } }
+        }.also { ww -> ww.setTall(w.aspect < 0.8); surfaces[w.id]?.let { ww.attach(it) } }
     }
 
     /** GL thread: the renderer made (or dropped) the texture a window renders into. */
@@ -162,6 +184,7 @@ class DesktopSession(private val activity: Activity) {
 
     // ---- actions from the phone UI
     fun open(app: HomeApp): Boolean {
+        if (app.kind == "nav") { showHomePage(0); showHome(); return true }
         // the real app when it is installed and the helper that can put it in a window is running; else its site
         val comp = if (app.pkg.isNotEmpty() && dev.ultraxr.shell.AppShell.available) dev.ultraxr.shell.AppShell.componentOf(activity, app.pkg) else null
         return if (comp != null) openApp(app.title, comp) else open(app.title, app.url, app.kind)
@@ -176,6 +199,14 @@ class DesktopSession(private val activity: Activity) {
         val w = desktop.add(title, url, kind, headYaw()) ?: return false
         if (w.follow) w.yaw = 0.0
         ensureWeb(w); cursors[w.id] = doubleArrayOf(0.5, 0.5); changed(); return true
+    }
+    /** The focused window stands up like a phone, or lies down again; it keeps its height. */
+    fun toggleShape() {
+        val w = desktop.focused ?: return
+        val h = w.height; val tall = w.aspect >= 0.8
+        w.aspect = if (tall) 9.0 / 16.0 else 16.0 / 9.0
+        w.width = (h * w.aspect).coerceIn(DesktopWindow.MIN_WIDTH, DesktopWindow.MAX_WIDTH)
+        web[w.id]?.setTall(tall); cursors[w.id] = doubleArrayOf(0.5, 0.5); desktop.touch(); changed()
     }
     fun close(id: Int) { web.remove(id)?.destroy(); bars.remove(id); cursors.remove(id); desktop.close(id); changed() }
     fun focus(id: Int) { desktop.focus(id); changed() }
@@ -325,7 +356,7 @@ class DesktopSession(private val activity: Activity) {
         // Look-to-press: the home's icons, the dock's apps and the title-bar buttons.
         var looked: String? = null
         if (lookToPress && !full && nowNs - padTouchNs > 700_000_000L && !handDown) {
-            val tile = if (showHome) null else Rail.dockTile(origin, forward, anchor, desktop.followAnchor.yaw, HomeApps.all.size)
+            val tile = if (showHome) null else Rail.dockTile(origin, forward, anchor, desktop.followAnchor.yaw, HomeApps.dock.size)
             // an icon opens by looking only when there is a head to look with (not in the phone preview) and it was not chosen with the keys
             if (showHome && hover >= 0 && tracked && !(keyHover == hover && nowNs - keyNs < KEY_HOLD_NS)) { looked = "home:$hover"; ringDistance = DesktopRenderer.HOME_DISTANCE }
             else if (showHome) { }
@@ -344,7 +375,7 @@ class DesktopSession(private val activity: Activity) {
         homeProgress = if (onHome) homeDwell.progress else 0.0
         if (fire != null) {
             if (fire.startsWith("home:")) activateHome(fire.substring(5).toInt())
-            else if (fire.startsWith("dock:")) { open(HomeApps.all[fire.substring(5).toInt()]); onLookPress?.invoke() }
+            else if (fire.startsWith("dock:")) { open(HomeApps.dock[fire.substring(5).toInt()]); onLookPress?.invoke() }
             else { val p = fire.split(":"); barAction(p[1].toInt(), BarButton.valueOf(p[2])); onLookPress?.invoke() }
         }
 
@@ -524,7 +555,7 @@ class DesktopSession(private val activity: Activity) {
             if (ic != null) {      // an installed app: its own icon, cut round like the others
                 val save = c.save(); val clip = android.graphics.Path().apply { addCircle(cx, cy, r, android.graphics.Path.Direction.CW) }
                 c.clipPath(clip); p.isFilterBitmap = true; c.drawBitmap(ic, null, RectF(cx - r, cy - r, cx + r, cy + r), p); c.restoreToCount(save)
-            } else HomeIcon.draw(c, p, cx, cy, r, item.color, item.kind == HomeItem.Kind.GAME, if (item.kind == HomeItem.Kind.NAV) (if (item.url == "nav:home") "⌂" else "⋯") else item.title.take(1), item.verified, on)
+            } else HomeIcon.draw(c, p, cx, cy, r, item.color, item.kind == HomeItem.Kind.GAME, if (item.kind == HomeItem.Kind.NAV) (when { item.url == "nav:home" -> "⌂"; item.url == "nav:apps" || item.url == "nav:next" -> "⋯"; item.url == "nav:system" -> "⚙"; else -> item.title.take(1) }) else item.title.take(1), item.verified, on)
             p.textAlign = Paint.Align.CENTER
             // looking alone: a thin arc closes around the icon, and it opens when the circle is whole
             if (on && progress > 0f) {
@@ -552,7 +583,7 @@ class DesktopSession(private val activity: Activity) {
         val bw = 1100; val bh = 220
         val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
         val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER
-        val apps = HomeApps.all; val tile = bw / apps.size.toFloat()
+        val apps = HomeApps.dock; val tile = bw / apps.size.toFloat()
         // One glass bar with the same round icons as the home view. Where each app sits is unchanged (Rail.dockTile).
         val bar = RectF(3f, 3f, bw - 3f, bh - 3f)
         p.style = Paint.Style.FILL
@@ -562,7 +593,7 @@ class DesktopSession(private val activity: Activity) {
         p.style = Paint.Style.STROKE; p.strokeWidth = 2.5f; c.drawRoundRect(bar, 70f, 70f, p); p.shader = null; p.style = Paint.Style.FILL
         for ((i, a) in apps.withIndex()) {
             val x = tile * (i + 0.5f)
-            HomeIcon.draw(c, p, x, 84f, 56f, a.color, false, a.title.take(1), false, false)
+            HomeIcon.draw(c, p, x, 84f, 56f, a.color, false, if (a.kind == "nav") "⌂" else a.title.take(1), false, false)
             p.textAlign = Paint.Align.CENTER; p.typeface = regular; p.textSize = 34f; p.color = Ink.WHITE_INT
             c.drawText(a.title, x, 190f, p)
         }

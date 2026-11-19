@@ -33,8 +33,15 @@ import dev.ultraxr.tracking.Tracking
  */
 @SuppressLint("SetJavaScriptEnabled")
 class WebWindow(private val context: Context, val id: Int, private val kind: String, initialUrl: String, private val darkPages: Boolean, private val onChanged: (WebWindow) -> Unit) {
-    val pixelWidth = PIXEL_WIDTH
+    var pixelWidth = PIXEL_WIDTH; private set
     var pixelHeight = PIXEL_HEIGHT; private set
+    /** Upright like a phone (720 x 1280) or lying like a screen (1280 x 720). The page or app inside is laid out anew. */
+    fun setTall(tall: Boolean) {
+        val pw = if (tall) PIXEL_HEIGHT else PIXEL_WIDTH; val ph = if (tall) PIXEL_WIDTH else PIXEL_HEIGHT
+        if (pw == pixelWidth && ph == pixelHeight) return
+        pixelWidth = pw; pixelHeight = ph
+        try { display?.resize(pw, ph, DENSITY) } catch (e: Exception) { Tracking.log("desktop: window $id could not change shape: $e") }
+    }
     var title: String = ""; private set
     var url: String = initialUrl; private set
     var loading = false; private set

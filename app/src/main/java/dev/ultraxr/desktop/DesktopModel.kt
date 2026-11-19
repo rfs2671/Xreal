@@ -275,6 +275,9 @@ object HomeApps {
         HomeApp("3D web", "https://threejs.org/examples/#webgl_animation_keyframes", "web", 0xFF8E24AA.toInt()),
     )
 
+    /** The dock under the windows: the same apps, and a way back to the main menu without the phone. */
+    val dock = all + HomeApp("Menu", "nav:home", "nav", 0xFF607D8B.toInt())
+
     /** Turns what the user typed into a URL: a full URL, a bare host, or a web search. */
     fun toUrl(input: String): String {
         val s = input.trim()

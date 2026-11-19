@@ -60,7 +60,7 @@ object Tracking : GlassesLink.Listener {
     @Volatile private var handsHandle = 0L
     /** Whether hands are being tracked now. Off: no pictures go to the hand tracker, no hand is reported, and the battery is spared. */
     @Volatile var handsOn = true; private set
-    fun setHandTracking(on: Boolean) { settings.handTracking = on; if (handsOn != on) { handsOn = on; log(if (on) "hand tracking switched on" else "hand tracking switched off") } }
+    fun setHandTracking(on: Boolean) { settings.handTracking = on; if (handsOn != on) { handsOn = on; if (!on) hands = emptyList() /* no hand, and no pinch, is left standing */; log(if (on) "hand tracking switched on" else "hand tracking switched off") } }
     @Volatile var handsError = ""; private set
     @Volatile var handsFrames = 0L; private set
     @Volatile var handsProcessMs = 0.0; private set

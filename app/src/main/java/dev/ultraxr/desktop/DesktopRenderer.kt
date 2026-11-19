@@ -67,7 +67,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     /** Distance between the wearer's eyes, metres. */
     @Volatile var ipdM = 0.064
 
-    private class Tex(val oes: Int, val st: SurfaceTexture, val surface: Surface) { @Volatile var dirty = false; val m = FloatArray(16).also { Matrix.setIdentityM(it, 0) }; var bar = 0; var barVersion = -1L; var hasFrame = false }
+    private class Tex(val oes: Int, val st: SurfaceTexture, val surface: Surface) { @Volatile var dirty = false; val m = FloatArray(16).also { Matrix.setIdentityM(it, 0) }; var bar = 0; var barVersion = -1L; var hasFrame = false; var tall = false; var sized = false }
     private val tex = HashMap<Int, Tex>()
     private var progOes = 0; private var prog2d = 0; private var progFlat = 0
     private var vao = 0
@@ -264,12 +264,15 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
                 GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
                 GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
                 GLES30.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-                val st = SurfaceTexture(ids[0]); st.setDefaultBufferSize(WebWindow.PIXEL_WIDTH, WebWindow.PIXEL_HEIGHT)
+                val st = SurfaceTexture(ids[0])
                 val nt = Tex(ids[0], st, Surface(st))
                 st.setOnFrameAvailableListener { nt.dirty = true }
                 tex[w.id] = nt; t = nt
                 onSurface(w.id, nt.surface)
             }
+            // the picture's size follows the window's shape: upright windows are 720 x 1280, the others 1280 x 720
+            val tall = w.width < w.height * 0.8
+            if (t.tall != tall || !t.sized) { t.tall = tall; t.sized = true; t.st.setDefaultBufferSize(if (tall) WebWindow.PIXEL_HEIGHT else WebWindow.PIXEL_WIDTH, if (tall) WebWindow.PIXEL_WIDTH else WebWindow.PIXEL_HEIGHT) }
             if (t.dirty) { t.dirty = false; try { t.st.updateTexImage(); t.st.getTransformMatrix(t.m); t.hasFrame = true } catch (_: Exception) {} }
         }
     }

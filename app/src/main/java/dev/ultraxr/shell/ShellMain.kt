@@ -29,6 +29,7 @@ import java.net.Socket
  *   text DISPLAY WORDS...           typed text
  *   stop PACKAGE                    end an app
  *   ping                            "ok" and this helper's version
+ *   quit                            this helper ends (the app starts the one from its newest file)
  */
 object ShellMain {
     const val PORT = 47811
@@ -52,7 +53,8 @@ object ShellMain {
             s.tcpNoDelay = true
             val r = BufferedReader(InputStreamReader(s.getInputStream())); val w = s.getOutputStream()
             if (r.readLine()?.trim() != token) { w.write("error token\n".toByteArray()); return }
-            w.write("ok $VERSION\n".toByteArray())
+            // which installed file this helper runs from: after the app is updated it is an old one, and the app replaces it
+            w.write(("ok $VERSION " + (System.getenv("CLASSPATH") ?: "") + "\n").toByteArray())
             while (true) {
                 val line = r.readLine() ?: break
                 val answer = try { command(line) } catch (t: Throwable) { "error " + t.toString().replace('\n', ' ') }
@@ -69,6 +71,7 @@ object ShellMain {
         val p = line.trim().split(' ')
         when (p[0]) {
             "ping" -> return "ok $VERSION"
+            "quit" -> { Thread { Thread.sleep(200); System.exit(0) }.start(); return "ok" }
             "launch" -> {
                 val display = p[1].toInt(); val component = p[2]
                 if (!safe.matches(component) || !component.contains('/')) return "error component"
