@@ -118,8 +118,24 @@ from behind and the fingertips hide each other); the rule was "under 33 mm". Eve
 of 30 mm or more to a steady low. PinchState now also starts a pinch on that movement. On the same recording,
 replayed on the S21 Ultra itself at 25 results a second: right hand 6 pinches before, 15 after, two seconds apart
 as they were made; left hand 7 before, 9 after; the two resting hands 1 and 0 before and after. On the recording of
-17 November: right 3 before, 4 after; left 3 before, 8 after (a run of quick dips to about 40 mm, 0.6 s apart). Not
-yet run live with the new build: the count a game gets is still to be measured on the glasses.
+17 November: right 3 before, 4 after; left 3 before, 8 after (a run of quick dips to about 40 mm, 0.6 s apart). 
+Live with the new build, worn, cued as before (20 s a hand, a pinch about every two seconds):
+
+| Asked for | As that hand | As the other only | As both | No hand | Pinches the test saw | Pinches in the app's record |
+|---|---|---|---|---|---|---|
+| left | 1200 (100 %) | 0 | 0 | 0 | 10 | 11 |
+| right | 867 | 247 | 30 | 56 | 8 | 6 |
+
+The right hand was up for about 15 of its 20 s (the first 4 s are the left hand still up until the cue arrived, and
+two of the test's 8 are its pinches), so 6 right-hand pinches are about one every two and a half seconds, where the
+two runs before had 0. The right hand's smallest gap was 22 mm this time, so some of the 6 may have been caught by
+distance; how many came from the new rule is not separated in this run.
+
+A fault met on the way: if a native application starts before Ultra XR has taken the glasses (here: the app had
+just been reinstalled and was opened before the glasses were plugged in), the runtime is made without the glasses
+and without tracking, the application draws in its own window on the phone and gets no head, room or hands, and
+nothing says so. Reopening Ultra XR does not mend it: the runtime is made once a process. The app had to be
+restarted with the glasses attached. To fix in the app (make the runtime again, or refuse the session).
 
 ## Open
 
