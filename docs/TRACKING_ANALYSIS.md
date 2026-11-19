@@ -280,3 +280,30 @@ judgement is about 7 degrees, which is the cameras' own pitch against the motion
 once, unless the owner had changed it. Not yet seen in the glasses.
 
 Not explained by this: a table top found where there is none.
+
+## The camera angle now watches itself; walls and tables stay (19 November 2026)
+
+First steps of the roadmap in `reports/XREAL Quest level spatial roadmap.md`.
+
+**The floor as a calibration target, in the app.** `core/FloorCalibrator` sorts the floor points of every picture by
+the distance they were measured from; the slope of floor height with distance, times baseline over camera height, is
+the error in the angle between the cameras. Replayed on the owner's session of 18 November (83 s) on the Pixel:
+
+| Calibration in use | What the app measured | What it did |
+|---|---|---|
+| factory (trial file 0,0,0) | floor rises 109 mm per m, 4 distance bands, 1,582 points | nothing: a trial calibration is never changed |
+| the unit's -0.4 degrees | floor falls 37 mm per m (an error of -0.17 degrees), 6 bands, 1,669 points | proposed a trim |
+
+The offline tool, which matches points another way, put the flat floor at -0.41 degrees; the app's own points put it
+near -0.30. A tenth of a degree between two ways of matching the same recording is the uncertainty of this method on
+one session, about 2.5 % of a distance of 3 m. So the app moves the correction by half the measured error and by
+0.06 degrees at most per session, never further than 1 degree from none, and only from the next start (the
+estimator reads its calibration once). A tilt of the whole rig against gravity gives the same straight line and
+cannot be told apart by a floor; that is why the steps are small.
+
+**A surface that was believed stays.** A wall or table top used to go when it had not been found for about four
+seconds, whichever way the wearer looked. Now one that has been believed goes only when the cameras look at where it
+should be, from within 3 m, and do not find it twelve times running. In the same replay: a wall vanished once
+instead of twice, a table top never instead of three times, and two walls stood at the end instead of one.
+
+Not built yet from the roadmap: dense depth, a room mesh, occlusion, a saved map. Not seen in the glasses.

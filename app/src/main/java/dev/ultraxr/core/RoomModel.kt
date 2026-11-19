@@ -169,13 +169,13 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
     }
 
     /** Finds the floor, table tops and walls. [headY] is how high the head is now (the floor is looked for below it). */
-    @Synchronized fun analyse(headY: Double, headX: Double = Double.NaN, headZ: Double = Double.NaN): RoomFindings {
+    @Synchronized fun analyse(headY: Double, headX: Double = Double.NaN, headZ: Double = Double.NaN, lookX: Double = Double.NaN, lookZ: Double = Double.NaN): RoomFindings {
         if (headTop.isNaN() || headY > headTop) headTop = headY
         // The floor is looked for in everything kept (the last minute): its height does not suffer from the estimator's
         // sideways errors. Table tops and walls only in what the last 20 seconds showed.
         val c = boxes.values.filter { it.hits >= MIN_HITS }
         fun recent(b: Box) = latest - b.last <= WINDOW
-        if (c.size < 30) return RoomFindings(floorHeld, 0, shown(emptyList()), boxes.size, c.size)
+        if (c.size < 30) return RoomFindings(floorHeld, 0, shown(emptyList(), headX, headZ, lookX, lookZ), boxes.size, c.size)
         var lo = Double.MAX_VALUE; var hi = -Double.MAX_VALUE
         for (b in c) { val y = b.y; if (y < lo) lo = y; if (y > hi) hi = y }
         val n = ((hi - lo) / BIN).toInt() + 3
@@ -260,7 +260,7 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
             // everything near that plane is spoken for, so the same wall is not found twice a few degrees apart
             val f = w.first; rest.removeAll { b -> abs((b.x - f.cx) * f.nx + (b.z - f.cz) * f.nz) < 0.12 && abs((b.x - f.cx) * f.ux + (b.z - f.cz) * f.uz) < f.halfU + 0.2 }
         }
-        surfaces.addAll(shown(found2))
+        surfaces.addAll(shown(found2, headX, headZ, lookX, lookZ))
         return RoomFindings(fy, support, surfaces, boxes.size, c.size)
     }
 
@@ -268,10 +268,14 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
 
     /**
      * What is shown of the table tops and walls just [found]: each has to turn up three times in about the same
-     * place first, is then kept steady (its place and size follow new finds half way), and goes when it has not
-     * been found six times running (six seconds).
+     * place first (a table top four times) and is then kept steady: its place and size follow new finds half way.
+     *
+     * A surface that has been believed stays where it is while the wearer looks elsewhere or walks away: a room does
+     * not change because nobody is looking. It goes only when the cameras look straight at where it should be, from
+     * near enough to see it, and do not find it twelve times running (about eight seconds). One that was never
+     * believed goes after six misses. With no direction given ([lookX] not a number) every miss counts, as before.
      */
-    private fun shown(found: List<RoomSurface>): List<RoomSurface> {
+    private fun shown(found: List<RoomSurface>, headX: Double, headZ: Double, lookX: Double, lookZ: Double): List<RoomSurface> {
         val free = found.toMutableList()
         val it = kept.iterator()
         while (it.hasNext()) {
@@ -279,13 +283,28 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
             val m = free.firstOrNull { f -> f.kind == o.kind && abs(f.nx * o.nx + f.ny * o.ny + f.nz * o.nz) > 0.94 &&
                 abs((f.cx - o.cx) * o.nx + (f.cy - o.cy) * o.ny + (f.cz - o.cz) * o.nz) < 0.08 &&
                 sqrt((f.cx - o.cx) * (f.cx - o.cx) + (f.cy - o.cy) * (f.cy - o.cy) + (f.cz - o.cz) * (f.cz - o.cz)) < 0.2 + maxOf(o.halfU, f.halfU) * 0.6 }
-            if (m == null) { if (++k.missed > 6) it.remove(); continue }
+            if (m == null) {
+                val believed = k.seen >= needed(o.kind)
+                if (believed && !inView(o, headX, headZ, lookX, lookZ)) continue      // not looked at: nothing was learnt about it
+                if (++k.missed > (if (believed && !lookX.isNaN()) 12 else 6)) it.remove()
+                continue
+            }
             free.remove(m); k.seen++; k.missed = 0
             k.s = RoomSurface(o.kind, (o.cx + m.cx) / 2, (o.cy + m.cy) / 2, (o.cz + m.cz) / 2, m.ux, m.uy, m.uz, m.vx, m.vy, m.vz, (o.halfU + m.halfU) / 2, (o.halfV + m.halfV) / 2, m.support)
         }
         for (f in free) kept.add(Kept(f, 1, 0))
-        // a wall is believed the third time, a table top the fourth: things on furniture make up tops more easily
-        return kept.filter { it.seen >= (if (it.s.kind == RoomSurface.Kind.TABLE) 4 else 3) }.map { it.s }
+        // more than a room holds: the ones least often found go first
+        while (kept.size > 40) kept.remove(kept.minByOrNull { it.seen })
+        return kept.filter { it.seen >= needed(it.s.kind) }.map { it.s }
+    }
+    /** A wall is believed the third time it is found, a table top the fourth: things on furniture make up tops more easily. */
+    private fun needed(kind: RoomSurface.Kind) = if (kind == RoomSurface.Kind.TABLE) 4 else 3
+    /** Whether the cameras, at the head and looking along ([lookX], [lookZ]) seen from above, would see the middle of [s]: within 3 m and 30 degrees. */
+    private fun inView(s: RoomSurface, headX: Double, headZ: Double, lookX: Double, lookZ: Double): Boolean {
+        if (lookX.isNaN() || lookZ.isNaN() || headX.isNaN() || headZ.isNaN()) return true
+        val dx = s.cx - headX; val dz = s.cz - headZ; val d = sqrt(dx * dx + dz * dz); val l = sqrt(lookX * lookX + lookZ * lookZ)
+        if (d < 0.3 || l < 1e-6) return false
+        return d < 3.0 && (dx * lookX + dz * lookZ) / (d * l) > 0.866
     }
 
     /** The biggest group of boxes that touch each other on a 20 cm grid seen from above. */

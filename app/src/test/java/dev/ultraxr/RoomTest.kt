@@ -11,6 +11,7 @@ import dev.ultraxr.core.StereoRig
 import dev.ultraxr.proto.CameraDecoder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -286,5 +287,25 @@ class RoomTest {
             }
         }
         dump?.close()
+    }
+
+    @Test fun aFloorThatRisesWithDistanceGivesTheCameraAngleError() {
+        // 137 mm baseline, cameras 1.6 m up: 0.4 degrees of error is a floor rising 81 mm with every metre
+        val fc = dev.ultraxr.core.FloorCalibrator(0.137); val rnd = java.util.Random(4)
+        val slope = Math.toRadians(0.4) * 1.6 / 0.137
+        repeat(6000) { val z = 1.5 + rnd.nextDouble() * 2.4; fc.add(z, slope * (z - 2.7) + rnd.nextGaussian() * 0.012) }
+        // things standing on the floor do not count as floor
+        repeat(900) { fc.add(1.5 + rnd.nextDouble() * 2.4, 0.12 + rnd.nextDouble() * 0.08) }
+        fc.addCameraHeight(1.6)
+        val r = fc.result()!!
+        assertEquals(0.4, r.errorDeg, 0.06)
+        assertEquals(-0.4 - 0.06, dev.ultraxr.core.FloorCalibrator.trimmed(-0.4, r.errorDeg), 1e-9)      // one session moves it by its step at most
+        assertEquals(-0.4, dev.ultraxr.core.FloorCalibrator.trimmed(-0.4, 0.02), 1e-9)                     // a flat floor changes nothing
+    }
+
+    @Test fun tooLittleFloorSaysNothingAboutTheCameras() {
+        val fc = dev.ultraxr.core.FloorCalibrator(0.137)
+        repeat(200) { fc.add(1.6, 0.0) }; fc.addCameraHeight(1.6)
+        assertNull(fc.result())
     }
 }

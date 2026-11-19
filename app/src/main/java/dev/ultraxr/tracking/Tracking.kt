@@ -79,6 +79,11 @@ object Tracking : GlassesLink.Listener {
 
     // --- the room: floor, table tops and walls from the same two cameras (core/StereoPoints, core/RoomModel)
     val room = dev.ultraxr.core.RoomModel()
+    /** The correction to the right camera's rotation in use this run (degrees), and whether it is the unit's standing one (not a replay's trial). */
+    @Volatile private var stereoFixInUse = doubleArrayOf(0.0, 0.0, 0.0)
+    @Volatile private var stereoFixIsUnit = true
+    @Volatile private var floorCalibrator: dev.ultraxr.core.FloorCalibrator? = null
+    @Volatile var floorSlopeNote = ""; private set
     /** What the last look at the room found; null before the first. */
     @Volatile var roomFindings: dev.ultraxr.core.RoomFindings? = null; private set
     /** The floor's height in the app's world (the head's is 0 at a recentre). NaN until the cameras have found it. */
@@ -287,6 +292,8 @@ object Tracking : GlassesLink.Listener {
                 var from = "stereo_rotation_fix.txt"
                 var fix = File(app.getExternalFilesDir(null), from).takeIf { it.isFile }?.readText()?.trim()?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }
                 if (fix == null || fix.size != 3) { from = "stereo_fix_unit.txt"; fix = File(app.getExternalFilesDir(null), from).takeIf { it.isFile }?.readText()?.trim()?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() } }
+                stereoFixInUse = if (fix != null && fix.size == 3) doubleArrayOf(fix[0], fix[1], fix[2]) else doubleArrayOf(0.0, 0.0, 0.0)
+                stereoFixIsUnit = fix == null || fix.size != 3 || from == "stereo_fix_unit.txt"
                 if (fix != null && fix.size == 3) { calib = applyStereoRotationFix(calib, fix[0], fix[1], fix[2]); log("calibration: right camera turned by " + fix.joinToString(", ") + " degrees (" + from + ")") }
             } catch (e: Exception) { log("stereo_rotation_fix.txt ignored: $e") }
             // The exact calibration handed to the estimator, for offline analysis of captures.
@@ -614,6 +621,8 @@ object Tracking : GlassesLink.Listener {
         val pts = FloatArray(3 * 300); val world = FloatArray(3 * 300)
         var finder: dev.ultraxr.core.StereoPoints? = null; var finderRig: dev.ultraxr.core.StereoRig? = null
         var frame = 0; var saidFloor = Double.NaN
+        var calibratedThisRun = false; var calibCheckFrame = 0
+        val ranges = DoubleArray(300)
         while (running) {
             var p: DoubleArray; var q: DoubleArray; var fix: Pose; var version: Int
             synchronized(roomLock) {
@@ -623,7 +632,12 @@ object Tracking : GlassesLink.Listener {
                 p = roomP; q = roomQ; fix = roomFix; version = roomWorld; roomHave = false; roomReady = false
             }
             val rig = stereoRig ?: continue
-            if (rig !== finderRig) { finder = dev.ultraxr.core.StereoPoints(rig); finderRig = rig }
+            if (rig !== finderRig) {
+                finder = dev.ultraxr.core.StereoPoints(rig); finderRig = rig
+                val a = rig.cam0InImu.p; val b = rig.cam1InImu.p
+                floorCalibrator = dev.ultraxr.core.FloorCalibrator(Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])))
+                calibratedThisRun = false
+            }
             try {
                 val t0 = System.nanoTime()
                 val n = finder!!.find(l, r, pts)
@@ -635,16 +649,42 @@ object Tracking : GlassesLink.Listener {
                     v[0] = pts[i * 3].toDouble(); v[1] = pts[i * 3 + 1].toDouble(); v[2] = pts[i * 3 + 2].toDouble()
                     if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] > ROOM_MAX_RANGE_M * ROOM_MAX_RANGE_M) continue      // too far to place well
                     val w = cam.apply(v)
+                    ranges[k] = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
                     world[k * 3] = w[0].toFloat(); world[k * 3 + 1] = w[1].toFloat(); world[k * 3 + 2] = w[2].toFloat(); k++
                 }
                 if (version != head.worldVersion) continue           // recentred meanwhile: these points are in the old world
                 room.expectedBelowHead = settings.standingHeightM.toDouble()
                 room.add(world, k, frame++); roomPictures++
                 roomPoints = room.lastingPoints(cam.p[0], cam.p[1], cam.p[2]); roomPointsNs = System.nanoTime()
+                run {
+                    val fc0 = floorCalibrator; val fy0 = roomFindings?.floorY ?: Double.NaN
+                    if (fc0 != null && !fy0.isNaN() && (roomFindings?.floorSupport ?: 0) >= 60) { for (i in 0 until k) fc0.add(ranges[i], world[i * 3 + 1] - fy0); fc0.addCameraHeight(cam.p[1] - fy0) }
+                }
                 if (frame % 2 != 0) continue
-                val f = room.analyse(cam.p[1], cam.p[0], cam.p[2])
+                // where the cameras look, seen from above: a surface is only given up when it was looked at and not found
+                val look = Q.rotate(cam.q, doubleArrayOf(0.0, 0.0, 1.0))
+                val f = room.analyse(cam.p[1], cam.p[0], cam.p[2], look[0], look[2])
                 if (version != head.worldVersion) continue
                 roomFindings = f
+                // The floor is flat: what it does with distance says whether the angle between the cameras is right.
+                val fc = floorCalibrator
+                if (fc != null && !f.floorY.isNaN() && f.floorSupport >= 60) {
+                    if (!calibratedThisRun && (calibCheckFrame + 1) % 60 == 0 && fc.result() == null) log("calibration: not enough floor seen at a distance yet (points by distance band: " + fc.status() + ")")
+                    if (!calibratedThisRun && ++calibCheckFrame % 30 == 0) fc.result()?.let { r ->
+                        if (r.points < 1200) return@let
+                        calibratedThisRun = true
+                        val now = stereoFixInUse[1]; val next = dev.ultraxr.core.FloorCalibrator.trimmed(now, r.errorDeg)
+                        floorSlopeNote = dev.ultraxr.core.Fmt.f(r.slopeMmPerM, 0) + " mm per m over " + r.bins + " distances"
+                        if (!stereoFixIsUnit || simulateWearer) log("calibration: the floor changes by " + floorSlopeNote + " (" + r.points + " points), an angle error of " + dev.ultraxr.core.Fmt.f(r.errorDeg, 2) + " degrees; a trial calibration is in use, nothing is changed")
+                        else if (next == now) log("calibration: the floor is flat to " + floorSlopeNote + " (" + r.points + " points): camera angle left as it is")
+                        else try {
+                            val text = dev.ultraxr.core.Fmt.f(stereoFixInUse[0], 3) + "," + dev.ultraxr.core.Fmt.f(next, 3) + "," + dev.ultraxr.core.Fmt.f(stereoFixInUse[2], 3)
+                            java.io.File(appContext?.getExternalFilesDir(null), "stereo_fix_unit.txt").writeText(text)
+                            log("calibration: the floor rises " + floorSlopeNote + " (" + r.points + " points), an angle error of " + dev.ultraxr.core.Fmt.f(r.errorDeg, 2) +
+                                " degrees between the cameras: correction " + dev.ultraxr.core.Fmt.f(now, 3) + " -> " + dev.ultraxr.core.Fmt.f(next, 3) + " degrees, from the next start")
+                        } catch (e: Exception) { log("calibration: could not save the correction: $e") }
+                    }
+                }
                 replayLog?.room(link?.replaySeconds ?: 0.0, k, roomFindMs, cam.p[1], f)
                 val below = cam.p[1] - f.floorY
                 if (!f.floorY.isNaN() && (saidFloor.isNaN() || Math.abs(below - saidFloor) > 0.05)) {
