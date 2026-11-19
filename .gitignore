@@ -8,3 +8,5 @@ __pycache__/
 
 # emulator test output
 tools/ui-automation/out-*/
+questlab/.cxx/
+questlab/build/

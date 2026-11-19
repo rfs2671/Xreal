@@ -11,8 +11,8 @@
         <package android:name="dev.ultraxr" />
     </queries>
     <application android:label="Quest API lab" android:hasCode="true" android:extractNativeLibs="true">
-        <activity android:name=".LabActivity" android:exported="true" android:screenOrientation="landscape"
-            android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|uiMode|density|screenLayout">
+        <activity android:name=".LabActivity" android:exported="true"
+            android:launchMode="singleTask" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|layoutDirection|locale|touchscreen|colorMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
