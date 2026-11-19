@@ -510,6 +510,21 @@ Built and installed; no number yet. The estimator's wandering is not made smalle
 cameras see walls of the plan. After the kept room is placed the set-up tool now shows its walls for 90 s, for a
 walk round the room.
 
+### The first plan was two rooms, and is forgotten (19 November, 19:00)
+
+A second placing run (four corners in 17 s once begun), then the 90 s walk. In the 33 s before the glasses were
+put down the plan was looked at four times against the walls found and none could be laid on it, so nothing was
+corrected. The owner then said why: he had marked the living room and the dining room together as one outline, and
+asked for the plan to be erased. It is (`/room_plan?clear=1`; the copy with that day's runs under
+`C:/uvio/quest_runs` is kept).
+
+What this shows about the design: an outline that runs through a doorway and round a second room is longer than
+the cameras can check from one place, and the corners "of the room" a wearer looks at when placing are not
+unmistakably corners of that outline. One room at a time is what the tool should ask for.
+
+While the plan was not placed the log listed what the cameras found, for instance four walls of 1.4 to 3.3 m and
+one table top; those lists are what a fit that does not come can now be studied with.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
