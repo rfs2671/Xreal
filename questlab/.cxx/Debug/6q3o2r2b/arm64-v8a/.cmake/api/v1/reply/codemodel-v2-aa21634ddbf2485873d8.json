@@ -1,0 +1,69 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.6.0"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "questlab",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "questlab::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-questlab-Debug-14232c305efde5a33330.json",
+					"name" : "questlab",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "uxr_meta_layer::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-uxr_meta_layer-Debug-2b778409886fcc431f13.json",
+					"name" : "uxr_meta_layer",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Users/asddd/Downloads/Xreal-claude-pixel-xreal-xr-gaming-cguv7y/_latest/questlab/.cxx/Debug/6q3o2r2b/arm64-v8a",
+		"source" : "C:/Users/asddd/Downloads/Xreal-claude-pixel-xreal-xr-gaming-cguv7y/_latest/questlab/src/main/cpp"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 3
+	}
+}

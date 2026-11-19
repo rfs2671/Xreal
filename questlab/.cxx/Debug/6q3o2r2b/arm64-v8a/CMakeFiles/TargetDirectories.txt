@@ -1,0 +1,4 @@
+C:/Users/asddd/Downloads/Xreal-claude-pixel-xreal-xr-gaming-cguv7y/_latest/questlab/.cxx/Debug/6q3o2r2b/arm64-v8a/CMakeFiles/uxr_meta_layer.dir
+C:/Users/asddd/Downloads/Xreal-claude-pixel-xreal-xr-gaming-cguv7y/_latest/questlab/.cxx/Debug/6q3o2r2b/arm64-v8a/CMakeFiles/questlab.dir
+C:/Users/asddd/Downloads/Xreal-claude-pixel-xreal-xr-gaming-cguv7y/_latest/questlab/.cxx/Debug/6q3o2r2b/arm64-v8a/CMakeFiles/edit_cache.dir
+C:/Users/asddd/Downloads/Xreal-claude-pixel-xreal-xr-gaming-cguv7y/_latest/questlab/.cxx/Debug/6q3o2r2b/arm64-v8a/CMakeFiles/rebuild_cache.dir

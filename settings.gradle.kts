@@ -7,3 +7,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "xreal-ultra-diag"
 include(":app")
+include(":questlab")
