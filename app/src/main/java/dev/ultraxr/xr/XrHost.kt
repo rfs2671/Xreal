@@ -141,6 +141,13 @@ object XrHost : OpenXrGlassesLayer.Host {
     override fun glassesWindow(): Window? = shell?.window
 
     override fun glassesDisplayOfWindow(): Display? = shell?.display
+    override fun displaySignature(): String {
+        val m = (shell?.display ?: glassesDisplay())?.mode
+        val base = if (m == null) "none" else "" + m.physicalWidth + "x" + m.physicalHeight
+        // for tests: a value in this system property counts as a different display (adb shell setprop debug.ultraxr.rt_sig 1)
+        val extra = try { Class.forName("android.os.SystemProperties").getMethod("get", String::class.java, String::class.java).invoke(null, "debug.ultraxr.rt_sig", "") as String } catch (_: Throwable) { "" }
+        return if (extra.isEmpty() || extra == "0") base else "$base+$extra"
+    }
 
     override fun configureRuntime() {
         // Runs in Service.onBind (main thread) when an application binds the runtime, before Monado starts.

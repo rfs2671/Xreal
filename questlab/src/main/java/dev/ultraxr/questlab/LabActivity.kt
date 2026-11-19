@@ -25,6 +25,10 @@ class LabActivity : Activity() {
             val report = try { System.loadLibrary("questlab"); run(this, seconds, roomSeconds) } catch (t: Throwable) { "FAIL  the test could not run: $t" }
             try { File(getExternalFilesDir(null), "quest_api_report.txt").writeText(report) } catch (_: Exception) {}
             runOnUiThread { text.text = report }
+            // This thread made the OpenXR calls, and the runtime's library (unloaded when the instance was destroyed)
+            // left thread-local clean-up behind on it: if the thread ended, that clean-up would run code that is no
+            // longer there and the process would die. A game's render thread lives as long as its process; so does this one.
+            try { java.util.concurrent.CountDownLatch(1).await() } catch (_: InterruptedException) {}
         }.start()
     }
 }

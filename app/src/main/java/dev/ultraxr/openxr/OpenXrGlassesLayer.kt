@@ -14,7 +14,7 @@ import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
 import android.widget.FrameLayout
-import org.freedesktop.monado.ipc.MonadoImpl
+import org.freedesktop.monado.ipc.IMonado
 
 /**
  * The application's picture on the glasses: a sub-window of the app's own window on the glasses' display, holding
@@ -52,6 +52,13 @@ object OpenXrGlassesLayer {
 
         /** The application left (or the runtime stopped): undo [onApplicationConnected]. Main thread. */
         fun onApplicationDisconnected()
+
+        /**
+         * What the runtime would be configured for if it were made now: the glasses' display mode, or "none". The
+         * runtime makes its devices once; when this no longer matches what it was made for (the glasses were plugged
+         * in or taken out, or changed mode, since), [OpenXrRuntimeService] makes the runtime again.
+         */
+        fun displaySignature(): String = "unknown"
     }
 
     @Volatile var host: Host? = null
@@ -73,9 +80,9 @@ object OpenXrGlassesLayer {
         return display.displayId != Display.DEFAULT_DISPLAY
     }
 
-    fun open(monado: MonadoImpl) = open(monado, 0, generation)
+    fun open(monado: IMonado) = open(monado, 0, generation)
 
-    private fun open(monado: MonadoImpl, attempt: Int, gen: Int) {
+    private fun open(monado: IMonado, attempt: Int, gen: Int) {
         main.postDelayed({
             // close() bumps the generation: an application that left during the retries gets no layer.
             if (gen != generation || layer != null || connected) return@postDelayed
@@ -145,18 +152,26 @@ object OpenXrGlassesLayer {
         host?.onApplicationConnected(onGlasses)
     }
 
-    fun close(why: String) {
-        main.post {
-            generation++
-            layer?.let { view -> runCatching { layerManager?.removeView(view) } }
-            layer = null
-            layerManager = null
-            if (connected) host?.onApplicationDisconnected()
-            connected = false
-            // The pacer goes back to its own clock, whatever the host did.
-            runCatching { UltraXrFeed.vblank(0L, 0L) }
-            Log.i(TAG, "the glasses are back with the app: $why")
-        }
+    fun close(why: String) { main.post { closeOnMain(why) } }
+
+    /** [close], finished before this returns (from any thread; waits at most two seconds for the main thread). */
+    fun closeNow(why: String) {
+        if (Looper.myLooper() == Looper.getMainLooper()) { closeOnMain(why); return }
+        val done = java.util.concurrent.CountDownLatch(1)
+        main.post { closeOnMain(why); done.countDown() }
+        try { done.await(2, java.util.concurrent.TimeUnit.SECONDS) } catch (_: InterruptedException) {}
+    }
+
+    private fun closeOnMain(why: String) {
+        generation++
+        layer?.let { view -> runCatching { layerManager?.removeView(view) } }
+        layer = null
+        layerManager = null
+        if (connected) host?.onApplicationDisconnected()
+        connected = false
+        // The pacer goes back to its own clock, whatever the host did.
+        runCatching { UltraXrFeed.vblank(0L, 0L) }
+        Log.i(TAG, "the glasses are back with the app: $why")
     }
 
     /** Starting values for an XREAL Air 2 Ultra; measure and replace them. */
