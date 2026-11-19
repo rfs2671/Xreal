@@ -88,7 +88,7 @@ static bool waitEvent(XrStructureType type, XrAsyncRequestIdFB id, XrEventDataBu
 static std::string hexOf(const XrUuidEXT &u) { char b[40]; for (int i = 0; i < 16; i++) snprintf(b + 2 * i, 3, "%02x", u.data[i]); return b; }
 static double nowSeconds() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(JNIEnv *env, jobject, jobject activity, jint seconds, jint roomSeconds, jint drawSeconds, jboolean vulkan) {
+extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(JNIEnv *env, jobject, jobject activity, jint seconds, jint roomSeconds, jint drawSeconds, jboolean vulkan, jint setupSeconds) {
     report.clear(); passed = failed = 0; seen.clear(); state = XR_SESSION_STATE_UNKNOWN; begun = false; passLayer = XR_NULL_HANDLE;
     JavaVM *vm; env->GetJavaVM(&vm); jobject act = env->NewGlobalRef(activity);
     line("Quest API test (%s): what a Quest mixed-reality game asks of its runtime, asked here", vulkan ? "Vulkan" : "OpenGL ES");
@@ -408,6 +408,22 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
         check(active == withAim, "whenever a hand is tracked its aim state is filled in", "%d of %d", withAim, active);
         check(handMeshFn && meshOk == 2, "xrGetHandMeshFB gives a sound hand model for each hand (made here, not Meta's)", "%d of 2", meshOk);
         check(indexTipX[0] > 0 && indexTipX[1] < 0, "the left and right models are mirror images", "index tip x %.3f and %.3f", indexTipX[0], indexTipX[1]);
+    }
+
+    // ---- room set-up: the wearer marks the corners; the layer hands them to the Ultra XR app, which keeps the room
+    if (setupSeconds > 0 && !vulkan && setupRoomView(sys)) {
+        setupMode = true; renderHook = drawRoomView; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room set-up: point at each corner on the floor and pinch, for up to %d seconds", (int)setupSeconds);
+        double until = nowSeconds() + setupSeconds; while (nowSeconds() < until && !setupClosed) frame();
+        if (setupClosed) {
+            std::vector<float> xz; for (auto &c : setupCorners) { xz.push_back(c.x); xz.push_back(c.z); }
+            int kept = 0;
+            if (void *lh = dlopen("libuxr_meta_layer.so", RTLD_NOW)) { auto save = (int (*)(XrSpace, XrTime, const float *, int))dlsym(lh, "uxrMetaLayerSaveRoomPlan"); if (save) kept = save(local, frameTime, xz.data(), (int)setupCorners.size()); }
+            setupSaved = kept; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room %s", kept ? "kept" : "NOT kept");
+            check(kept == 1, "the marked room is handed to the Ultra XR app and kept", "%d corners", (int)setupCorners.size());
+            double show = nowSeconds() + 6; while (nowSeconds() < show) frame();      // the closed room, in green, for a look
+        } else check(false, "the room is marked and closed within the time", "%d corners marked, not closed", (int)setupCorners.size());
+        for (size_t i = 0; i < setupCorners.size(); i++) line("info  corner %d at %.2f, %.2f in the local space", (int)i + 1, setupCorners[i].x, setupCorners[i].z);
+        renderHook = nullptr; setupMode = false;
     }
 
     // ---- the room view: the scene drawn where the Scene API says it is, in stereo, through OpenGL ES

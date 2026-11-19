@@ -1129,6 +1129,19 @@ extern "C" __attribute__((visibility("default"))) XrResult XRAPI_CALL xrNegotiat
 }
 
 // for the test app in the same process: what the layer has done so far
+// The room set-up tool: [n] corners, x and z each, in [space] at [time], going round the room once. They are put into
+// the room's own frame and handed to the Ultra XR app, which keeps them (core/RoomPlan). 1 when it has kept them.
+extern "C" __attribute__((visibility("default"))) int uxrMetaLayerSaveRoomPlan(XrSpace space, XrTime time, const float *xz, int n) {
+    if (!rLocateSpace || roomRef == XR_NULL_HANDLE || n < 3 || n > 64) return 0;
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    if (XR_FAILED(rLocateSpace(space, roomRef, time, &loc)) || !(loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) return 0;
+    std::string q = "/room_plan?c=";
+    { std::lock_guard<std::mutex> g(lock); if (!aligned) return 0;
+      for (int i = 0; i < n; i++) { XrPosef p = refInRoom(compose(loc.pose, {{0, 0, 0, 1}, {xz[i * 2], 0, xz[i * 2 + 1]}})); char b[64]; snprintf(b, sizeof b, "%s%.3f,%.3f", i ? ";" : "", p.position.x, p.position.z); q += b; } }
+    std::string a = httpGet(q.c_str());
+    diag("ROOM  %d marked corners handed to the Ultra XR app: %s", n, a.empty() ? "no answer" : a.c_str());
+    return a.find("\"ok\":true") != std::string::npos ? 1 : 0;
+}
 extern "C" __attribute__((visibility("default"))) int uxrMetaLayerDepthProbe(float *centre, float *low) { *centre = depthProbe[0]; *low = depthProbe[1]; return depthImages; }
 extern "C" __attribute__((visibility("default"))) void uxrMetaLayerStats(int *packets, int *dropped, int *alignedOut, int *entityCount) {
     std::lock_guard<std::mutex> g(lock); *packets = roomPackets; *dropped = passthroughLayersDropped; *alignedOut = aligned ? 1 : 0; *entityCount = (int)entities.size();

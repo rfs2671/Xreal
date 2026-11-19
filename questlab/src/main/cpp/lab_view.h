@@ -141,6 +141,40 @@ static bool setupRoomView(XrSystemId sys) {
     glGenVertexArrays(1, &vao); glGenBuffers(1, &vbo);
     return true;
 }
+// ---- room set-up: the wearer points at each corner where a wall meets the floor and pinches, going round the room once;
+// a pinch on the first corner again closes the room. Each corner is where the pointing ray meets the floor.
+static bool setupMode = false, setupClosed = false; static int setupSaved = -1; static std::vector<XrVector3f> setupCorners;
+static bool setupDown[2] = {false, false}; static double setupLastAdd = 0; static XrTime setupClosedAt = 0;
+static double viewNow() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec / 1e9; }
+static void buildSetup(XrTime t) {
+    float floorY = -1.6f; for (auto &p : scene) if (p.ok && p.kind == 0) floorY = p.pose.position.y;
+    const float top = 2.3f;
+    for (int h = 0; h < 2 && !setupClosed; h++) {
+        bool down = triggerNow[h] > 0.5f, pressed = down && !setupDown[h]; setupDown[h] = down;
+        if (!aimOk[h]) continue;
+        XrVector3f o = aimPose[h].position, e = at(aimPose[h], 0, 0, -1), d{e.x - o.x, e.y - o.y, e.z - o.z};
+        if (d.y > -0.05f) continue;                                    // pointing level or up: no place on the floor
+        float k = (floorY - o.y) / d.y; if (k < 0.3f || k > 9) continue;
+        XrVector3f hit{o.x + d.x * k, floorY, o.z + d.z * k};
+        int first = (int)vtx.size() / 3;                               // the place pointed at: a cross on the floor, and a post
+        lineTo({hit.x - 0.12f, floorY, hit.z}, {hit.x + 0.12f, floorY, hit.z}); lineTo({hit.x, floorY, hit.z - 0.12f}, {hit.x, floorY, hit.z + 0.12f}); lineTo(hit, {hit.x, floorY + 0.5f, hit.z});
+        if (!setupCorners.empty()) lineTo(setupCorners.back(), hit);   // and the wall it would make from the last corner
+        batch(GL_LINES, first, 1, 1, 1, 1, 0);
+        if (pressed && viewNow() - setupLastAdd > 0.7) {
+            setupLastAdd = viewNow();
+            XrVector3f f0 = setupCorners.empty() ? hit : setupCorners[0];
+            if (setupCorners.size() >= 3 && std::hypot(hit.x - f0.x, hit.z - f0.z) < 0.4f) { setupClosed = true; setupClosedAt = t; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room closed with %d corners", (int)setupCorners.size()); }
+            else if (setupCorners.empty() || std::hypot(hit.x - setupCorners.back().x, hit.z - setupCorners.back().z) > 0.4f) { setupCorners.push_back(hit); __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE corner %d marked at %.2f %.2f", (int)setupCorners.size(), hit.x, hit.z); }
+        }
+    }
+    int first = (int)vtx.size() / 3; size_t n = setupCorners.size();
+    for (size_t i = 0; i < n; i++) {
+        XrVector3f a = setupCorners[i]; lineTo(a, {a.x, floorY + top, a.z});
+        if (i + 1 < n || setupClosed) { XrVector3f b = setupCorners[(i + 1) % n]; lineTo(a, b); lineTo({a.x, floorY + top, a.z}, {b.x, floorY + top, b.z}); lineTo({a.x, floorY + top / 2, a.z}, {b.x, floorY + top / 2, b.z}); }
+    }
+    if (setupClosed) batch(GL_LINES, first, 0.2f, 1.0f, 0.3f, 1, 0); else batch(GL_LINES, first, 1.0f, 0.85f, 0.1f, 1, 0);
+    if (n) { first = (int)vtx.size() / 3; XrVector3f a = setupCorners[0]; lineTo({a.x - 0.2f, floorY, a.z}, {a.x + 0.2f, floorY, a.z}); lineTo({a.x, floorY, a.z - 0.2f}, {a.x, floorY, a.z + 0.2f}); batch(GL_LINES, first, 0.2f, 1.0f, 0.3f, 1, 0); }   // the first corner: where to close
+}
 static void buildGeometry(XrTime t, const XrPosef &head) {
     vtx.clear(); batches.clear(); wallsInView = 0;
     static int age = 0; bool relocate = (age++ % 20) == 0;
@@ -182,7 +216,8 @@ static void buildGeometry(XrTime t, const XrPosef &head) {
         int first = (int)vtx.size() / 3; for (auto &k : j) vtx.insert(vtx.end(), {k.pose.position.x, k.pose.position.y, k.pose.position.z});
         batch(GL_POINTS, first, h ? 1.0f : 0.1f, 0.9f, h ? 0.2f : 1.0f, 1, 0);      // left cyan, right yellow
     }
-    for (int h = 0; h < 2; h++) if (aimOk[h]) { int first = (int)vtx.size() / 3; lineTo(aimPose[h].position, at(aimPose[h], 0, 0, -1.5f)); float b = triggerNow[h] > 0.5f ? 1.0f : 0.45f; batch(GL_LINES, first, b, 0.1f * b, b, 1, 0); }
+    if (setupMode) buildSetup(t);
+    for (int h = 0; h < 2; h++) if (aimOk[h]) { int first = (int)vtx.size() / 3; lineTo(aimPose[h].position, at(aimPose[h], 0, 0, setupMode ? -6.0f : -1.5f)); float b = triggerNow[h] > 0.5f ? 1.0f : 0.45f; batch(GL_LINES, first, b, 0.1f * b, b, 1, 0); }
 }
 static const XrCompositionLayerBaseHeader *drawRoomView(XrTime t) {
     XrViewLocateInfo vi{XR_TYPE_VIEW_LOCATE_INFO}; vi.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO; vi.displayTime = t; vi.space = local;
