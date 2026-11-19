@@ -51,6 +51,11 @@ RUNS = {
     "rot":    ("", "", "0.24,-0.17,-0.04"),
     "rotxy":  ("", "", "0.24,-0.17,0"),
     "rothalf": ("", "", "0.12,-0.085,0"),
+    # the angle between the cameras corrected by what makes the floor flat (tools/tracking/floor_flat.py)
+    "verg":   ("", "", "0,-0.4,0"),
+    "asis":   ("", "", ""),      # no trial value: the unit's standing correction (stereo_fix_unit.txt) applies
+    "verg2":  ("", "", "0,-0.4,0"),
+    "vergx":  ("", "", "0.24,-0.5,0"),
 }
 
 def run(args, timeout=120):
@@ -97,7 +102,7 @@ def replay(dev, name, out, runs):
     if name not in sh(dev, "ls %s/recordings" % FILES): print("no such recording on the phone: " + name); return 1
     for tag in runs:
         vio, hands = RUNS[tag][0], RUNS[tag][1]
-        put(dev, "vio_options.txt", vio); put(dev, "hand_options.txt", hands); put(dev, "stereo_rotation_fix.txt", RUNS[tag][2] if len(RUNS[tag]) > 2 else "")
+        put(dev, "vio_options.txt", vio); put(dev, "hand_options.txt", hands); put(dev, "stereo_rotation_fix.txt", RUNS[tag][2] if len(RUNS[tag]) > 2 else "0,0,0")      # "0,0,0": the factory calibration, whatever the unit's standing correction; "": the app as the owner runs it
         restart_app(dev); sh(dev, "logcat -c")
         sh(dev, "input keyevent KEYCODE_WAKEUP")
         sh(dev, "am start -n %s/.ui.LauncherActivity --es replay %s --es replay_tag %s" % (PKG, name, tag))

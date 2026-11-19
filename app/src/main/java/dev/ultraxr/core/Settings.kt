@@ -32,6 +32,7 @@ class Settings(context: Context) {
      */
     var pictureTiltDeg: Float get() = p.getFloat("picture_tilt", 0f); set(v) = p.edit().putFloat("picture_tilt", v.coerceIn(-20f, 20f)).apply()
     val pictureTiltSet: Boolean get() = p.contains("picture_tilt")
+    var tiltRejudged: Boolean get() = p.getBoolean("tilt_rejudged", false); set(v) = p.edit().putBoolean("tilt_rejudged", v).apply()
     /** How hands reach OpenXR applications: "auto" (by application), "hands" (joints only) or "controllers" (joints and Touch-shaped controllers). */
     /**
      * Whether to try the glasses' half-width 3D mode. Off by default: on the Pixel 10 the glasses fall back to 2D

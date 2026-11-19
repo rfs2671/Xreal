@@ -305,6 +305,11 @@ object XrHost : OpenXrGlassesLayer.Host {
             Tracking.log("OpenXR: the floor had been moved " + dev.ultraxr.core.Fmt.f(st.floorTrimM * 100.0, 0) + " cm down by hand; now the picture is turned 10 degrees instead and the floor is the measured one")
             st.pictureTiltDeg = 10f; st.floorTrimM = 0f; floorTrim = 0f
         }
+        // The 10 degrees were judged against a floor the cameras measured 14 to 16 cm too high (the angle between
+        // the cameras was off, see stereo_fix_unit.txt). With the floor where it is, the same judgement is about
+        // 7 degrees: the angle the cameras are pitched down from the motion sensor, to within what was judged.
+        if (st.pictureTiltDeg == 10f && !st.tiltRejudged) st.pictureTiltDeg = 7.2f
+        st.tiltRejudged = true
         pictureTiltDeg = st.pictureTiltDeg
         UltraXrFeed.displayPitchRad = Math.toRadians(pictureTiltDeg.toDouble()).toFloat()
     }

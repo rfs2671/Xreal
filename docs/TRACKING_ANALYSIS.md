@@ -247,3 +247,36 @@ warm (thermal status 2), which halves the rate again when it applies.
 
 Not yet tried: these pinches inside a game. The numbers say the tracker measures them and the
 new rule catches them; whether the browser then clicks where the hand points has to be seen.
+
+## The angle between the cameras is off by 0.4 degrees: the floor says so (18 November 2026, evening)
+
+The owner's session of 19:57 (83 s, position trusted throughout, walked to 3.3 m from the start) was recorded
+whole (`record_next.txt`) and replayed. His words: a post drawn in the room stayed put, the floor was right near
+it and wrong three metres on, a wall was too near and moved as he walked away.
+
+A flat floor is ground truth for the one calibration error that the sight lines' meeting cannot show: the angle
+between the two cameras about the axis square to the baseline. `tools/tracking/floor_flat.py` places the points
+of 230 stereo pairs in the room and sorts the ones at floor level by the distance they were measured from.
+
+| Right camera turned by | Floor under the head | Floor's height at 1.5 / 2.1 / 2.7 / 3.5 / 4 m from the cameras | Slope |
+|---|---|---|---|
+| nothing (factory calibration) | 1.57 m | +25 / +47 / +122 / +236 / +259 mm | +94 mm per m |
+| 0, -0.35, 0 degrees | 1.69 m | +53 / +14 / +36 / +52 / +77 mm | +14 mm per m |
+| 0, -0.45, 0 degrees | 1.74 m | +75 / +30 / +29 / +27 / +33 mm | -11 mm per m |
+| 0, -0.55, 0 degrees | 1.78 m | +79 / +21 / -13 / -5 / -5 mm | -26 mm per m |
+
+With the factory angle every distance is measured short, by 6 % for each metre of it: the floor comes out 12 to
+16 cm too high under the wearer and a further 10 cm higher with every metre, a wall 3 m away half a metre near.
+The two halves of the session, fitted separately, give -0.5 and -0.4 degrees. The estimator works from the same
+angle, so it under-reported the walk: replayed with the correction the path is 30.1 m instead of 28.0 (7.6 %
+longer), twice the same to 0.01 m without it.
+
+Adopted for this pair of glasses: `stereo_fix_unit.txt` in the app's folder on the phone holds `0,-0.4,0` and is
+applied to the calibration at every start (the log says so). It is this unit's number; another pair needs its
+own run of `floor_flat.py`. Replayed as the owner now runs it: floor 1.69 m under the head.
+
+The picture's tilt was judged (10 degrees) against the floor drawn too high; with the floor 14 cm lower the same
+judgement is about 7 degrees, which is the cameras' own pitch against the motion sensor (7.2). It is set to 7.2
+once, unless the owner had changed it. Not yet seen in the glasses.
+
+Not explained by this: a table top found where there is none.

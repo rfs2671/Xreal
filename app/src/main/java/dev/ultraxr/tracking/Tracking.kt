@@ -277,8 +277,14 @@ object Tracking : GlassesLink.Listener {
             // A small correction to the right camera's rotation, measured from real stereo pairs
             // (tools/tracking/stereo_check.py). "x,y,z" degrees in files/stereo_rotation_fix.txt, for replays.
             try {
-                val fix = File(app.getExternalFilesDir(null), "stereo_rotation_fix.txt").takeIf { it.isFile }?.readText()?.trim()?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }
-                if (fix != null && fix.size == 3) { calib = applyStereoRotationFix(calib, fix[0], fix[1], fix[2]); log("calibration: right camera turned by " + fix.joinToString(", ") + " degrees (stereo_rotation_fix.txt)") }
+                // stereo_fix_unit.txt is this pair of glasses' standing correction (it stays); stereo_rotation_fix.txt is
+                // a replay's trial value and wins while it is there. Measured for the owner's unit on 18 November 2026
+                // (tools/tracking/floor_flat.py): with the factory angle between the cameras the floor came out 16 cm
+                // too high under the wearer and rose 10 cm with every metre of distance; turned by 0.4 degrees it is flat.
+                var from = "stereo_rotation_fix.txt"
+                var fix = File(app.getExternalFilesDir(null), from).takeIf { it.isFile }?.readText()?.trim()?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }
+                if (fix == null || fix.size != 3) { from = "stereo_fix_unit.txt"; fix = File(app.getExternalFilesDir(null), from).takeIf { it.isFile }?.readText()?.trim()?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() } }
+                if (fix != null && fix.size == 3) { calib = applyStereoRotationFix(calib, fix[0], fix[1], fix[2]); log("calibration: right camera turned by " + fix.joinToString(", ") + " degrees (" + from + ")") }
             } catch (e: Exception) { log("stereo_rotation_fix.txt ignored: $e") }
             // The exact calibration handed to the estimator, for offline analysis of captures.
             try { java.io.File(appContext?.getExternalFilesDir(null), "basalt_calib.json").writeText(calib) } catch (_: Exception) {}
