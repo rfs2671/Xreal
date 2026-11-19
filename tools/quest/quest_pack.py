@@ -2,7 +2,7 @@
 # Ultra XR: make a converted Quest game (or any OpenXR app) ready for Ultra XR's runtime, and install it.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-  python tools/quest/quest_pack.py GAME.apk OUT.apk [--install SERIAL] [--dispatcher-front] [--kit questlab.apk]
+  python tools/quest/quest_pack.py GAME.apk OUT.apk [--install SERIAL] [--dispatcher-front | --plain-openxr] [--kit questlab.apk]
 
 What it does to the APK (nothing else in it is touched):
 
@@ -18,6 +18,15 @@ What it does to the APK (nothing else in it is touched):
     (right only when the loader is the Khronos one, as in the test app);
   - removes the old signature, aligns the APK (native libraries on page boundaries) and signs it with the Android
     debug key, so it installs with adb. The original app must be uninstalled first if it was signed with another key.
+
+--plain-openxr is for an app built for Quest with the ordinary OpenXR loader and no Meta bridge library in the way
+(Unity's OpenXR plug-in with the Meta OpenXR package, Godot, native samples). Such an app needs no conversion, but
+two things keep it from finding a runtime on a phone, and both are put right:
+  - its loader is as old as the app and looks for the runtime only where a headset maker installs it; the current
+    Khronos loader from the kit takes its place, which asks Android's runtime broker;
+  - an app built for Quest does not declare that it wants to see the broker, and from Android 11 on an app that
+    targets API 30 or more sees only what it declares. Its target API in the manifest is lowered to 29, where
+    everything is visible. Nothing else in the manifest is touched.
 
 What it does NOT do: it does not convert a Quest game. A Quest game as bought talks to Meta's runtime and Meta's
 platform services; turning it into an OpenXR app that asks for the dispatcher is OVRPort's job, and whether to run
@@ -40,6 +49,26 @@ def as_generic(khronos):
     libopenxr_loader.so, so its own name (SONAME) is changed to one of the same length."""
     return khronos.replace(b"libopenxr_loader.so\0", b"libopenxr_khrldr.so\0")
 
+TARGET_SDK_ATTR = 0x01010270
+def lower_target_sdk(axml, to=29):
+    """Android's binary manifest with targetSdkVersion set to [to] when it was higher. Returns (data, old value or None)."""
+    import struct
+    b = bytearray(axml); pos = 8; ids = []; old = None
+    while pos + 8 <= len(b):
+        typ, hdr, size = struct.unpack_from("<HHI", b, pos)
+        if size < 8: break
+        if typ == 0x0180: ids = list(struct.unpack_from("<%dI" % ((size - hdr) // 4), b, pos + hdr))
+        elif typ == 0x0102:      # an element's start: header, line, comment, namespace, name, then the attributes
+            start, asize, count = struct.unpack_from("<HHH", b, pos + hdr + 8)
+            for i in range(count):
+                at = pos + hdr + start + i * asize
+                name = struct.unpack_from("<I", b, at + 4)[0]
+                if name < len(ids) and ids[name] == TARGET_SDK_ATTR and b[at + 15] in (0x10, 0x11):
+                    v = struct.unpack_from("<I", b, at + 16)[0]
+                    if v > to: struct.pack_into("<I", b, at + 16, to); old = v
+        pos += size
+    return bytes(b), old
+
 def build_tools():
     for root in (os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT"), "C:/Android", os.path.expanduser("~/Android/Sdk"), os.path.expanduser("~/AppData/Local/Android/Sdk")):
         d = os.path.join(root, "build-tools") if root else None
@@ -53,7 +82,7 @@ def run(args):
     if r.returncode != 0: raise SystemExit("failed: %s\n%s" % (" ".join(args), (r.stdout + r.stderr).decode("utf-8", "replace")))
     return (r.stdout + r.stderr).decode("utf-8", "replace")
 
-def pack(src, dst, kit, dispatcher_front):
+def pack(src, dst, kit, dispatcher_front, plain=False):
     if not os.path.isfile(kit): raise SystemExit("the kit is missing: build it with  ./gradlew :questlab:assembleDebug  (%s)" % kit)
     if not os.path.isfile(DISPATCHER): raise SystemExit("the dispatcher is missing: " + DISPATCHER)
     with zipfile.ZipFile(kit) as k: layer = k.read(LAYER); layer_json = k.read(LAYER_JSON); khronos = k.read(LOADER)
@@ -72,6 +101,9 @@ def pack(src, dst, kit, dispatcher_front):
         elif have_loader and dispatcher_front:
             add[GENERIC] = as_generic(loader); add[LOADER] = dispatcher; drop.add(LOADER)
             notes.append("loader chain: the app's loader became the generic loader, the open dispatcher put in front")
+        elif have_loader and plain:
+            add[LOADER] = khronos; drop.add(LOADER)
+            notes.append("loader chain: the app's own loader replaced by the current Khronos loader (it asks Android's runtime broker)")
         elif have_loader: notes.append("loader chain: the app's own libopenxr_loader.so kept (not a dispatcher). If this is a Quest game as bought, it has not been converted and will not find the runtime.")
         else:
             add[LOADER] = dispatcher; add[GENERIC] = as_generic(khronos)
@@ -80,6 +112,9 @@ def pack(src, dst, kit, dispatcher_front):
             n = info.filename
             if n in drop or (n.startswith("META-INF/") and n.rsplit(".", 1)[-1].upper() in ("SF", "RSA", "DSA", "EC", "MF")): continue
             data = zin.read(n)
+            if plain and n == "AndroidManifest.xml" and "runtime_broker".encode("utf-16-le") not in data and b"runtime_broker" not in data:
+                data, was = lower_target_sdk(data)
+                notes.append("manifest: target API lowered from %d to 29, so that the app may see the runtime broker" % was if was else "manifest: the target API is already below 30; the app can see the runtime broker")
             keep = zipfile.ZipInfo(n, date_time=info.date_time); keep.external_attr = info.external_attr
             # native libraries and the resource table are stored, as Android wants for an app that does not unpack them
             keep.compress_type = zipfile.ZIP_STORED if (n.endswith(".so") or n == "resources.arsc") else info.compress_type
@@ -105,7 +140,7 @@ def main():
     src, dst = a[0], a[1]; serial = None; kit = KIT
     if "--install" in sys.argv: serial = sys.argv[sys.argv.index("--install") + 1]; a = [x for x in a if x != serial]; src, dst = a[0], a[1]
     if "--kit" in sys.argv: kit = sys.argv[sys.argv.index("--kit") + 1]; a = [x for x in a if x != kit]; src, dst = a[0], a[1]
-    for n in pack(src, dst, kit, "--dispatcher-front" in flags): print(n)
+    for n in pack(src, dst, kit, "--dispatcher-front" in flags, "--plain-openxr" in flags): print(n)
     print("written: %s (%.1f MB), signed with the debug key" % (dst, os.path.getsize(dst) / 1e6))
     if serial:
         out = subprocess.run(["adb", "-s", serial, "install", "-r", dst], capture_output=True); text = (out.stdout + out.stderr).decode("utf-8", "replace").strip()

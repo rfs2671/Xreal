@@ -279,6 +279,34 @@ explained with certainty. In that run two walls were 0.22 m apart in depth and o
 front of the further one sits about at the nearer one's face, so hiding it may have been right (a cupboard in
 front of a wall) or the same wall found twice. It needs a look in that room.
 
+### The first real engine build: Unity's mixed-reality example (19 November, 16:14)
+
+`SampleScene.apk` from the release page of Unity-Technologies/mr-example-meta-openxr (Unity 2022.3, the OpenXR
+plug-in with the Meta OpenXR package, AR Foundation, Vulkan; free, as published by Unity). It needs no conversion:
+it has the ordinary OpenXR loader and no Meta bridge library.
+
+As packed at first it did not find the runtime ("Failed to find default runtime"): its loader is from 2022 and
+looks only where a headset maker installs a runtime, and an app built for Quest does not declare the runtime
+broker. `quest_pack.py --plain-openxr` puts both right (the kit's Khronos loader in place of the app's; the
+manifest's target API lowered from 32 to 29 so the broker is visible).
+
+    python tools/quest/quest_pack.py SampleScene.apk SampleScene-uxr.apk --plain-openxr --install SERIAL
+    python tools/quest/quest_diag.py com.unity.example.mrmetaopenxr --serial SERIAL --seconds 45 --capture 3
+
+Result on the S21 Ultra with the glasses attached, lying on a table (nobody wearing them):
+
+- session on Vulkan, IDLE to FOCUSED; 1800 frames in the first summary, no failed `xrEndFrame`, no unsupported
+  function called, no crash;
+- 13 extensions enabled; passthrough, scene, scene capture, spatial entities with query and storage, and hand aim
+  are answered by the layer; Unity's AR Foundation plane, anchor, camera and session subsystems all start;
+- its welcome panel is drawn in stereo on the glasses;
+- the Touch Pro bindings are refused (`trigger_haptic_fb` is not a path the runtime knows); the plain Touch
+  profile is what both hands report;
+- the picture has a pale sky behind the panel. On these see-through glasses that is a haze over the room; whether
+  the app clears to transparent once its passthrough is on has to be looked at by a wearer.
+
+Not yet done with it: pinching its buttons, its planes on real walls, its anchors.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
