@@ -76,15 +76,21 @@ in this run by design: it waited only 5 s before the scene query.)
 A fourth worn run, cued (left hand up for 20 s, then right for 20 s, pinching slowly; the test now counts each hand
 on its own): left hand seen in 0 of 1200 readings; right hand in 1115 of 1200 (93 %), longest stretch without it 85
 readings (1.4 s), every reading with a valid aim state, but 0 pinches and a strongest index pinch of only 0.22.
-The wearer confirmed the left hand was up and pinching during its window. The app's own record of that session
-(journal.jsonl) has 265 hand-tracker frames labelled left and 760 labelled right in 48.7 s; 760 frames is about 25 s,
-more than the 20 s the right hand was up, and the test's right-hand readings began within 1.4 s of the window
-opening, before the wearer could have been told to switch. So the physical left hand was being reported as the
-right hand for a stretch: the tracker's left/right labelling is not reliable. The same record gives the smallest
-thumb-to-index gap seen as 50 mm for the right hand (30 mm left): the tracker did not see the right-hand pinches
-close, which is why none registered. Both are faults of the hand tracker under the layer, not of the Quest layer.
-The test now reads both hands every frame and reports "as the other hand" separately (checked on the phone without
-glasses, 59 of 60); the labelling has not yet been measured with it.
+Correction: the wearer raised the RIGHT hand first and the left second, the reverse of the cue. Read that way the
+run shows no labelling fault. The app's record of the session (journal.jsonl) has 760 hand-tracker frames labelled
+right (about 25 s: the right hand, up from the cue until shortly after the switch) and 265 labelled left (about 9 s:
+the left hand afterwards), and the test, which then read one hand at a time, was looking at the other hand both
+times. The 93 % "right hand" in the second window was the real right hand for its first seconds, a 1.4 s gap, and
+then the phone's touchpad pointer, which the app feeds to applications as the right hand while the phone's screen is
+being touched ("the touchpad pointer is the right hand" in the log, 7 s into that window). That also explains the
+steady pinch strength of 0.22 with no pinches. An earlier version of this section concluded that the tracker
+mislabels hands; that conclusion is withdrawn.
+
+What is still open from this run: the smallest thumb-to-index gap the tracker saw was 50 mm on the right hand and
+30 mm on the left (19 and 26 mm in the third run, where 11 pinches were counted), so whether pinches are reliably
+seen is not settled. And a test of hands must keep the phone's screen untouched, or the pointer stands in for the
+right hand. The test now reads both hands every frame and reports "as the other hand" separately (checked on the
+phone without glasses, 59 of 60); hand steadiness has not yet been measured with it.
 
 ## Open
 
