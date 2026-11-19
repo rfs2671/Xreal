@@ -412,7 +412,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
 
     // ---- room set-up: the wearer marks the corners; the layer hands them to the Ultra XR app, which keeps the room
     if (setupSeconds > 0 && !vulkan && setupRoomView(sys)) {
-        setupMode = true; renderHook = drawRoomView; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room set-up: point at each corner on the floor and pinch, for up to %d seconds", (int)setupSeconds);
+        textEnv = env; textActivity = act; setupMode = true; renderHook = drawRoomView; __android_log_print(ANDROID_LOG_INFO, "QuestLab", "CUE room set-up: point at each corner on the floor and pinch, for up to %d seconds", (int)setupSeconds);
         double until = nowSeconds() + setupSeconds; while (nowSeconds() < until && !setupClosed) frame();
         if (setupClosed) {
             std::vector<float> xz; for (auto &c : setupCorners) { xz.push_back(c.x); xz.push_back(c.z); }

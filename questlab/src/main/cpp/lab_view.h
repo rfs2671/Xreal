@@ -141,6 +141,55 @@ static bool setupRoomView(XrSystemId sys) {
     glGenVertexArrays(1, &vao); glGenBuffers(1, &vbo);
     return true;
 }
+// ---- words in the glasses: a picture of the text made by Android (LabActivity.textPixels), on a board that stays in
+// front of the wearer, a little above the middle of the view
+static JNIEnv *textEnv = nullptr; static jobject textActivity = nullptr;
+static GLuint textProg = 0, textTex = 0, textVbo = 0; static GLint textVp = -1; static std::string textShown; static bool textHave = false; static float textQuad[30];
+static void setText(const std::string &s) {
+    if (s == textShown || !textEnv || !textActivity) return;
+    textShown = s; textHave = false;
+    jclass cls = textEnv->GetObjectClass(textActivity); jmethodID m = cls ? textEnv->GetMethodID(cls, "textPixels", "(Ljava/lang/String;)[I") : nullptr;
+    if (!m) { if (textEnv->ExceptionCheck()) textEnv->ExceptionClear(); return; }
+    jstring js = textEnv->NewStringUTF(s.c_str()); jintArray arr = (jintArray)textEnv->CallObjectMethod(textActivity, m, js);
+    if (textEnv->ExceptionCheck()) { textEnv->ExceptionClear(); textEnv->DeleteLocalRef(js); return; }
+    if (arr && textEnv->GetArrayLength(arr) == 1024 * 256) {
+        jint *px = textEnv->GetIntArrayElements(arr, nullptr); std::vector<unsigned char> rgba(1024 * 256 * 4);
+        for (int i = 0; i < 1024 * 256; i++) { unsigned v = (unsigned)px[i]; rgba[i * 4] = (v >> 16) & 255; rgba[i * 4 + 1] = (v >> 8) & 255; rgba[i * 4 + 2] = v & 255; rgba[i * 4 + 3] = (v >> 24) & 255; }
+        textEnv->ReleaseIntArrayElements(arr, px, JNI_ABORT);
+        if (!textTex) { glGenTextures(1, &textTex); }
+        glBindTexture(GL_TEXTURE_2D, textTex); glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1024, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        textHave = true;
+    }
+    if (arr) textEnv->DeleteLocalRef(arr); textEnv->DeleteLocalRef(js); textEnv->DeleteLocalRef(cls);
+    __android_log_print(ANDROID_LOG_INFO, "QuestLab", "TEXT %s", s.c_str());
+}
+static void placeText(const XrPosef &head) {      // 1.6 m ahead, 0.96 m wide, at the top of the view (its middle 0.25 m above the line of sight), clear of the ring
+    const float w = 0.48f, h = 0.12f, up = 0.25f, far = -1.6f;
+    XrVector3f a = at(head, -w, up - h, far), b = at(head, w, up - h, far), c = at(head, w, up + h, far), d = at(head, -w, up + h, far);
+    float q[30] = {a.x, a.y, a.z, 0, 1, b.x, b.y, b.z, 1, 1, c.x, c.y, c.z, 1, 0, a.x, a.y, a.z, 0, 1, c.x, c.y, c.z, 1, 0, d.x, d.y, d.z, 0, 0};
+    memcpy(textQuad, q, sizeof q);
+}
+static void drawText(const M4 &vp) {
+    if (!textHave) return;
+    if (!textProg) {
+        const char *vs = "#version 300 es\nlayout(location=0) in vec3 p; layout(location=1) in vec2 uv; uniform mat4 vp; out vec2 t;\nvoid main(){ t = uv; gl_Position = vp*vec4(p,1.0); }\n";
+        const char *fs = "#version 300 es\nprecision mediump float; uniform sampler2D tex; in vec2 t; out vec4 o;\nvoid main(){ vec4 c = texture(tex, t); if (c.a < 0.35) discard; o = vec4(c.rgb, 1.0); }\n";
+        textProg = glCreateProgram(); glAttachShader(textProg, shader(GL_VERTEX_SHADER, vs)); glAttachShader(textProg, shader(GL_FRAGMENT_SHADER, fs)); glLinkProgram(textProg);
+        textVp = glGetUniformLocation(textProg, "vp"); glGenBuffers(1, &textVbo);
+    }
+    glUseProgram(textProg); glBindBuffer(GL_ARRAY_BUFFER, textVbo); glBufferData(GL_ARRAY_BUFFER, sizeof textQuad, textQuad, GL_STREAM_DRAW);
+    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, nullptr);
+    glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void *)12);
+    glUniformMatrix4fv(textVp, 1, GL_FALSE, vp.m); glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, textTex); glUniform1i(glGetUniformLocation(textProg, "tex"), 1);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDisableVertexAttribArray(1); glActiveTexture(GL_TEXTURE0);
+    // back to the line program and its buffer for whatever is drawn next
+    glUseProgram(prog); glBindBuffer(GL_ARRAY_BUFFER, vbo); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+}
+
 // ---- room set-up: the wearer points at each corner where a wall meets the floor and pinches, going round the room once;
 // a pinch on the first corner again closes the room. Each corner is where the pointing ray meets the floor.
 static bool setupMode = false, setupClosed = false; static int setupSaved = -1; static std::vector<XrVector3f> setupCorners;
@@ -150,7 +199,20 @@ static void buildSetup(XrTime t, const XrPosef &head) {
     float floorY = -1.6f; for (auto &p : scene) if (p.ok && p.kind == 0) floorY = p.pose.position.y;
     const float top = 2.3f;
     // A pinch of either hand (or a tap on the phone's touchpad, which is the right hand's trigger) takes the place.
-    bool pressed = false; for (int h = 0; h < 2; h++) { bool down = triggerNow[h] > 0.5f; if (down && !setupDown[h]) pressed = true; setupDown[h] = down; }
+    // Asked both ways a game may ask: the controller's trigger, and the hand's own pinch (Meta's aim state). A tap on the
+    // touchpad is a pinch of a hand, not a trigger, so the trigger alone would miss it.
+    bool pressed = false; static bool handNow = false; handNow = false;
+    auto lHandS = fn<PFN_xrLocateHandJointsEXT>("xrLocateHandJointsEXT");
+    for (int h = 0; h < 2; h++) {
+        bool down = triggerNow[h] > 0.5f; if (aimOk[h]) handNow = true;
+        if (lHandS && viewTrackers[h] != XR_NULL_HANDLE) {
+            XrHandJointLocationEXT j[XR_HAND_JOINT_COUNT_EXT]; XrHandTrackingAimStateFB aim{XR_TYPE_HAND_TRACKING_AIM_STATE_FB};
+            XrHandJointLocationsEXT hl{XR_TYPE_HAND_JOINT_LOCATIONS_EXT, &aim}; hl.jointCount = XR_HAND_JOINT_COUNT_EXT; hl.jointLocations = j;
+            XrHandJointsLocateInfoEXT hi{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT}; hi.baseSpace = local; hi.time = t;
+            if (XR_SUCCEEDED(lHandS(viewTrackers[h], &hi, &hl)) && hl.isActive) { handNow = true; if (aim.status & XR_HAND_TRACKING_AIM_INDEX_PINCHING_BIT_FB) down = true; }
+        }
+        if (down && !setupDown[h]) pressed = true; setupDown[h] = down;
+    }
     // The place is where the wearer looks: the middle of the view, followed down to the floor. The head is tracked
     // well everywhere; a hand pointing at the floor is below what the cameras see of it.
     for (int once = 0; once < 1 && !setupClosed; once++) {
@@ -176,6 +238,15 @@ static void buildSetup(XrTime t, const XrPosef &head) {
         if (i + 1 < n || setupClosed) { XrVector3f b = setupCorners[(i + 1) % n]; lineTo(a, b); lineTo({a.x, floorY + top, a.z}, {b.x, floorY + top, b.z}); lineTo({a.x, floorY + top / 2, a.z}, {b.x, floorY + top / 2, b.z}); }
     }
     if (setupClosed) batch(GL_LINES, first, 0.2f, 1.0f, 0.3f, 1, 0); else batch(GL_LINES, first, 1.0f, 0.85f, 0.1f, 1, 0);
+    // what to do next, in words, and whether a hand is seen at all (a pinch nobody sees does nothing)
+    static double handSeenAt = -10; if (handNow) handSeenAt = viewNow();
+    const char *hand = viewNow() - handSeenAt < 1.0 ? "Hand seen" : "No hand seen: hold it up, or tap the phone";
+    char words[400];
+    if (setupClosed) snprintf(words, sizeof words, setupSaved == 1 ? "Room saved: %d walls\n \nYou can take the glasses off" : setupSaved == 0 ? "The room could NOT be saved (%d corners)\n \n " : "Saving the room, %d corners...\n \n ", (int)n);
+    else if (n == 0) snprintf(words, sizeof words, "Look at a floor corner of the room\nWhite ring on the corner: pinch\n%s", hand);
+    else if (n < 3) snprintf(words, sizeof words, "%d marked. Look at the next corner\nRing on it: pinch\n%s", (int)n, hand);
+    else snprintf(words, sizeof words, "%d marked. Next corner: pinch\nTo finish: pinch on the GREEN cross\n%s", (int)n, hand);
+    setText(words); placeText(head);
     if (n) { first = (int)vtx.size() / 3; XrVector3f a = setupCorners[0]; lineTo({a.x - 0.2f, floorY, a.z}, {a.x + 0.2f, floorY, a.z}); lineTo({a.x, floorY, a.z - 0.2f}, {a.x, floorY, a.z + 0.2f}); batch(GL_LINES, first, 0.2f, 1.0f, 0.3f, 1, 0); }   // the first corner: where to close
 }
 static void buildGeometry(XrTime t, const XrPosef &head) {
@@ -241,6 +312,7 @@ static const XrCompositionLayerBaseHeader *drawRoomView(XrTime t) {
         M4 view = viewMatrix(v[e].pose), vp = mmul(projMatrix(v[e].fov, 0.05f), view);
         glUniformMatrix4fv(uVp, 1, GL_FALSE, vp.m); glUniformMatrix4fv(uV, 1, GL_FALSE, view.m); glUniform1i(uEye, e); glUniform2f(uSize, (float)eyes[e].w, (float)eyes[e].h);
         for (auto &b : batches) { glUniform4fv(uCol, 1, b.c); glUniform1i(uOcc, b.occlude && haveDepth ? 1 : 0); glDrawArrays(b.mode, b.first, b.count); }
+        if (setupMode) drawText(vp);
         if (e == 0) {
             // what came of each wall's two cubes: the picture's own pixel at the middle of each, when it is in view
             for (auto &b : batches) {

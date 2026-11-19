@@ -411,6 +411,38 @@ measured on the owner's own pinches. Compiled and installed; not yet tried by th
   room or the hands any more. It is a choice for menu-heavy applications, not a fix, and is left at 100 %.
 - The wearer's word on the new pointing ray and pinch: better.
 
+### Marking the room by hand (19 November, evening)
+
+Asked for by the owner: "can't it be trained manually? I point from 4 corners to show walls or surfaces."
+
+What there is now:
+
+- `core/RoomPlan`: the corners the owner marks, kept in `files/room_plan.txt` with the table tops the cameras saw
+  at that moment as landmarks. In a later session `fit()` places the plan in that session's world (a turn and a
+  shift) from the walls and table tops the cameras find; it refuses when two places fit equally (a plain rectangle
+  looks the same from both ends). On made-up rooms: 190 of 300 random part views of an L placed, none wrongly.
+- When the plan is placed, applications get its walls, whole, in place of the found ones; after a loss of position
+  the world is turned and shifted back onto it.
+- The set-up is a mode of the test app, run by `tools/quest/room_setup.py SERIAL`: the place marked is where the
+  wearer looks (a white ring where the middle of the view meets the floor), taken by a pinch of either hand or a
+  tap on the phone's touchpad; a board at the top of the view says what to do next, how many corners are marked
+  and whether a hand is seen; the phone buzzes for each corner. A pinch on the first corner closes the room.
+
+Two worn tries failed, and why:
+
+1. The place was where the hand pointed. A hand pointing at the floor is below what the cameras see of it, and the
+   test app's ray was the runtime's old wrist-to-knuckle one. Four pinches, none with the ray on the floor.
+   (XrHost's controller aim now runs along the arm, as the layer's hand aim does.)
+2. Marking by looking, but nothing in the glasses said so. The wearer did not know what to do and put the glasses
+   down after a minute. The board of words was added after this.
+
+Checked on the phone with the glasses lying on a table: the board is readable and clear of the ring; a tap on the
+touchpad marks a corner (it is a pinch of a hand, not a trigger: the tool now asks both ways); a room sent
+straight to the app is kept, written and announced in `room.json`. **Not yet done by a wearer**: marking a whole
+room, the hand-over of the corners through the layer, and a later session placing the plan.
+
+Only walls are marked. Table tops are still the ones the cameras find.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,

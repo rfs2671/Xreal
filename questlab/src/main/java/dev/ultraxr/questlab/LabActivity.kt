@@ -11,6 +11,15 @@ class LabActivity : Activity() {
     override fun onDestroy() { android.util.Log.i("QuestLab", "screen destroyed"); super.onDestroy() }
     override fun onStop() { android.util.Log.i("QuestLab", "screen stopped"); super.onStop() }
     private external fun run(activity: Activity, seconds: Int, roomSeconds: Int, drawSeconds: Int, vulkan: Boolean, setupSeconds: Int): String
+    /** Words for the glasses, drawn here because Android can: 1024 x 256 pixels, white on nothing, a line a line of [text]. Called from the test's own thread. */
+    @Suppress("unused") fun textPixels(text: String): IntArray {
+        val w = 1024; val h = 256
+        val bm = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(bm)
+        val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = -1; textSize = 42f; textAlign = android.graphics.Paint.Align.CENTER; typeface = android.graphics.Typeface.DEFAULT_BOLD }
+        text.split('\n').forEachIndexed { i, l -> c.drawText(l, w / 2f, 62f + i * 80f, p) }
+        val px = IntArray(w * h); bm.getPixels(px, 0, w, 0, 0, w, h); return px
+    }
     companion object { private val started = java.util.concurrent.atomic.AtomicBoolean(false) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
