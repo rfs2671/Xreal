@@ -305,7 +305,13 @@ Result on the S21 Ultra with the glasses attached, lying on a table (nobody wear
 - the picture has a pale sky behind the panel. On these see-through glasses that is a haze over the room; whether
   the app clears to transparent once its passthrough is on has to be looked at by a wearer.
 
-Not yet done with it: pinching its buttons, its planes on real walls, its anchors.
+Worn, 70 seconds (16:18): 3600 frames, no failed `xrEndFrame`, nothing unsupported, no crash. The pictures of the
+glasses show the welcome panel with its sky behind it, then, after a button was pressed by pinch, the app's
+"Default Input Controls" panel on a clear (see-through) background, with Unity's own hand model and the ray from
+the hand drawn. Unity's log has the pointer press going through its UI input module. So hands, the aim ray, a
+pinch as a click and the change to passthrough all work in a real Unity build.
+
+Not yet done with it: its planes on real walls, its anchors, spawning its objects.
 
 ## Open
 
