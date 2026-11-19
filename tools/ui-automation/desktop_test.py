@@ -265,7 +265,7 @@ def main():
     perf = [l for l in log.splitlines() if "desktop:" in l and "fps" in l]
     fps = float(perf[-1].split("desktop:")[1].split("fps")[0]) if perf else 0
     check("the renderer reports its frame rate", fps > 0, perf[-1].split("UltraXR :")[-1].strip() if perf else "no line")
-    crashes = [l for l in uia.adb("logcat", "-d").splitlines() if "FATAL EXCEPTION" in l or ("AndroidRuntime" in l and "dev.ultraxr" in l)]
+    crashes = [l for l in uia.adb("logcat", "-d").splitlines() if "FATAL EXCEPTION" in l or ("AndroidRuntime" in l and "dev.ultraxr" in l and "Calling main entry" not in l)]      # the app helper starting is not a crash
     check("no crash was logged", not crashes, crashes[0][-120:] if crashes else "")
 
     failed = [r for r in results if not r[1]]

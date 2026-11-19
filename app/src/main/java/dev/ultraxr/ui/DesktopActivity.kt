@@ -147,7 +147,7 @@ class DesktopActivity : Activity() {
     }
 
     // ---- where the scene is shown: the glasses when attached, otherwise the preview on this screen
-    private fun external(): Display? = displays.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull { it.name?.startsWith("ultraxr-window-") != true }
+    private fun external(): Display? = displays.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull { it.name?.startsWith("ultraxr-window-") != true && it.flags and Display.FLAG_PRIVATE == 0 }      // never one of this app's own window displays
 
     /** A game was started from here and owns the glasses until this screen is in front again. */
     private var handedOver = false

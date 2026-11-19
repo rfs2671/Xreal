@@ -92,7 +92,9 @@ object XrHost : OpenXrGlassesLayer.Host {
 
     private fun glassesDisplay(): Display? {
         val dm = app.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        return dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull() ?: dm.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY && it.isValid }
+        // the displays behind this app's own windows (private, virtual) are never the glasses
+        fun real(d: Display) = d.flags and Display.FLAG_PRIVATE == 0 && d.name?.startsWith("ultraxr-window-") != true
+        return dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION).firstOrNull { real(it) } ?: dm.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY && it.isValid && real(it) }
     }
 
     /**
