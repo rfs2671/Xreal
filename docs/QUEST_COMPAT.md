@@ -41,6 +41,17 @@ In the passing run: all seven Meta extensions offered and enabled, passthrough c
 removed from frames, scene query answered (room, floor 1.60 m under the origin, ceiling), planes located, an anchor
 made 0.5 m ahead and found 0.000 m from where it was put, saved for the run.
 
+## Measured on the Galaxy S21 Ultra with the glasses plugged in (3840x1080, lying still on a table)
+
+| Run | Result |
+|---|---|
+| Khronos hello_xr (Vulkan), native, no browser | owns the glasses at 3840x1080; a capture of the glasses display shows one view an eye, the cube 45 pixels apart between them (not the same picture twice) |
+| Synthetic test, 34 s on the glasses | 60 checks, 59 pass; the runtime kept the application the whole time; 2001 passthrough layers removed |
+
+The one failure is again "no wall": the glasses lay still, so the room model measured neither the floor (1.60 m
+is the height setting) nor a wall. The Scene API against a real room needs someone wearing them and looking around;
+the test takes `--ei room_seconds N` to wait for that before it queries.
+
 ## Open
 
 1. **Without glasses, a native app whose window is not showing loses the runtime.** Cause found: with no glasses
@@ -60,6 +71,8 @@ made 0.5 m ahead and found 0.000 m from where it was put, saved for the run.
 4. **The test process crashes when its thread ends** (after the report is written): a thread-local destructor in a
    library that has been unloaded. Not yet traced.
 5. Anchors are kept for one run only. The ceiling is assumed 2.5 m over the floor. The room's walls need the glasses.
-6. Stereo output of a native app on the glasses: not checked (needs the glasses plugged into the S21 Ultra).
+6. Stereo output of a native app on the glasses: checked from a capture of the glasses display (above), not yet
+   by eye. hello_xr clears to opaque grey, which the glasses show as a bright haze; a mixed-reality game clears to
+   transparent black.
 7. OVRPort removes some of a game's ownership checks as part of its patching. Nothing in this repo does that, and
    whether to run OVRPort on a game is its owner's decision.

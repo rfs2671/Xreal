@@ -10,7 +10,7 @@ import java.io.File
 class LabActivity : Activity() {
     override fun onDestroy() { android.util.Log.i("QuestLab", "screen destroyed"); super.onDestroy() }
     override fun onStop() { android.util.Log.i("QuestLab", "screen stopped"); super.onStop() }
-    private external fun run(activity: Activity, seconds: Int): String
+    private external fun run(activity: Activity, seconds: Int, roomSeconds: Int): String
     companion object { private val started = java.util.concurrent.atomic.AtomicBoolean(false) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -18,11 +18,11 @@ class LabActivity : Activity() {
         android.util.Log.i("QuestLab", "screen made (" + (if (savedInstanceState == null) "new" else "again") + ")")
         val text = TextView(this).apply { textSize = 11f; setPadding(24, 24, 24, 24); text = "Running the Quest API test..." }
         setContentView(ScrollView(this).apply { addView(text) })
-        val seconds = intent.getIntExtra("seconds", 8)
+        val seconds = intent.getIntExtra("seconds", 8); val roomSeconds = intent.getIntExtra("room_seconds", 0)
         // once a process: if Android makes this screen anew (a turn of the phone), the test already running goes on
         if (!started.compareAndSet(false, true)) { text.text = "The test is already running; its report will be in quest_api_report.txt"; return }
         Thread {
-            val report = try { System.loadLibrary("questlab"); run(this, seconds) } catch (t: Throwable) { "FAIL  the test could not run: $t" }
+            val report = try { System.loadLibrary("questlab"); run(this, seconds, roomSeconds) } catch (t: Throwable) { "FAIL  the test could not run: $t" }
             try { File(getExternalFilesDir(null), "quest_api_report.txt").writeText(report) } catch (_: Exception) {}
             runOnUiThread { text.text = report }
         }.start()

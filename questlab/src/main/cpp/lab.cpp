@@ -76,7 +76,7 @@ static bool waitEvent(XrStructureType type, XrAsyncRequestIdFB id, XrEventDataBu
     return false;
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(JNIEnv *env, jobject, jobject activity, jint seconds) {
+extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(JNIEnv *env, jobject, jobject activity, jint seconds, jint roomSeconds) {
     report.clear(); passed = failed = 0; seen.clear(); state = XR_SESSION_STATE_UNKNOWN; begun = false; passLayer = XR_NULL_HANDLE;
     JavaVM *vm; env->GetJavaVM(&vm); jobject act = env->NewGlobalRef(activity);
     line("Quest API test: what a Quest mixed-reality game asks of its runtime, asked here");
@@ -151,7 +151,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_ultraxr_questlab_LabActivity_run(J
     auto box2 = fn<PFN_xrGetSpaceBoundingBox2DFB>("xrGetSpaceBoundingBox2DFB"); auto layout = fn<PFN_xrGetSpaceRoomLayoutFB>("xrGetSpaceRoomLayoutFB");
     auto container = fn<PFN_xrGetSpaceContainerFB>("xrGetSpaceContainerFB"); auto boundary = fn<PFN_xrGetSpaceBoundary2DFB>("xrGetSpaceBoundary2DFB");
     // the room data comes from the Ultra XR app a couple of times a second: give it a moment
-    for (int i = 0; i < 90; i++) frame();
+    for (int i = 0; i < 90 + roomSeconds * 60; i++) frame();
     std::vector<XrSpaceQueryResultFB> found;
     if (check(query && retrieve, "the spatial entity query calls exist")) {
         XrSpaceQueryInfoFB qi{XR_TYPE_SPACE_QUERY_INFO_FB}; qi.queryAction = XR_SPACE_QUERY_ACTION_LOAD_FB; qi.maxResultCount = 64;
