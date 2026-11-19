@@ -50,6 +50,13 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     private var fix = Pose()
     private var recenterPending = true
 
+    /** Degrees between the estimator's down and the accelerometer's at the last state, and for how many states running it has been past the limit. */
+    @Volatile var vioTiltErrorDeg = 0.0; private set
+    @Volatile var vioTiltBad = 0; private set
+    /** Degrees between the tilt held here and what the accelerometer says, at rest; how often the tilt had to be taken afresh. */
+    @Volatile var imuTiltErrorDeg = 0.0; private set
+    @Volatile var tiltReseeds = 0; private set
+    private var farWrong = 0
     @Volatile var vioStates = 0L; private set
     @Volatile var epochs = 0L; private set
 
@@ -70,6 +77,15 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
                 val ax = accel[0] / an; val ay = accel[1] / an; val az = accel[2] / an
                 ex = ay * up[2] - az * up[1]; ey = az * up[0] - ax * up[2]; ez = ax * up[1] - ay * up[0]
             }
+            // Far wrong (samples were missing while the glasses were turned over, say): the correction above works
+            // on the sine of the error, which is nothing at half a turn, so an upside-down estimate would stay.
+            // A fifth of a second of quiet readings that all say so, and the tilt is taken from them afresh.
+            if (abs(an - G) < 1.0) {
+                val up = Q.rotate(Q.conj(qGI), doubleArrayOf(0.0, 0.0, 1.0))
+                val agree = (accel[0] * up[0] + accel[1] * up[1] + accel[2] * up[2]) / an
+                imuTiltErrorDeg = Math.toDegrees(Math.acos(agree.coerceIn(-1.0, 1.0)))
+                if (agree < 0.5) { if (++farWrong > 200) { qGI = tiltFromAccel(accel[0] / an, accel[1] / an, accel[2] / an); farWrong = 0; tiltReseeds++ } } else farWrong = 0
+            }
             val kp = if (imuCount < 1500) 2.0 else 0.15
             qGI = Q.normalize(Q.mul(qGI, Q.exp((wx + kp * ex) * dt, (wy + kp * ey) * dt, (wz + kp * ez) * dt)))
         }
@@ -86,7 +102,17 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         val gyroAt = gyroOrientationAt(tNs) ?: return
         val pY = Q.rotate(Z_TO_Y, p); val vY = Q.rotate(Z_TO_Y, v)
         val qY = Q.normalize(Q.mul(Z_TO_Y, q))
-        val newCorr = Q.normalize(Q.mul(qY, Q.conj(Q.mul(Z_TO_Y, gyroAt))))
+        var newCorr = Q.normalize(Q.mul(qY, Q.conj(Q.mul(Z_TO_Y, gyroAt))))
+        // The estimator's "down" against the accelerometer's own. A few degrees apart is ordinary; tens of degrees
+        // is an estimator that started wrong (it takes its first reading as down, moving or not). Then only its
+        // heading is taken, the tilt stays the accelerometer's, and the caller is told so that it can start it afresh.
+        val swing = 2.0 * Math.toDegrees(Math.acos(Math.sqrt(newCorr[1] * newCorr[1] + newCorr[3] * newCorr[3]).coerceIn(0.0, 1.0)))
+        vioTiltErrorDeg = swing
+        if (swing > VIO_TILT_LIMIT_DEG) {
+            vioTiltBad++
+            val n = Math.sqrt(newCorr[1] * newCorr[1] + newCorr[3] * newCorr[3])
+            newCorr = if (n > 1e-6) doubleArrayOf(0.0, newCorr[1] / n, 0.0, newCorr[3] / n) else corr
+        } else vioTiltBad = 0
         if (epochPending || !haveVio) {
             if (!recenterPending) {
                 // Keep the app world where it was: old estimate of the body at tNs must equal the new one.
@@ -202,6 +228,8 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
 
     companion object {
         private const val HIST = 1024
+        /** Past this many degrees between the estimator's down and the accelerometer's, the estimator's tilt is not used. */
+        const val VIO_TILT_LIMIT_DEG = 25.0
         private const val G = 9.80665
         const val VIO_STALE_NS = 400_000_000L
         const val MAX_GYRO_EXTRAPOLATION_S = 0.05

@@ -322,4 +322,31 @@ class CoreTest {
         assertEquals(3.0, hs.velocity[0], 0.05)
         near(hs.aimDir, doubleArrayOf(-0.1104, 0.9939, 0.0), 0.01, "aim along wrist->knuckle")
     }
+
+    @Test fun aTiltLeftUpsideDownIsTakenAfreshFromTheAccelerometer() {
+        // The glasses are turned over while no samples come (a starved link): the tilt held is half a turn wrong,
+        // where the ordinary correction, which works on the sine of the error, does nothing.
+        val t = HeadTracker(); var ns = 1_000_000L
+        for (i in 0 until 2000) { t.onImu(ns, floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 0f, 9.81f)); ns += 1_000_000L }
+        assertTrue(t.imuTiltErrorDeg < 1.0)
+        ns += 2_000_000_000L                                    // two seconds of nothing, and now it lies the other way up
+        for (i in 0 until 150) { t.onImu(ns, floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 0f, -9.81f)); ns += 1_000_000L }
+        assertTrue("not yet: 0.15 s could be a knock", t.imuTiltErrorDeg > 170.0)
+        for (i in 0 until 200) { t.onImu(ns, floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 0f, -9.81f)); ns += 1_000_000L }
+        assertTrue("" + t.imuTiltErrorDeg, t.imuTiltErrorDeg < 1.0); assertEquals(1, t.tiltReseeds)
+    }
+
+    @Test fun anEstimatorWhoseDownIsWrongDoesNotTiltTheHead() {
+        val t = HeadTracker(); var ns = 1_000_000L
+        for (i in 0 until 2000) { t.onImu(ns, floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 0f, 9.81f)); ns += 1_000_000L }
+        val up0 = Q.rotate(t.predict(ns).pose.q, doubleArrayOf(0.0, 1.0, 0.0))
+        // an estimator that agrees with the accelerometer, then one that has the world upside down (half a turn about x)
+        t.onVio(ns - 1_000_000L, doubleArrayOf(0.0, 0.0, 0.0), Q.identity(), doubleArrayOf(0.0, 0.0, 0.0), null)
+        assertEquals(0, t.vioTiltBad); assertTrue(t.vioTiltErrorDeg < 2.0)
+        for (k in 0 until 20) { t.onImu(ns, floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 0f, 9.81f)); ns += 1_000_000L
+            t.onVio(ns - 1_000_000L, doubleArrayOf(0.0, 0.0, 0.0), doubleArrayOf(1.0, 0.0, 0.0, 0.0), doubleArrayOf(0.0, 0.0, 0.0), null) }
+        assertEquals(20, t.vioTiltBad); assertTrue(t.vioTiltErrorDeg > 170.0)
+        val up1 = Q.rotate(t.predict(ns).pose.q, doubleArrayOf(0.0, 1.0, 0.0))
+        assertTrue("the head's up has not moved: " + up1.toList(), up0[0] * up1[0] + up0[1] * up1[1] + up0[2] * up1[2] > 0.99)
+    }
 }

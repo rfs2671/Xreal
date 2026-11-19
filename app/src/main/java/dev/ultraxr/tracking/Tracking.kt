@@ -501,6 +501,14 @@ object Tracking : GlassesLink.Listener {
                     // the table top. Held exactly like an untrusted position, and re-aligned when motion returns.
                     val lying = holdWhenStill && stillness.still
                     var restarted = false
+                    // The estimator's idea of down is far from the accelerometer's (it began while the glasses were
+                    // being picked up or turned over): the picture would hang tilted or upside down. Half a second
+                    // of that and it is started afresh; meanwhile the head tracker keeps the accelerometer's tilt.
+                    if (head.vioTiltBad > 15 && now - tiltRestartNs > 3_000_000_000L) {
+                        tiltRestartNs = now; restartVio(v, "its down is " + dev.ultraxr.core.Fmt.f(head.vioTiltErrorDeg, 0) + " degrees from the accelerometer's"); restarted = true
+                    }
+                    if (head.tiltReseeds != saidReseeds) { saidReseeds = head.tiltReseeds; log("head: the tilt was far wrong and has been taken afresh from the accelerometer (" + saidReseeds + " times now)") }
+                    if (now - tiltSaidNs > 10_000_000_000L) { tiltSaidNs = now; log("head tilt check: estimator " + dev.ultraxr.core.Fmt.f(head.vioTiltErrorDeg, 1) + " degrees from the accelerometer's down, the gyroscope's tilt " + dev.ultraxr.core.Fmt.f(head.imuTiltErrorDeg, 1)) }
                     if (lying != wasLying) {
                         wasLying = lying
                         if (lying) lyingSinceNs = now else lainNs = now - lyingSinceNs
@@ -577,7 +585,7 @@ object Tracking : GlassesLink.Listener {
     private var recentreDueNs = 0L
     /** Called when the glasses have been picked up again and position is tracked; a running XR session recentres itself. */
     @Volatile var onPickedUp: (() -> Unit)? = null
-    private var lyingRestartNs = 0L
+    private var lyingRestartNs = 0L; private var tiltRestartNs = 0L; private var tiltSaidNs = 0L; private var saidReseeds = 0
     private fun dist(a: DoubleArray, b: DoubleArray) = Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))
     private const val LYING_WANDER_M = 0.10
     private const val LYING_WANDER_ON_PICKUP_M = 0.03
