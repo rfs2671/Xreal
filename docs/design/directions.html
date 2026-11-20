@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ultra XR: three directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=Unbounded:wght@300;400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<style>
+/* Each scene is one eye's picture of the glasses: 1920 x 1080 for 46 x 27 degrees. The interface layer is ADDED to
+   the room (mix-blend-mode: plus-lighter), as the glasses do: nothing here can darken or blur what is behind it. */
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#000;width:1920px;height:1080px;overflow:hidden}
+.scene{position:absolute;inset:0;width:1920px;height:1080px;display:none;overflow:hidden}
+.scene.on{display:block}
+.room{position:absolute;inset:0;background:
+  radial-gradient(520px 300px at 1560px 250px, rgba(255,214,160,.30), transparent 70%),
+  radial-gradient(900px 500px at 380px 180px, rgba(120,140,190,.16), transparent 70%),
+  linear-gradient(180deg,#1b1d24 0%,#22242c 52%,#15161b 52.2%,#0d0e12 100%)}
+.room:before{content:"";position:absolute;left:170px;top:120px;width:420px;height:380px;border-radius:6px;
+  background:linear-gradient(180deg,rgba(150,170,215,.22),rgba(90,105,150,.10));box-shadow:0 0 0 10px rgba(30,32,40,.9),0 0 120px rgba(120,150,220,.12)}
+.room:after{content:"";position:absolute;left:1180px;top:520px;width:640px;height:210px;border-radius:60px 60px 18px 18px;
+  background:linear-gradient(180deg,#2b2d37,#1a1b22);box-shadow:-60px 40px 0 -20px #101116}
+.lamp{position:absolute;left:1535px;top:205px;width:60px;height:90px;border-radius:50% 50% 8px 8px;background:rgba(255,226,180,.55);filter:blur(1px);box-shadow:0 0 90px 40px rgba(255,205,140,.20)}
+.ui{position:absolute;inset:0;mix-blend-mode:plus-lighter;perspective:1700px}
+.tag{position:absolute;left:36px;bottom:28px;font:500 20px/1 Manrope,sans-serif;color:rgba(255,255,255,.55);letter-spacing:.01em}
+.tag b{color:#fff;font-weight:700}
+i.ti{line-height:1}
+
+/* ---------- 1. Clear glass ---------- */
+#s1{font-family:Manrope,sans-serif;color:#fff}
+#s1 .glass{background:linear-gradient(155deg,rgba(235,240,255,.34) 0%,rgba(190,200,235,.20) 38%,rgba(150,160,205,.15) 100%);
+  border-radius:56px;box-shadow:inset 0 2px 0 rgba(255,255,255,.75),inset 0 0 0 1.5px rgba(255,255,255,.34),inset 0 -40px 80px rgba(120,130,200,.10),0 0 70px rgba(170,185,255,.14)}
+#s1 .island{position:absolute;left:760px;top:92px;width:400px;height:56px;border-radius:28px;display:flex;align-items:center;justify-content:center;gap:22px;font-weight:600;font-size:20px}
+#s1 .island .dot{width:9px;height:9px;border-radius:50%;background:#5dffa0;box-shadow:0 0 12px #5dffa0}
+#s1 .island span{display:flex;align-items:center;gap:8px;color:rgba(255,255,255,.92)}
+#s1 .tabs{position:absolute;left:176px;top:300px;width:92px;border-radius:46px;padding:14px 0;display:flex;flex-direction:column;align-items:center;gap:14px;transform:translateZ(70px)}
+#s1 .tabs div{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;font-size:30px;color:rgba(255,255,255,.9)}
+#s1 .tabs div.sel{background:#fff;color:#1b1d2a;box-shadow:0 0 34px rgba(255,255,255,.55)}
+#s1 .main{position:absolute;left:312px;top:176px;width:1010px;height:700px;padding:44px 48px}
+#s1 h1{font-size:46px;font-weight:700;letter-spacing:-.02em}
+#s1 .sub{font-size:21px;color:rgba(255,255,255,.72);margin-top:6px;font-weight:500}
+#s1 .hero{margin-top:28px;height:214px;border-radius:38px;position:relative;overflow:hidden;
+  background:linear-gradient(110deg,#3c7bff 0%,#7a5cff 46%,#ff7ac8 100%);box-shadow:inset 0 2px 0 rgba(255,255,255,.6),0 0 60px rgba(120,110,255,.35)}
+#s1 .hero:before{content:"";position:absolute;right:-60px;top:-110px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle at 35% 35%,rgba(255,255,255,.75),rgba(255,255,255,0) 62%)}
+#s1 .hero .k{position:absolute;left:36px;top:30px;font-size:18px;font-weight:600;opacity:.9}
+#s1 .hero .t{position:absolute;left:36px;top:58px;font-size:42px;font-weight:700;letter-spacing:-.02em}
+#s1 .hero .b{position:absolute;left:36px;bottom:30px;height:54px;padding:0 26px;border-radius:27px;background:#fff;color:#1b1d2a;font-weight:700;font-size:20px;display:flex;align-items:center;gap:10px}
+#s1 .hero .p{position:absolute;right:44px;bottom:36px;font-size:19px;font-weight:600;opacity:.95}
+#s1 .grid{margin-top:34px;display:grid;grid-template-columns:repeat(6,1fr);row-gap:22px}
+#s1 .app{display:flex;flex-direction:column;align-items:center;gap:10px;font-size:17px;font-weight:600;color:rgba(255,255,255,.9)}
+#s1 .app .o{width:104px;height:104px;border-radius:50%;display:grid;place-items:center;font-size:46px;color:#fff;
+  box-shadow:inset 0 3px 0 rgba(255,255,255,.55),inset 0 -14px 24px rgba(0,0,0,.18),0 0 26px rgba(255,255,255,.12)}
+#s1 .app.f .o{transform:scale(1.2) translateY(-6px);box-shadow:inset 0 3px 0 rgba(255,255,255,.7),0 0 0 5px rgba(255,255,255,.9),0 0 60px rgba(255,255,255,.55)}
+#s1 .app.f{color:#fff}
+#s1 .win{position:absolute;left:1376px;top:250px;width:430px;height:280px;transform:rotateY(-24deg) translateZ(-40px);transform-origin:left center}
+#s1 .win .pg{position:absolute;inset:0;border-radius:34px;overflow:hidden;background:linear-gradient(160deg,#ff5b5b,#ff9a62 55%,#ffd27a);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.5),0 0 50px rgba(255,150,110,.25)}
+#s1 .win .pg i{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:96px;color:#fff}
+#s1 .win .bar{position:absolute;left:50%;bottom:-46px;transform:translateX(-50%);display:flex;align-items:center;gap:12px}
+#s1 .win .bar .x{width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.3);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.6);display:grid;place-items:center;font-size:16px}
+#s1 .win .bar .g{width:190px;height:14px;border-radius:7px;background:rgba(255,255,255,.75);box-shadow:0 0 18px rgba(255,255,255,.5)}
+#s1 .win .arc{position:absolute;right:-22px;bottom:-22px;width:70px;height:70px;border-radius:0 0 46px 0;border-right:7px solid rgba(255,255,255,.85);border-bottom:7px solid rgba(255,255,255,.85)}
+#s1 .hint{position:absolute;left:0;right:0;top:912px;text-align:center;font-size:19px;font-weight:500;color:rgba(255,255,255,.6)}
+
+/* ---------- 2. Aurora ---------- */
+#s2{font-family:Outfit,sans-serif;color:#fff}
+#s2 .glow{position:absolute;border-radius:50%;filter:blur(70px)}
+#s2 .top{position:absolute;left:150px;right:150px;top:110px;display:flex;align-items:center;justify-content:space-between}
+#s2 .brand{font-size:30px;font-weight:600;letter-spacing:.02em}
+#s2 .brand em{font-style:normal;background:linear-gradient(90deg,#8f7bff,#4fe3ff);-webkit-background-clip:text;color:transparent}
+#s2 nav{display:flex;gap:44px;font-size:24px;font-weight:400;color:rgba(255,255,255,.6)}
+#s2 nav b{color:#fff;font-weight:600;position:relative}
+#s2 nav b:after{content:"";position:absolute;left:0;right:0;bottom:-12px;height:4px;border-radius:2px;background:linear-gradient(90deg,#8f7bff,#4fe3ff);box-shadow:0 0 18px #7a8cff}
+#s2 .clock{font-size:26px;font-weight:500;display:flex;gap:18px;align-items:center}
+#s2 .clock small{font-size:18px;color:rgba(255,255,255,.65);display:flex;gap:7px;align-items:center}
+#s2 .flow{position:absolute;left:0;right:0;top:214px;height:560px;transform-style:preserve-3d}
+#s2 .c{position:absolute;top:30px;width:330px;height:470px;border-radius:30px;overflow:hidden;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.35)}
+#s2 .c .n{position:absolute;left:24px;bottom:22px;font-size:25px;font-weight:600}
+#s2 .c .n small{display:block;font-size:16px;font-weight:400;opacity:.8;margin-top:2px}
+#s2 .c .ic{position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);font-size:110px}
+#s2 .c.m{width:410px;height:540px;top:0;left:755px;box-shadow:inset 0 0 0 2px rgba(255,255,255,.9),0 0 0 6px rgba(143,123,255,.55),0 0 110px 20px rgba(120,110,255,.55);transform:translateZ(120px)}
+#s2 .c.m .n{font-size:38px;bottom:104px;left:32px}
+#s2 .c.m .n small{font-size:19px}
+#s2 .c.m .go{position:absolute;left:32px;bottom:30px;height:56px;padding:0 28px;border-radius:28px;background:#fff;color:#151528;font-weight:600;font-size:21px;display:flex;align-items:center;gap:10px}
+#s2 .c.m .live{position:absolute;right:26px;top:24px;font-size:16px;font-weight:500;padding:7px 14px;border-radius:16px;background:rgba(0,0,0,.28);display:flex;gap:8px;align-items:center}
+#s2 .c.m .live u{width:9px;height:9px;border-radius:50%;background:#5dffa0;box-shadow:0 0 10px #5dffa0}
+#s2 .sun{position:absolute;inset:0}
+#s2 .sun:before{content:"";position:absolute;left:50%;top:26%;width:56%;aspect-ratio:1;transform:translateX(-50%);border-radius:50%;background:linear-gradient(180deg,#fff,rgba(255,255,255,.2) 60%,transparent 62%)}
+#s2 .sun:after{content:"";position:absolute;left:-20%;right:-20%;top:58%;bottom:0;background:
+  repeating-linear-gradient(90deg,rgba(255,255,255,.45) 0 2px,transparent 2px 46px),repeating-linear-gradient(180deg,rgba(255,255,255,.45) 0 2px,transparent 2px 30px);transform:perspective(300px) rotateX(58deg);transform-origin:top}
+#s2 .floor{position:absolute;left:330px;right:330px;top:764px;height:3px;border-radius:2px;background:linear-gradient(90deg,transparent,rgba(160,150,255,.9),rgba(90,225,255,.9),transparent);box-shadow:0 0 40px 6px rgba(120,140,255,.5)}
+#s2 .dock{position:absolute;left:560px;top:816px;width:800px;height:96px;border-radius:48px;display:flex;align-items:center;justify-content:space-around;padding:0 26px;
+  background:linear-gradient(180deg,rgba(150,140,255,.26),rgba(70,90,170,.14));box-shadow:inset 0 1.5px 0 rgba(255,255,255,.6),inset 0 0 0 1.5px rgba(160,170,255,.35),0 0 60px rgba(110,120,255,.22)}
+#s2 .dock i{font-size:36px;color:rgba(255,255,255,.85);width:64px;height:64px;display:grid;place-items:center;border-radius:50%}
+#s2 .dock i.f{background:linear-gradient(135deg,#8f7bff,#4fe3ff);color:#fff;box-shadow:0 0 36px rgba(120,150,255,.8)}
+#s2 .chip{position:absolute;left:150px;top:836px;height:60px;border-radius:30px;padding:0 24px;display:flex;align-items:center;gap:12px;font-size:19px;
+  background:rgba(120,130,220,.20);box-shadow:inset 0 0 0 1.5px rgba(170,180,255,.4)}
+#s2 .chip u{width:10px;height:10px;border-radius:50%;background:#5dffa0;box-shadow:0 0 12px #5dffa0}
+#s2 .keys{position:absolute;right:150px;top:852px;font-size:18px;color:rgba(255,255,255,.6)}
+
+/* ---------- 3. Orbit ---------- */
+#s3{font-family:"DM Sans",sans-serif;color:#fff}
+#s3 .time{position:absolute;left:0;right:0;top:86px;text-align:center;font:300 92px/1 Unbounded,sans-serif;letter-spacing:-.03em}
+#s3 .date{position:absolute;left:0;right:0;top:190px;text-align:center;font-size:21px;font-weight:500;color:rgba(255,255,255,.7);display:flex;justify-content:center;gap:22px}
+#s3 .date span{display:flex;gap:8px;align-items:center}
+#s3 .date u{width:9px;height:9px;border-radius:50%;background:#5dffa0;box-shadow:0 0 10px #5dffa0}
+#s3 .stage{position:absolute;left:560px;top:262px;width:800px;height:330px;border-radius:44px;overflow:hidden;transform:rotateX(7deg);
+  background:linear-gradient(120deg,#0fd6c2 0%,#2b8cff 55%,#7a5cff 100%);box-shadow:inset 0 2px 0 rgba(255,255,255,.65),0 0 90px rgba(40,170,255,.38)}
+#s3 .stage:before{content:"";position:absolute;right:60px;top:42px;width:246px;height:246px;border-radius:50%;background:radial-gradient(circle at 32% 30%,#fff,rgba(255,255,255,.55) 38%,rgba(255,255,255,.08) 70%);box-shadow:0 0 60px rgba(255,255,255,.45)}
+#s3 .stage .k{position:absolute;left:44px;top:42px;font:400 17px/1 Unbounded,sans-serif;opacity:.92}
+#s3 .stage .t{position:absolute;left:44px;top:80px;font:500 44px/1.1 Unbounded,sans-serif;letter-spacing:-.02em}
+#s3 .stage .b{position:absolute;left:44px;bottom:42px;height:58px;padding:0 30px;border-radius:29px;background:#fff;color:#0d2233;font-weight:600;font-size:21px;display:flex;align-items:center;gap:10px}
+#s3 .stage .gl{position:absolute;right:138px;top:120px;font-size:92px;color:#0d4d7a}
+#s3 .orb{position:absolute;border-radius:50%;display:grid;place-items:center;color:#fff}
+#s3 .orb:before{content:"";position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle at 32% 26%,rgba(255,255,255,.95) 0,rgba(255,255,255,.35) 16%,rgba(255,255,255,0) 44%),radial-gradient(circle at 60% 78%,var(--c) 0,rgba(0,0,0,0) 62%);box-shadow:inset 0 0 0 2px rgba(255,255,255,.55),inset 0 -18px 40px var(--c),0 0 46px var(--g)}
+#s3 .orb i{position:relative;font-size:var(--s)}
+#s3 .orb b{position:absolute;top:calc(100% + 14px);left:50%;transform:translateX(-50%);white-space:nowrap;font-size:18px;font-weight:500;color:rgba(255,255,255,.75)}
+#s3 .orb.f:after{content:"";position:absolute;inset:-16px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 34px rgba(255,255,255,.7)}
+#s3 .orb.f b{font-size:22px;font-weight:600;color:#fff;top:calc(100% + 30px)}
+#s3 .shadow{position:absolute;left:330px;right:330px;top:902px;height:26px;border-radius:50%;background:radial-gradient(closest-side,rgba(140,220,255,.30),transparent)}
+#s3 .mini{position:absolute;width:250px;height:190px;border-radius:34px;padding:22px 24px;background:linear-gradient(160deg,rgba(210,240,255,.26),rgba(120,170,220,.12));
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.7),inset 0 0 0 1.5px rgba(255,255,255,.3),0 0 50px rgba(120,200,255,.14);font-size:18px;font-weight:500}
+#s3 .mini h4{font:400 15px/1 Unbounded,sans-serif;color:rgba(255,255,255,.8);margin-bottom:12px}
+#s3 .mini.l{left:214px;top:330px;transform:rotateY(24deg)}
+#s3 .mini.r{right:214px;top:330px;transform:rotateY(-24deg)}
+#s3 .mini svg{display:block;margin:2px auto 8px}
+#s3 .mini .row{display:flex;align-items:center;gap:10px;margin-top:9px;color:rgba(255,255,255,.92)}
+#s3 .mini .row u{width:9px;height:9px;border-radius:50%;background:#5dffa0;box-shadow:0 0 10px #5dffa0}
+#s3 .mini .row i{font-size:22px}
+</style>
+</head>
+<body>
+
+<!-- 1 -->
+<div class="scene" id="s1">
+  <div class="room"></div><div class="lamp"></div>
+  <div class="ui">
+    <div class="island glass"><span>8:43</span><span><i class="dot"></i>Glasses</span><span><i class="ti ti-battery-3"></i>82%</span><span><i class="ti ti-focus-centered"></i>Room</span></div>
+    <div class="tabs glass"><div class="sel"><i class="ti ti-home"></i></div><div><i class="ti ti-device-gamepad-2"></i></div><div><i class="ti ti-grid-dots"></i></div><div><i class="ti ti-app-window"></i></div><div><i class="ti ti-adjustments-horizontal"></i></div></div>
+    <div class="main glass">
+      <h1>Good evening</h1><div class="sub">Your room is ready. Three windows are where you left them.</div>
+      <div class="hero"><div class="k">Continue</div><div class="t">Xbox Cloud</div><div class="b"><i class="ti ti-player-play"></i>Resume</div><div class="p">Last played today</div></div>
+      <div class="grid">
+        <div class="app f"><div class="o" style="background:linear-gradient(160deg,#ff4d4d,#c2185b)"><i class="ti ti-brand-youtube"></i></div>YouTube</div>
+        <div class="app"><div class="o" style="background:linear-gradient(160deg,#35c46a,#0b7a3b)"><i class="ti ti-brand-xbox"></i></div>Xbox Cloud</div>
+        <div class="app"><div class="o" style="background:linear-gradient(160deg,#4aa3ff,#1b56d6)"><i class="ti ti-world"></i></div>Browser</div>
+        <div class="app"><div class="o" style="background:linear-gradient(160deg,#c77dff,#6a2bd9)"><i class="ti ti-cube"></i></div>3D web</div>
+        <div class="app"><div class="o" style="background:linear-gradient(160deg,#ffb347,#e2671b)"><i class="ti ti-target-arrow"></i></div>Ball shooter</div>
+        <div class="app"><div class="o" style="background:linear-gradient(160deg,#5fe0d0,#0f8f9c)"><i class="ti ti-apps"></i></div>All apps</div>
+      </div>
+    </div>
+    <div class="win"><div class="pg"><i class="ti ti-player-play"></i></div><div class="bar"><div class="x"><i class="ti ti-x"></i></div><div class="g"></div></div><div class="arc"></div></div>
+    <div class="hint">Look and pinch, or use the d-pad</div>
+  </div>
+  <div class="tag"><b>1. Clear glass</b> &nbsp; calm, bright frosted panes, round icons, a bar under each window to grab it</div>
+</div>
+
+<!-- 2 -->
+<div class="scene" id="s2">
+  <div class="room"></div><div class="lamp"></div>
+  <div class="ui">
+    <div class="glow" style="left:520px;top:260px;width:900px;height:520px;background:rgba(110,90,255,.34)"></div>
+    <div class="glow" style="left:980px;top:420px;width:560px;height:380px;background:rgba(60,210,255,.22)"></div>
+    <div class="top"><div class="brand">Ultra <em>XR</em></div><nav><b>Home</b><span>Games</span><span>Apps</span><span>Windows</span><span>Settings</span></nav>
+      <div class="clock"><small><i class="ti ti-eyeglass-2"></i>Room locked</small><small><i class="ti ti-battery-3"></i>82%</small>8:43</div></div>
+    <div class="flow">
+      <div class="c" style="left:95px;transform:rotateY(52deg) translateZ(-260px);background:linear-gradient(170deg,#c77dff,#3a1a7a);opacity:.5"><i class="ti ti-cube ic"></i><div class="n">3D web</div></div>
+      <div class="c" style="left:400px;transform:rotateY(38deg) translateZ(-110px);background:linear-gradient(170deg,#ff5a5a,#7a1030);opacity:.8"><i class="ti ti-brand-youtube ic"></i><div class="n">YouTube<small>Video</small></div></div>
+      <div class="c m" style="background:linear-gradient(170deg,#2fd27a 0%,#0c6a45 55%,#06281f 100%)"><div class="sun"></div><div class="live"><u></u>Window open</div><div class="n">Xbox Cloud<small>Continue where you stopped</small></div><div class="go"><i class="ti ti-player-play"></i>Resume</div></div>
+      <div class="c" style="left:1190px;transform:rotateY(-38deg) translateZ(-110px);background:linear-gradient(170deg,#4aa3ff,#0e2a7a);opacity:.8"><i class="ti ti-world ic"></i><div class="n">Browser<small>2 windows</small></div></div>
+      <div class="c" style="left:1495px;transform:rotateY(-52deg) translateZ(-260px);background:linear-gradient(170deg,#ffb347,#7a2d0e);opacity:.5"><div class="sun"></div><div class="n">Ball shooter</div></div>
+    </div>
+    <div class="floor"></div>
+    <div class="chip"><u></u>Room ready &nbsp;4.8 × 4.4 m</div>
+    <div class="dock"><i class="ti ti-home f"></i><i class="ti ti-brand-youtube"></i><i class="ti ti-brand-xbox"></i><i class="ti ti-world"></i><i class="ti ti-cube"></i><i class="ti ti-grid-dots"></i><i class="ti ti-adjustments-horizontal"></i></div>
+    <div class="keys">Pinch or Select to open</div>
+  </div>
+  <div class="tag"><b>2. Aurora</b> &nbsp; a wall of covers that curves round you, colour glow, a console feel</div>
+</div>
+
+<!-- 3 -->
+<div class="scene" id="s3">
+  <div class="room"></div><div class="lamp"></div>
+  <div class="ui">
+    <div class="time">8:43</div>
+    <div class="date"><span>Friday 20 November</span><span><u></u>Glasses</span><span><i class="ti ti-battery-3"></i>82%</span><span><i class="ti ti-focus-centered"></i>Room locked</span></div>
+    <div class="mini l"><h4>Room</h4>
+      <svg width="150" height="78" viewBox="0 0 150 78"><polygon points="38,10 104,4 140,34 112,72 44,68 12,40" fill="rgba(140,230,255,.12)" stroke="#bff3ff" stroke-width="2.5" stroke-linejoin="round"/><circle cx="76" cy="40" r="5" fill="#fff"/></svg>
+      <div class="row"><u></u>4.8 × 4.4 m</div></div>
+    <div class="mini r"><h4>Windows</h4>
+      <div class="row"><i class="ti ti-brand-youtube"></i>YouTube</div><div class="row"><i class="ti ti-world"></i>Browser</div><div class="row"><i class="ti ti-brand-xbox"></i>Xbox Cloud</div></div>
+    <div class="stage"><div class="k">Continue</div><div class="t">Xbox<br>Cloud</div><div class="b"><i class="ti ti-player-play"></i>Resume</div><i class="ti ti-device-gamepad-2 gl"></i></div>
+    <div class="shadow"></div>
+    <div class="orb" style="left:300px;top:690px;width:92px;height:92px;--c:#8a5cff;--g:rgba(138,92,255,.35);--s:40px;opacity:.75"><i class="ti ti-adjustments-horizontal"></i><b>Settings</b></div>
+    <div class="orb" style="left:470px;top:726px;width:112px;height:112px;--c:#ff4d6d;--g:rgba(255,77,109,.4);--s:50px"><i class="ti ti-brand-youtube"></i><b>YouTube</b></div>
+    <div class="orb" style="left:668px;top:748px;width:128px;height:128px;--c:#3aa0ff;--g:rgba(58,160,255,.42);--s:58px"><i class="ti ti-world"></i><b>Browser</b></div>
+    <div class="orb f" style="left:882px;top:728px;width:156px;height:156px;--c:#22d37a;--g:rgba(34,211,122,.6);--s:72px"><i class="ti ti-brand-xbox"></i><b>Xbox Cloud</b></div>
+    <div class="orb" style="left:1124px;top:748px;width:128px;height:128px;--c:#c77dff;--g:rgba(199,125,255,.42);--s:58px"><i class="ti ti-cube"></i><b>3D web</b></div>
+    <div class="orb" style="left:1338px;top:726px;width:112px;height:112px;--c:#ffa63a;--g:rgba(255,166,58,.4);--s:50px"><i class="ti ti-target-arrow"></i><b>Games</b></div>
+    <div class="orb" style="left:1528px;top:690px;width:92px;height:92px;--c:#35d8d0;--g:rgba(53,216,208,.35);--s:40px;opacity:.75"><i class="ti ti-apps"></i><b>All apps</b></div>
+  </div>
+  <div class="tag"><b>3. Orbit</b> &nbsp; almost no panels: glass spheres on an arc in your room, one stage, the room stays in view</div>
+</div>
+
+<script>
+const n = new URLSearchParams(location.search).get('d') || '1';
+document.getElementById('s' + n).classList.add('on');
+</script>
+</body>
+</html>

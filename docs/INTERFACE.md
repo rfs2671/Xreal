@@ -42,6 +42,36 @@ fainter and the cards carry it.
   glass pills. Corner brackets are drawn only while a window is being sized. A window that was put away comes
   back in front of the wearer, not where it last stood.
 
+## Working first (20 November 2026, after the owner wore the glass home)
+
+The owner's words: "hand tracking not working... not 6dof and no way to move windows or resize them... Fix everything
+to be working functionality first. Then I want 3 visual example to see which direction to go with." What was wrong,
+and what was changed:
+
+- **Not 6DoF.** The desktop used the head's position only if a setting was switched on, and the setting was off. It
+  is on now, and used whenever there is a head (the tracker holds its last place while it has no fresh one). Every
+  window has its own place in the room (`DesktopWindow.ax`, `Desktop.anchorFor`, `reanchor`): opened, brought back
+  or taken up, it is arranged around where the wearer is then, and stays there when they walk. The home and the
+  dock keep their place while the wearer moves within 45 cm of it and glide along when they walk off. Places are not
+  kept from one session to the next (a new session has a new world).
+- **Hands.** The desktop pointed from the wrist to the knuckles (the ray the owner called "really bad" in games) and
+  took a pinch by distance alone (1 of 11 of his pinches in his own recording). It now uses the games' arm ray
+  (`core/ArmRay`, shared with `XrHost`) and measured pinch rule (`PinchState`) through `desktop/HandPointer`. And the
+  wearer is shown the hand: a dot on the thumb's and the index finger's tip, a short fading ray, and a ring where it
+  lands that fills while pinching. A hand seen is logged every five seconds ("desktop: a hand in ...").
+- **Moving and sizing.** By hand: pinch a window's handle and carry it (it follows while the fingers hold); pinch a
+  corner and drag. By phone: Move and Size stand beside the d-pad (they were behind "more"). The dock stands as far
+  away as a new window (2 m; it was 1.6 m), and of a mark and a window on one ray the nearer is meant: before, a ray
+  from a hand held low passed through the dock on its way to a window's handle.
+- **Checked** on the S21 Ultra without the glasses, with a made-up hand (debug builds: `files/hand_sim.txt`, "yaw
+  pitch gap"): pointing puts the ring on the window, a pinch on the handle carried the window 9 degrees and it
+  stayed, a pinch on a corner dragged it from 0.80 to 1.07 m wide, a pinch on the dock's Home showed the home and one
+  on its large card brought the window back; the phone's Move and Size with the d-pad. Unit tests: 201, none
+  failing (`RoomPlaceTest`). **Not checked:** a real hand, and walking, in the glasses.
+- **The look** is open again: three directions are drawn in `docs/design/` (`direction1.png` Clear glass,
+  `direction2.png` Aurora, `direction3.png` Orbit; `directions.html` draws them, added to a dim room as the glasses
+  add light). The owner chooses; nothing of them is built yet.
+
 ## The material
 
 The glasses add light to the room and cannot darken it. Black is not a colour here: it is the room. A filled panel
