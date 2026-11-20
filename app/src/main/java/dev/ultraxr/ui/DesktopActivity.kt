@@ -191,6 +191,7 @@ class DesktopActivity : Activity() {
             try {
                 val r = DesktopRenderer(false) { id, s -> session.onSurface(id, s) }
                 r.periodNs = (1e9 / d.refreshRate.coerceAtLeast(30f)).toLong()
+                if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) r.eyeCapture = java.io.File(filesDir, "eye_capture.png")
                 val p = StagePresentation(this, d, r); p.show(); glasses = p
                 session.renderers = listOf(r)
                 Tracking.noteGraphics("desktop shown on glasses display ${d.displayId}")
