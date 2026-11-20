@@ -1,0 +1,223 @@
+--- a/src/xrt/tracking/hand/mercury/hg_model.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
+@@ -946,6 +946,212 @@
+ 	}
+ }
+ 
++// ---- libultra_hands: the detector also looks through fisheye-corrected tiles.
++//
++// The detector is given the whole fisheye picture squeezed to 160x160. A hand low in the picture or at its side is
++// small, stretched and cut off there, and is not found (measured on the wearer's recordings: tools/tracking/
++// hand_bench.py). So, for a hand that is not being tracked and that the whole picture did not show, a few ordinary
++// (pinhole) views of 70 degrees are cut out of the fisheye picture and the same detector is run on each: three ahead
++// and up, three ahead and down, three at chest height, the low and the side ones oftener. What a tile finds is put
++// back into the fisheye picture's pixels and goes on as any detection does: the keypoint model and the fit decide
++// whether it is a hand.
++//   ULTRA_HANDS_TILES            tiles looked through each time the detector runs on a view (default 3, 0 = off)
++//   ULTRA_HANDS_TILES_MIN_CONF   the least confidence a tile's detection needs (default 0.5)
++namespace {
++
++constexpr int kUltraTile = 160;
++constexpr float kUltraTileFovDeg = 70.0f;
++
++struct UltraTile
++{
++	float yaw_deg = 0, pitch_deg = 0;
++	float R[9] = {};
++	cv::Mat map_x, map_y;
++};
++
++struct UltraTiles
++{
++	bool ready = false;
++	int cols = 0, rows = 0;
++	float f = 1.0f;
++	std::vector<UltraTile> tiles;
++	std::vector<int> order;
++	size_t next = 0;
++};
++
++UltraTiles ultra_tiles[2];
++
++int
++ultra_tiles_per_call()
++{
++	static int n = -1;
++	if (n < 0) {
++		const char *e = std::getenv("ULTRA_HANDS_TILES");
++		n = (e != nullptr && e[0] != '\0') ? std::atoi(e) : 3;
++		n = std::max(0, std::min(12, n));
++	}
++	return n;
++}
++
++float
++ultra_tiles_min_conf()
++{
++	static float c = -1.0f;
++	if (c < 0.0f) {
++		const char *e = std::getenv("ULTRA_HANDS_TILES_MIN_CONF");
++		c = (e != nullptr && e[0] != '\0') ? (float)std::atof(e) : 0.5f;
++		c = std::max(0.0f, std::min(1.0f, c));
++	}
++	return c;
++}
++
++void
++ultra_tiles_setup(UltraTiles &T, const t_camera_model_params &dist, int cols, int rows)
++{
++	T.tiles.clear();
++	T.order.clear();
++	T.next = 0;
++	T.cols = cols;
++	T.rows = rows;
++	T.f = (float)kUltraTile / 2.0f / tanf(kUltraTileFovDeg * (float)M_PI / 360.0f);
++
++	const float yaws[3] = {-48.0f, 0.0f, 48.0f};
++	const float pitches[3] = {-22.0f, 22.0f, 58.0f}; // downwards
++	for (float pitch : pitches) {
++		for (float yaw : yaws) {
++			UltraTile t;
++			t.yaw_deg = yaw;
++			t.pitch_deg = pitch;
++			const float a = yaw * (float)M_PI / 180.0f, b = pitch * (float)M_PI / 180.0f;
++			const float ca = cosf(a), sa = sinf(a), cb = cosf(b), sb = sinf(b);
++			// R = Ry(yaw) * Rx(pitch)^T: the tile's own axes in the camera's frame (x right, y down, z forward).
++			const float R[9] = {ca, -sa * sb, sa * cb, 0.0f, cb, sb, -sa, -ca * sb, ca * cb};
++			std::copy(R, R + 9, t.R);
++			t.map_x = cv::Mat(kUltraTile, kUltraTile, CV_32FC1);
++			t.map_y = cv::Mat(kUltraTile, kUltraTile, CV_32FC1);
++			int inside = 0;
++			for (int v = 0; v < kUltraTile; v++) {
++				for (int u = 0; u < kUltraTile; u++) {
++					const float x = ((float)u + 0.5f - kUltraTile / 2.0f) / T.f;
++					const float y = ((float)v + 0.5f - kUltraTile / 2.0f) / T.f;
++					const float dx = R[0] * x + R[1] * y + R[2];
++					const float dy = R[3] * x + R[4] * y + R[5];
++					const float dz = R[6] * x + R[7] * y + R[8];
++					float px = -1.0f, py = -1.0f;
++					t_camera_models_project(&dist, dx, dy, dz, &px, &py);
++					if (!std::isfinite(px) || !std::isfinite(py)) {
++						px = -1.0f;
++						py = -1.0f;
++					}
++					t.map_x.at<float>(v, u) = px;
++					t.map_y.at<float>(v, u) = py;
++					if (px >= 0.0f && px < (float)cols && py >= 0.0f && py < (float)rows) {
++						inside++;
++					}
++				}
++			}
++			// A tile that is mostly outside the picture is not worth a run of the detector.
++			if ((float)inside / (float)(kUltraTile * kUltraTile) > 0.55f) {
++				T.tiles.push_back(std::move(t));
++			}
++		}
++	}
++	// The order they are looked through in: the low and the side ones twice in a round, the ones ahead and up once.
++	const float round[12][2] = {{0, 58}, {-48, 22}, {48, 22}, {0, 22}, {-48, 58}, {48, 58},
++	                            {0, -22}, {0, 58}, {-48, 22}, {48, 22}, {-48, -22}, {48, -22}};
++	for (const auto &want : round) {
++		for (size_t i = 0; i < T.tiles.size(); i++) {
++			if (T.tiles[i].yaw_deg == want[0] && T.tiles[i].pitch_deg == want[1]) {
++				T.order.push_back((int)i);
++			}
++		}
++	}
++	T.ready = true;
++}
++
++} // namespace
++
++static void xr_run_hand_detection_pass(hand_detection_run_info *info, bool mirror_horizontal, hand_region_of_interest outputs[2]);
++
++static void
++ultra_tiles_pass(hand_detection_run_info *info)
++{
++	const int per_call = ultra_tiles_per_call();
++	if (per_call <= 0) {
++		return;
++	}
++	ht_view *view = info->view;
++	HandTracking *hgt = view->hgt;
++	// Only for a hand that is not being tracked and that the whole picture did not show.
++	bool need[2];
++	for (int h = 0; h < 2; h++) {
++		need[h] = !info->outputs[h].found && !hgt->last_frame_hand_detected[h];
++	}
++	if (!need[0] && !need[1]) {
++		return;
++	}
++	cv::Mat whole = view->run_model_on_this; // a header on the same picture
++	if (whole.empty() || whole.type() != CV_8UC1) {
++		return;
++	}
++	UltraTiles &T = ultra_tiles[view->view & 1];
++	if (!T.ready || T.cols != whole.cols || T.rows != whole.rows) {
++		ultra_tiles_setup(T, view->hgdist, whole.cols, whole.rows);
++	}
++	if (T.order.empty()) {
++		return;
++	}
++	const float min_conf = ultra_tiles_min_conf();
++	float best[2] = {0.0f, 0.0f};
++	for (int k = 0; k < per_call; k++) {
++		UltraTile &t = T.tiles[T.order[T.next++ % T.order.size()]];
++		cv::Mat tile;
++		cv::remap(whole, tile, t.map_x, t.map_y, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
++		hand_region_of_interest out[2] = {};
++		for (int h = 0; h < 2; h++) {
++			out[h].found = false;
++			out[h].hand_detection_confidence = 0;
++			out[h].provenance = ROIProvenance::HAND_DETECTION;
++		}
++		view->run_model_on_this = tile;
++		try {
++			xr_run_hand_detection_pass(info, false, out);
++		} catch (...) {
++			view->run_model_on_this = whole;
++			throw;
++		}
++		view->run_model_on_this = whole;
++		for (int h = 0; h < 2; h++) {
++			if (!need[h] || !out[h].found) {
++				continue;
++			}
++			const float conf = out[h].xr_raw_hand_exists;
++			if (conf < min_conf || conf <= best[h]) {
++				continue;
++			}
++			// Its place in the tile, as a place of the fisheye picture.
++			const float x = (out[h].center_px.x - kUltraTile / 2.0f) / T.f;
++			const float y = (out[h].center_px.y - kUltraTile / 2.0f) / T.f;
++			const float dx = t.R[0] * x + t.R[1] * y + t.R[2];
++			const float dy = t.R[3] * x + t.R[4] * y + t.R[5];
++			const float dz = t.R[6] * x + t.R[7] * y + t.R[8];
++			float px = -1.0f, py = -1.0f;
++			if (!t_camera_models_project(&view->hgdist, dx, dy, dz, &px, &py)) {
++				continue;
++			}
++			if (!(px >= 0.0f && px < (float)whole.cols && py >= 0.0f && py < (float)whole.rows)) {
++				continue;
++			}
++			out[h].center_px.x = px;
++			out[h].center_px.y = py;
++			// As many pixels to an angle as the fisheye picture has there (it is near enough equidistant).
++			out[h].size_px = out[h].size_px * view->hgdist.fx / T.f;
++			info->outputs[h] = out[h];
++			best[h] = conf;
++		}
++	}
++}
++
+ static void
+ run_hand_detection_unsafe(hand_detection_run_info *info)
+ {
+@@ -956,6 +1162,7 @@
+ 		const bool mirror_horizontal =
+ 		    xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_MIRROR_HORIZONTAL");
+ 		xr_run_hand_detection_pass(info, mirror_horizontal, info->outputs);
++		ultra_tiles_pass(info);
+ 		if (xr_detector_swap_slots) {
+ 			std::swap(info->outputs[0], info->outputs[1]);
+ 		}

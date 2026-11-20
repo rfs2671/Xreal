@@ -36,7 +36,7 @@ if [[ ! -f "$WORK/monado/.ultra_hands_patched" ]]; then
     git -C "$WORK/monado" apply "$B/patches/monado/$p.patch"
   done
   for p in "$HERE"/patches/*.patch; do
-    git -C "$WORK/monado" apply "$p"
+    git -C "$WORK/monado" apply --ignore-whitespace "$p"
   done
   touch "$WORK/monado/.ultra_hands_patched"
 fi

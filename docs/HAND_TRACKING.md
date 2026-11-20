@@ -120,6 +120,49 @@ filter). So the change belongs inside Mercury's detection step, with its later s
 is the replay of these recordings on the phone, before and after. Not done yet. Also not measured yet: the second
 recording (19 November), speed on the phone, and anything about one-camera tracking or pinch.
 
+## Tiles inside Mercury, measured on the phone (20 November 2026)
+
+The change (`native/hands/src/patches/0002-ultra-hands-tiles.patch`, in `hg_model.cpp`): each time the detector runs on
+a camera's picture, for a hand that is not being tracked and that the whole picture did not show, it also looks
+through three fisheye-corrected tiles (nine in all, the low and the side ones twice in a round). What a tile finds
+is put back into the fisheye picture and goes on through Mercury's keypoint model and fit as any detection does.
+`tiles=0` in `hand_options.txt` is the tracker as it was; unset, the library looks through three. The library is
+built on Windows with `native/hands/src/build_android_windows.sh`.
+
+Both recordings were replayed through the tracker on the S21 Ultra (`tools/pixel/lab.py`, `UXR_IP=192.168.1.165`,
+runs `h_tiles0`, `h_tiles3`), the first one twice each way, and scored against the labels
+(`tools/tracking/hand_replay_compare.py`):
+
+| 17 November, 45 s | results a second | ms a result | hand plainly in both pictures: tracked | hand in neither picture: reported |
+|---|---|---|---|---|
+| tiles off | 29.5 | 23.9 | 769 of 885 (87 %) | 11 of 847 (1 %) |
+| tiles off, again | 27.2 | 27.7 | 611 of 783 (78 %) | 7 of 776 (1 %) |
+| tiles on | 26.9 | 28.8 | 692 of 768 (90 %) | 9 of 761 (1 %) |
+| tiles on, again | 26.9 | 28.6 | 692 of 769 (90 %) | 9 of 763 (1 %) |
+
+19 November (70 s, hands held up, not labelled): a hand in 40 % (left) and 47 % (right) of results with tiles off,
+41 % and 50 % with tiles on; 34.8 and 30.0 ms a result.
+
+What that says, and what it does not:
+
+- **Raised hands:** 90 % against 78 to 87 %. The two runs without tiles differ from each other by more than the
+  runs with tiles differ from the better of them, so most of this is within the spread. One thing is the same in
+  both runs each way: in seconds 7 and 8 the right hand is tracked in two or three of nine results without tiles
+  and in nine of nine with them. A lost hand is found again sooner.
+- **False hands:** no more than before (1 %), in a recording with the stands that fooled the detector offline.
+  Mercury's later stages do reject them.
+- **Cost:** not measurable against the run-to-run spread.
+- **Chest height and low hands: no gain.** In second 18 (the right hand low over the keyboard, in both pictures)
+  and in seconds 19 to 28 (the left hand low at the side, in one picture) no run tracks a hand, with tiles or
+  without. Offline the tiles do find those hands, so what stops them is after detection. Two causes are likely and
+  neither is shown yet: the hand at the side is in one camera only, and Mercury's fit needs two; and a hand at the
+  picture's edge may be thrown out by Mercury's own checks (keypoints outside the view, the quality filter).
+
+So the tiles are kept (they do no harm and find a lost hand sooner), and the owner's goal is not met by them. What
+it takes next: to see, frame by frame, why a hand the detector found is dropped (Mercury has a detector debug
+log); then tracking from one camera with the distance held from the last two-camera fit, as Frametop does; then
+the question of speed.
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,

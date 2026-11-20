@@ -397,6 +397,8 @@ object Tracking : GlassesLink.Listener {
         try {
             handOptions = dev.ultraxr.core.HandOptions.parse(try { File(app.getExternalFilesDir(null), "hand_options.txt").takeIf { it.isFile }?.readText() } catch (_: Exception) { null })
             handOptions.qualityFilter?.let { try { android.system.Os.setenv("MERCURY_XR_QUALITY_FILTER", if (it) "1" else "0", true) } catch (_: Throwable) {} }
+            handOptions.tiles?.let { try { android.system.Os.setenv("ULTRA_HANDS_TILES", it.toString(), true) } catch (_: Throwable) {} }
+            handOptions.tilesMinConf?.let { try { android.system.Os.setenv("ULTRA_HANDS_TILES_MIN_CONF", it.toString(), true) } catch (_: Throwable) {} }
             log("hand options: $handOptions")
             val dir = File(app.filesDir, "hand-models").apply { mkdirs() }
             for (name in app.assets.list("hand-models").orEmpty()) {

@@ -23,7 +23,7 @@ The phone's screen timeout, stay-awake setting and everything outside the app's 
 """
 import os, re, subprocess, sys, time
 
-IP = "192.168.1.162"; SERIAL_PART = "59250DLCQ002HQ"
+IP = os.environ.get("UXR_IP", "192.168.1.162"); SERIAL_PART = "59250DLCQ002HQ"      # UXR_IP: another phone (the S21 Ultra is 192.168.1.165)
 PKG = "dev.ultraxr"; FILES = "/sdcard/Android/data/dev.ultraxr/files"; BROWSER = "com.igalia.wolvic.vanilla/com.igalia.wolvic.VRBrowserActivity"
 
 RUNS = {
@@ -39,6 +39,11 @@ RUNS = {
     "h_stretch": ("", "stretch=1" + chr(10)),
     "h_qf0":     ("", "quality_filter=0" + chr(10)),
     "h_both":    ("", "stretch=1" + chr(10) + "quality_filter=0" + chr(10)),
+    # the hand detector with and without its fisheye-corrected tiles (native/hands: ULTRA_HANDS_TILES), each twice
+    "h_tiles0":  ("", "tiles=0" + chr(10)), "h_tiles0b": ("", "tiles=0" + chr(10)),
+    "h_tiles3":  ("", "tiles=3" + chr(10)), "h_tiles3b": ("", "tiles=3" + chr(10)),
+    "h_tiles6":  ("", "tiles=6" + chr(10)),
+    "h_tiles3c7": ("", "tiles=3" + chr(10) + "tiles_min_conf=0.7" + chr(10)),
     "hold3":  ("", ""),      # with the estimator restarted when it wanders while the glasses lie still
     "hold4":  ("", ""),
     "room":   ("", ""),      # the room model: floor, table tops and walls (TAG-room.csv)
