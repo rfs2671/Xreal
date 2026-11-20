@@ -534,6 +534,18 @@ they could be laid on it, and 7 cm of drift was taken out: the first time the co
 The walk meant to measure it did not happen: the phone's battery was at 6 % and the glasses were no longer
 attached. Still without a number: whether the walls stay on the real ones through a walk.
 
+### "Hands keep vanishing; the fix in the game was perfect, why was it not kept" (19 November, 19:20)
+
+Nothing was taken out. Hands found, by half minute, from the layer's own count (hand there of times asked):
+Unity's example 17:07: 132 and 2256 of 3600 (left), 0 and 68 (right); 17:25: 586 and 136 (left), 26 and 3428
+(right). The set-up tool 18:14: 178, 3600 and 1062 (left), 1804, 1196 and 72 (right); 18:47 and 18:54: right 1087
+to 1370 of about 2700, left none; 19:01: 172 to 518. The spread is the same in the game and in the tool: a hand is
+found while it is where both cameras see it and not otherwise.
+
+What the game had and the tool had not: Unity draws the hand as a hand, with its ray; the tool drew 26 dots and
+the controller's ray. The tool now draws the bones of the hand, white while it pinches, and the hand's own ray
+from the aim state, as the game's is. Built and installed; not yet seen by the wearer.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,

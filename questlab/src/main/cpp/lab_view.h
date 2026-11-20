@@ -314,12 +314,21 @@ static void buildGeometry(XrTime t, const XrPosef &head) {
         if (viewTrackers[h] == XR_NULL_HANDLE) continue;
         XrHandJointLocationEXT j[XR_HAND_JOINT_COUNT_EXT]; XrHandJointLocationsEXT hl{XR_TYPE_HAND_JOINT_LOCATIONS_EXT}; hl.jointCount = XR_HAND_JOINT_COUNT_EXT; hl.jointLocations = j;
         XrHandJointsLocateInfoEXT hi{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT}; hi.baseSpace = local; hi.time = t;
+        XrHandTrackingAimStateFB aimS{XR_TYPE_HAND_TRACKING_AIM_STATE_FB}; hl.next = &aimS;      // the hand's own pointing ray and pinch, as a game with hands gets them
         if (XR_FAILED(lHand(viewTrackers[h], &hi, &hl)) || !hl.isActive) continue;
         int first = (int)vtx.size() / 3; for (auto &k : j) vtx.insert(vtx.end(), {k.pose.position.x, k.pose.position.y, k.pose.position.z});
         batch(GL_POINTS, first, h ? 1.0f : 0.1f, 0.9f, h ? 0.2f : 1.0f, 1, 0);      // left cyan, right yellow
+        // and the hand as a hand: the bones of each finger from the wrist out, and across the knuckles, so that it
+        // looks like the hand a game draws and not like a handful of dots
+        static const int bones[][2] = {{1, 2}, {2, 3}, {3, 4}, {4, 5}, {1, 6}, {6, 7}, {7, 8}, {8, 9}, {9, 10}, {1, 11}, {11, 12}, {12, 13}, {13, 14}, {14, 15},
+                                       {1, 16}, {16, 17}, {17, 18}, {18, 19}, {19, 20}, {1, 21}, {21, 22}, {22, 23}, {23, 24}, {24, 25}, {7, 12}, {12, 17}, {17, 22}, {2, 7}};
+        first = (int)vtx.size() / 3; for (auto &bn : bones) lineTo(j[bn[0]].pose.position, j[bn[1]].pose.position);
+        bool pinchS = (aimS.status & XR_HAND_TRACKING_AIM_INDEX_PINCHING_BIT_FB) != 0;
+        if (pinchS) batch(GL_LINES, first, 1.0f, 1.0f, 1.0f, 1, 0); else batch(GL_LINES, first, h ? 1.0f : 0.2f, 0.9f, h ? 0.3f : 1.0f, 1, 0);      // white while it pinches
+        if (aimS.status & XR_HAND_TRACKING_AIM_VALID_BIT_FB) { first = (int)vtx.size() / 3; lineTo(aimS.aimPose.position, at(aimS.aimPose, 0, 0, -2.0f)); batch(GL_LINES, first, pinchS ? 1.0f : 0.6f, pinchS ? 1.0f : 0.6f, pinchS ? 1.0f : 0.6f, 1, 0); }
     }
     if (setupMode) buildSetup(t, head);
-    for (int h = 0; h < 2; h++) if (aimOk[h]) { int first = (int)vtx.size() / 3; lineTo(aimPose[h].position, at(aimPose[h], 0, 0, setupMode ? -6.0f : -1.5f)); float b = triggerNow[h] > 0.5f ? 1.0f : 0.45f; batch(GL_LINES, first, b, 0.1f * b, b, 1, 0); }
+    for (int h = 0; h < 2; h++) if (aimOk[h] && !setupMode) { int first = (int)vtx.size() / 3; lineTo(aimPose[h].position, at(aimPose[h], 0, 0, -1.5f)); float b = triggerNow[h] > 0.5f ? 1.0f : 0.45f; batch(GL_LINES, first, b, 0.1f * b, b, 1, 0); }
 }
 static const XrCompositionLayerBaseHeader *drawRoomView(XrTime t) {
     XrViewLocateInfo vi{XR_TYPE_VIEW_LOCATE_INFO}; vi.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO; vi.displayTime = t; vi.space = local;
