@@ -4,6 +4,9 @@
 //
 // usage: ultra_hands_replay <models_dir> <calib.json> <pairs file> [first_pair [pair_count]]
 //   pairs file: tools/tracking/hand_pairs_export.py ("UXPAIRS1", int32 count, then int64 ns + two 480x640 pictures a pair)
+// environment: UH_REALTIME=1 drops the pairs that arrive while the tracker is still busy with an earlier one, as the app
+//   does (a pair is taken only if the tracker is free when it arrives), so that what a slower tracker loses shows.
+//   The threads are the app's: two workers, one ONNX Runtime thread, no spinning.
 // output, a line a pair: t_s,mask,ms, then for the left and for the right hand: palm x,y,z (metres, the left
 //   camera's frame; empty when not tracked) and the thumb-tip to index-tip distance
 #define _POSIX_C_SOURCE 200809L
@@ -55,6 +58,9 @@ main(int argc, char **argv)
 	info.size_bytes = sizeof(info);
 	info.models_dir = argv[1];
 	info.calib_json = argv[2];
+	ultra_hands_set_threading(2, 1, 0);
+	const int realtime = getenv("UH_REALTIME") != NULL && getenv("UH_REALTIME")[0] == '1';
+	double free_at_ns = 0;
 	void *ctx = xr_mercury_runtime_create(&info);
 	if (!ctx) {
 		fprintf(stderr, "create failed: %s\n", ultra_hands_last_create_error());
@@ -74,10 +80,14 @@ main(int argc, char **argv)
 		if (i < first) {
 			continue;
 		}
+		if (realtime && (double)t < free_at_ns) {
+			continue; // the tracker was still busy when this pair arrived
+		}
 		memset(&out, 0, sizeof(out));
 		double t0 = now_ms();
 		int rc = xr_mercury_runtime_process_gray8(ctx, l, W, H, W, r, W, H, W, (uint64_t)t + 1000000000ull, (uint64_t)i, &out);
 		double ms = now_ms() - t0;
+		free_at_ns = (double)t + ms * 1e6;
 		if (rc != 0) {
 			fprintf(stderr, "pair %ld: error %d %s\n", i, rc, xr_mercury_runtime_last_error(ctx));
 			continue;

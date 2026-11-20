@@ -355,6 +355,44 @@ upstream in the app as well. The 20 November recording through the app, upstream
 used. Second looks are few (0 to 7 sets a second) and are not it. A candidate that lies on the hand already tracked
 is now left out before its second looks; that changed nothing measurable.
 
+## Trying to get the low hands at the cameras' speed: what was learned, nothing adopted (20 November 2026, night)
+
+The library was not changed by this; what is installed is still the build of the section above.
+
+- **What a frame costs.** One run of the detector takes about 10 ms on the phone (one ONNX Runtime thread; the two
+  views run side by side). Upstream's frame with no hand is 13 ms, with a hand tracked 29 ms in the app. Every
+  tile on top of the whole picture is 10 ms more, and a set of four second looks 40 ms in one frame. That, not the
+  second looks' own preparation, is the cost; the detector itself would have to be faster (it runs on the CPU) for
+  more looking to fit in a frame.
+- **Taking turns instead of adding** (every other run of the detector the whole picture, the runs between one tile
+  or one second look) brings a frame back to upstream's 13 ms and finds almost none of the low hands: a find then
+  takes a third of a second to check, and two passes in the same place seldom come within the time. Not adopted
+  (`C:\uvio\hb\hg_model.turns.cpp`, outside the repository).
+- **Letting a find that all four second looks agree on begin a hand by itself** starts a hand on the stands of the
+  17 November recording when frames are dropped (reported where there is none in 35 % of results). Not adopted.
+- **The test tool now has the app's threads and a mode that drops pairs as the app does** (`UH_REALTIME=1`). With
+  it, which pairs are processed depends on how long each took, and two runs differ; it takes 57 ms for a pair with
+  a hand where the app takes 29, so it drops more than the app does. Good for seeing what dropped frames do, not
+  for numbers.
+- **A hand reported on the stands for ten seconds is upstream's own behaviour.** In the 17 November recording the
+  right hand comes down past the stands beside the laptop in second 18. Through the app at the cameras' speed,
+  upstream then keeps reporting a right hand, on the stands, until second 28 in one run of two, and the library as
+  it now is does so in one run of two as well. Given every pair, neither does. So the "none false" of the tables
+  above is true of every-pair runs and of the 20 November recording in the app, and is not true of this recording
+  in the app, with or without the changes:
+
+| 17 November through the app, at speed | hand plainly in both pictures: tracked | reported where there is none | results a second |
+|---|---|---|---|
+| upstream | 703 of 813 (86 %) | 11 of 772 (1 %) | 27.9 |
+| upstream, again | 629 of 786 (80 %) | 47 of 750 (6 %), and a right hand on the stands, seconds 18 to 28 | 26.4 |
+| now | 625 of 709 (88 %) | 53 of 701 (8 %), and the same | 24.4 |
+| now, again | 603 of 675 (89 %) | 12 of 675 (2 %) | 24.5 |
+
+  What would stop it is a tracked hand having to be confirmed from time to time (by the whole-picture detector
+  near it, or by second looks), and being dropped when nothing confirms it for a while. Not built: second looks
+  pass for a real low hand only about one time in four, so the rule needs care not to drop real hands, and there
+  is one recording with such a thing in it.
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,
