@@ -237,6 +237,39 @@ other camera not at all. The detector finds it through a tile, its second looks 
 moving and pinching, one at a time and together, for forty seconds
 (`adb shell am start -n dev.ultraxr/.ui.LauncherActivity --ei record_seconds 40` with the glasses on).
 
+## A third recording, with low hands, and the second look set by it (20 November 2026, midday)
+
+The owner made a 40 s recording with the glasses on (`chest-20261120.uxrec`, 1199 pairs; kept outside the
+repository). He did not follow the script asked for; it is what he does at his desk: the right hand raised and
+pointing (seconds 7 to 11), then both hands low over the desk and the laptop in a dim room with dark sleeves
+(about 24 to 38). Labelled by eye, a second at a time, with most of the low seconds marked as not to be judged
+(the hands are dark and small at that size); 270 results fall in seconds with a hand plainly in both pictures, 840
+in seconds with none.
+
+Every pair through the tracker on the phone (`ultra_hands_replay`), as before:
+
+| 20 November, 1199 pairs | hand plainly in both pictures: tracked | hand in neither: reported | hands reported in the seconds not judged |
+|---|---|---|---|
+| upstream | 57 of 270 (21 %) | 0 of 840 | 1 % |
+| keep only | 142 of 270 (53 %) | 0 of 840 | 1 % |
+| tiles, all four second looks must agree (the build of the morning) | 142 of 270 (53 %) | 0 of 840 | 1 % |
+| tiles, three of four must agree (**as it is now**) | 178 of 270 (66 %) | 0 of 840 | 4 % |
+| tiles, two of four | 214 of 270 (79 %) | 0 of 840 | 9 % |
+| tiles without the second look | 223 of 270 (83 %) | 0 of 840 | 35 % |
+
+The same settings on the 17 November recording, where the stands beside the laptop are: three of four gives exactly
+what four of four gave (846 of 900 tracked, 8 of 861 false); two of four reports a hand where there is none in
+303 of 861 results (35 %). So three of four it is.
+
+- **Upstream loses the raised hand after two seconds** here (seconds 9 to 11: nothing); the keep rule holds it
+  (9 of 9). That is the largest single gain in this recording.
+- **The low hands:** upstream and the morning's build track none of them. With three of four the right hand is
+  tracked from second 33 to 36; without the second look it is tracked from 25 to 39. So the hands at 25 to 32 are
+  there to be had and the second look still refuses them. Whether what is reported in those seconds without the
+  second look is right in place and in which hand it is has not been checked frame by frame.
+- **Not measured on this recording:** pinches, fingertip steadiness, how far the reported hands are from the true
+  ones. The 19 November recording was not run again with three of four.
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,

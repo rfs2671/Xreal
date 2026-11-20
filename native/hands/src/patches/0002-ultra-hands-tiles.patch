@@ -1,6 +1,6 @@
 --- a/src/xrt/tracking/hand/mercury/hg_model.cpp
 +++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
-@@ -946,6 +946,315 @@
+@@ -946,6 +946,326 @@
  	}
  }
  
@@ -134,11 +134,14 @@
 +// A second look at what a tile found. The detector takes dark things of the right shape for hands through a tile
 +// (the stands beside the wearer's laptop, at 0.92), and the keypoint model then agrees with it; a higher confidence
 +// does not tell them from hands. Looking again does: four views aimed straight at the find (70 and 95 degrees wide,
-+// and 70 turned 25 degrees either way) all say "hand" over 0.5 for 123 of 237 real finds in the wearer's recording
-+// and for 1 of 170 false ones (tools/tracking/hand_bench_verify.py). A find that fails is left alone for half a
-+// second, so that a thing that keeps being found does not cost four runs of the detector every frame.
++// and 70 turned 25 degrees either way), of which three have to say "hand" over 0.5. Measured through the whole
++// tracker on three of the wearer's recordings (docs/HAND_TRACKING.md): with three of four the stands start no hand
++// and low hands over the desk are found; with two of four the stands start one again (a hand reported where there
++// is none in 35 % of pairs); with all four the low hands are not found. A find that fails is left alone for half
++// a second, so that a thing that keeps being found does not cost four runs of the detector every frame.
 +//   ULTRA_HANDS_VERIFY=0         no second looks
-+//   ULTRA_HANDS_VERIFY_MIN=0.5   what each second look has to say at least
++//   ULTRA_HANDS_VERIFY_MIN=0.5   what a second look has to say at least
++//   ULTRA_HANDS_VERIFY_NEED=3    how many of the four have to say it
 +static float
 +ultra_second_look(hand_detection_run_info *info, const cv::Mat &whole, float px, float py, float fov_deg, float roll_deg, int hand)
 +{
@@ -198,17 +201,25 @@
 +	}
 +	const float looks[4][2] = {{70.0f, 0.0f}, {95.0f, 0.0f}, {70.0f, 25.0f}, {70.0f, -25.0f}};
 +	static const bool say = std::getenv("ULTRA_HANDS_DEBUG") != nullptr;
-+	bool ok = true;
++	// How many of the four have to agree (ULTRA_HANDS_VERIFY_NEED).
++	static const int need = []() {
++		const char *e = std::getenv("ULTRA_HANDS_VERIFY_NEED");
++		int n = (e != nullptr && e[0] != 0) ? std::atoi(e) : 3;
++		return std::max(1, std::min(4, n));
++	}();
 +	float got[4] = {-1, -1, -1, -1};
++	int agree = 0;
 +	for (int i = 0; i < 4; i++) {
 +		got[i] = ultra_second_look(info, whole, px, py, looks[i][0], looks[i][1], hand);
-+		if (got[i] < least) {
-+			ok = false;
-+			if (!say) {
-+				break;
-+			}
++		if (got[i] >= least) {
++			agree++;
++		}
++		// no need to look on once it is decided
++		if (!say && (agree >= need || agree + (3 - i) < need)) {
++			break;
 +		}
 +	}
++	bool ok = agree >= need;
 +	if (say) {
 +		fprintf(stderr, "ultra verify: view %d hand %d at %.0f,%.0f looks %.2f %.2f %.2f %.2f -> %d\n", info->view->view, hand, px, py, got[0], got[1], got[2], got[3], ok ? 1 : 0);
 +	}
@@ -316,7 +327,7 @@
  static void
  run_hand_detection_unsafe(hand_detection_run_info *info)
  {
-@@ -956,6 +1265,7 @@
+@@ -956,6 +1276,7 @@
  		const bool mirror_horizontal =
  		    xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_MIRROR_HORIZONTAL");
  		xr_run_hand_detection_pass(info, mirror_horizontal, info->outputs);
@@ -324,7 +335,7 @@
  		if (xr_detector_swap_slots) {
  			std::swap(info->outputs[0], info->outputs[1]);
  		}
-@@ -1530,6 +1840,7 @@
+@@ -1530,6 +1851,7 @@
  	}
  
  	this_output.active = is_hand;
