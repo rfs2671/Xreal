@@ -303,7 +303,7 @@ object Home {
         }
         text(c, m.time, W - 60f, 78f, 30f, Glass.TEXT, true, align = Paint.Align.RIGHT)
         val tw = TextPaint().apply { typeface = Type.bold; textSize = 30f }.measureText(m.time)
-        val word = m.tracking.replaceFirstChar { it.uppercase() }; val ok = m.tracking == "room found"
+        val word = m.tracking.replaceFirstChar { it.uppercase() }; val ok = m.tracking == "room found" || m.tracking == "position tracked"
         var sx = W - 60f - tw - 26f
         if (m.battery in 0..100) { val bt = "${m.battery} %"; text(c, bt, sx, 76f, 19f, Glass.SOFT, align = Paint.Align.RIGHT); sx -= TextPaint().apply { typeface = Type.regular; textSize = 19f }.measureText(bt) + 24f }
         text(c, if (m.glasses) word else "Glasses not connected", sx, 76f, 19f, Glass.SOFT, align = Paint.Align.RIGHT)

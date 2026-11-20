@@ -190,7 +190,7 @@ class DesktopSession(private val activity: Activity) {
             if (panelShown && desktop.focus is Focus.Shelf) { val i = tiles.indexOfFirst { it.id == before }; if (i < 0) desktop.point(Focus.Shelf(Home.first(tiles, coverCentre))) else if (i != desktop.shelfIndex) desktop.point(Focus.Shelf(i)) }
         }
     }
-    private fun trackingWord(head: HeadTracker.State) = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "finding the room" }
+    private fun trackingWord(head: HeadTracker.State) = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "position tracked" }
 
     /** Select on a tile of the panel. */
     private fun activateTile(i: Int) {
@@ -211,7 +211,7 @@ class DesktopSession(private val activity: Activity) {
         homeNs = 0; onLookPress?.invoke(); changed()
     }
     /** A window that was put away comes back in front of the wearer. */
-    private fun bringBack(id: Int) { desktop.restore(id); desktop.find(id)?.let { desktop.bringFront(id, headYaw(), clearPitch(it)) }; changed() }
+    private fun bringBack(id: Int) { stageMoving = true; desktop.restore(id); desktop.find(id)?.let { desktop.bringFront(id, headYaw(), clearPitch(it)) }; changed() }
     /** A slide on the touchpad steps the focus over the panel as the d-pad does. */
     private var padStepX = 0.0; private var padStepY = 0.0
 
@@ -335,6 +335,7 @@ class DesktopSession(private val activity: Activity) {
         val from = openingFrom ?: title
         desktop.windows.firstOrNull { it.minimized && it.kind == kind && (it.origin == from || it.url == url) }?.let { old -> bringBack(old.id); return true }
         if (desktop.windows.size >= Desktop.MAX_WINDOWS) desktop.windows.firstOrNull { it.minimized }?.let { close(it.id) }
+        stageMoving = true      // the dock comes to where the wearer is now, so that the new window stands clear of it
         val w = desktop.add(title, url, kind, headYaw())
         if (w == null) { say("Six windows are open: close one first"); return false }
         if (w.follow) w.yaw = 0.0
@@ -726,6 +727,11 @@ class DesktopSession(private val activity: Activity) {
         if (nowNs - lastPerfNs > 5_000_000_000L) {
             lastPerfNs = nowNs
             renderers.firstOrNull()?.let { r -> if (r.frames > 0) Tracking.log(String.format(java.util.Locale.US, "desktop: %.0f fps, %.1f ms per frame on the CPU, %d late of %d frames, %d windows, %dx%d", r.fps, r.avgCpuMs, r.lateFrames, r.frames, desktop.visible.size, r.width, r.height)) }
+            // what the hand tracker is doing, whether or not the desktop makes a pointer of it
+            val hj = Tracking.handJoints; val newest = hj.maxOfOrNull { it.timestampNs } ?: 0L
+            Tracking.log("desktop hands: switch " + (if (Tracking.handsOn) "on" else "off") + ", gestures " + (if (handGestures) "on" else "off") + ", tracker results ${Tracking.handsFrames}, " +
+                String.format(java.util.Locale.US, "%.0f ms each", Tracking.handsProcessMs) + ", hands in the newest ${hj.size}" + (if (newest != 0L) ", its picture " + (nowNs - newest) / 1_000_000 + " ms old" else "") +
+                (if (Tracking.handsError.isNotEmpty()) ", error: " + Tracking.handsError else "") + ", head " + head.mode)
         }
         if (desktop.revision != lastUiRevision) { lastUiRevision = desktop.revision; changed() }
         drawSettings(nowNs)
@@ -1046,7 +1052,13 @@ class DesktopSession(private val activity: Activity) {
         val side = MARK_PX * 3; val b = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
         val sign = HomeIcon.sign(item.title, if (item.url == "nav:panel") "nav:home" else if (item.kind == HomeItem.Kind.NAV) item.url else if (item.kind == HomeItem.Kind.WEB) item.webKind else "")
         val c = Canvas(b); val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        HomeIcon.draw(c, p, side / 2f, side / 2f, MARK_PX.toFloat(), item.color, item.kind == HomeItem.Kind.GAME, sign, item.verified, lit)
+        val own = appIcon(item)
+        HomeIcon.draw(c, p, side / 2f, side / 2f, MARK_PX.toFloat(), item.color, item.kind == HomeItem.Kind.GAME, if (own != null) "" else sign, item.verified, lit)
+        if (own != null) {      // an app of the phone shows its own icon in its mark, not a letter
+            val r = MARK_PX * 0.74f; val clip = android.graphics.Path(); clip.addCircle(side / 2f, side / 2f, r, android.graphics.Path.Direction.CW)
+            val save = c.save(); c.clipPath(clip); p.isFilterBitmap = true; p.alpha = 255
+            c.drawBitmap(own, null, android.graphics.RectF(side / 2f - r, side / 2f - r, side / 2f + r, side / 2f + r), p); c.restoreToCount(save)
+        }
         if (running > 0) {
             p.color = Ink.TIDE_INT; p.style = if (running == 2) Paint.Style.FILL else Paint.Style.STROKE; p.strokeWidth = MARK_PX * 0.035f
             c.drawCircle(side / 2f, side / 2f + MARK_PX * 1.12f, MARK_PX * 0.06f, p); p.style = Paint.Style.FILL
@@ -1136,7 +1148,7 @@ class DesktopSession(private val activity: Activity) {
         /** A pinch on a window's handle becomes carrying the window once the hand's ray has turned this far. */
         private val GRAB_ANGLE = Math.toRadians(2.5)
         /** The home and the dock stay put while the head is within this of where they were placed, along the floor and up or down, metres. */
-        private const val STAGE_REACH = 0.45; private const val STAGE_RISE = 0.30
+        private const val STAGE_REACH = 0.35; private const val STAGE_RISE = 0.10
         /** A slide this long on the touchpad (in pad widths) is one step of the focus on the home panel. */
         private const val PAD_STEP = 0.16
         /** The kind of the window the settings are in. */

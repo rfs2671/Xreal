@@ -242,7 +242,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
             streaming && st != null && !st.onGlasses -> showBanner("The glasses are connected over USB, but Android reports no external display. Check that the cable is plugged straight into the phone.", "Run the check") { startActivity(Intent(this, CheckActivity::class.java)) }
             // a step of the set-up has been undone since: the one step that puts it right (Android's own screen; the owner switches it on)
             Tracking.settings.setupDone && !SetupActivity.pointerOn(this) -> showBanner("The pointer is switched off, so the phone is not a touchpad in games.", "Switch it on in Android's settings") { try { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {} }
-            streaming && !Tracking.settings.firstRunDone -> showBanner("First time with these glasses: run the one-minute check so tracking and 3D are confirmed on your hardware.", "Run the check") { startActivity(Intent(this, CheckActivity::class.java)) }
+            // only until the set-up has been gone through once: after that the start screen asks for nothing
+            streaming && !Tracking.settings.firstRunDone && !Tracking.settings.setupDone -> showBanner("First time with these glasses: run the one-minute check so tracking and 3D are confirmed on your hardware.", "Run the check") { startActivity(Intent(this, CheckActivity::class.java)) }
             streaming && Tracking.vioError.isNotEmpty() -> showBanner("Position tracking could not start, so games run with rotation only. (${Tracking.vioError})", "Details") { startActivity(Intent(this, CheckActivity::class.java)) }
             else -> banner.visibility = View.GONE
         }
