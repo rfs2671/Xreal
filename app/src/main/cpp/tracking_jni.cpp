@@ -7,6 +7,7 @@
 #include <string>
 
 #include "ultra_hands_ext.h"
+#include "ultra_slam.h"
 #include "ultra_vio.h"
 #include "xr_mercury_runtime_c_api.h"
 
@@ -174,6 +175,53 @@ JNIEXPORT jint JNICALL Java_dev_ultraxr_tracking_Native_handsProcess(JNIEnv *env
 }
 
 JNIEXPORT jstring JNICALL Java_dev_ultraxr_tracking_Native_handsVersion(JNIEnv *env, jclass) { return env->NewStringUTF(ultra_hands_version()); }
+
+// ---------------------------------------------------------------- the saved map (RTAB-Map)
+
+JNIEXPORT jlong JNICALL Java_dev_ultraxr_tracking_Native_slamCreate(JNIEnv *env, jclass, jstring rig, jstring db, jint mode, jstring params) {
+    const std::string r = to_string(env, rig), d = to_string(env, db), p = to_string(env, params);
+    uslam_t *h = uslam_create(r.c_str(), d.c_str(), mode, params ? p.c_str() : nullptr);
+    if (!h) set_error(uslam_last_error());
+    return reinterpret_cast<jlong>(h);
+}
+
+JNIEXPORT jboolean JNICALL Java_dev_ultraxr_tracking_Native_slamFeed(JNIEnv *env, jclass, jlong h, jlong t, jbyteArray left, jbyteArray right, jint w, jint hgt,
+                                                                    jdoubleArray pose) {
+    if (!h || !left || !right || !pose || env->GetArrayLength(pose) < 7) return JNI_FALSE;
+    if (env->GetArrayLength(left) < w * hgt || env->GetArrayLength(right) < w * hgt) return JNI_FALSE;
+    jdouble ps[7];
+    env->GetDoubleArrayRegion(pose, 0, 7, ps);
+    jbyte *l = env->GetByteArrayElements(left, nullptr);
+    jbyte *r = env->GetByteArrayElements(right, nullptr);
+    int ok = 0;
+    if (l && r) ok = uslam_feed(reinterpret_cast<uslam_t *>(h), t, reinterpret_cast<const uint8_t *>(l), reinterpret_cast<const uint8_t *>(r), w, hgt, ps);
+    if (l) env->ReleaseByteArrayElements(left, l, JNI_ABORT);
+    if (r) env->ReleaseByteArrayElements(right, r, JNI_ABORT);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_dev_ultraxr_tracking_Native_slamNewEpoch(JNIEnv *, jclass, jlong h) {
+    if (h) uslam_new_epoch(reinterpret_cast<uslam_t *>(h));
+}
+
+JNIEXPORT jlong JNICALL Java_dev_ultraxr_tracking_Native_slamGetState(JNIEnv *env, jclass, jlong h, jdoubleArray out) {
+    if (!h || !out || env->GetArrayLength(out) < 18) return 0;
+    uslam_state s;
+    std::memset(&s, 0, sizeof(s));
+    uslam_get_state(reinterpret_cast<uslam_t *>(h), &s);
+    const jdouble d[18] = {static_cast<double>(s.results), static_cast<double>(s.found), static_cast<double>(s.dropped), static_cast<double>(s.last_t_ns),
+                           static_cast<double>(s.found_t_ns), static_cast<double>(s.has_corr), s.corr[0], s.corr[1], s.corr[2], s.corr[3], s.corr[4], s.corr[5],
+                           s.corr[6], static_cast<double>(s.places), static_cast<double>(s.last_place), static_cast<double>(s.inliers), s.last_ms,
+                           static_cast<double>(s.epoch)};
+    env->SetDoubleArrayRegion(out, 0, 18, d);
+    return s.results;
+}
+
+JNIEXPORT void JNICALL Java_dev_ultraxr_tracking_Native_slamDestroy(JNIEnv *, jclass, jlong h, jboolean save) {
+    if (h) uslam_destroy(reinterpret_cast<uslam_t *>(h), save ? 1 : 0);
+}
+
+JNIEXPORT jstring JNICALL Java_dev_ultraxr_tracking_Native_slamVersion(JNIEnv *env, jclass) { return env->NewStringUTF(uslam_version()); }
 
 JNIEXPORT jstring JNICALL Java_dev_ultraxr_tracking_Native_lastError(JNIEnv *env, jclass) {
     std::lock_guard<std::mutex> lock(g_err_mutex);

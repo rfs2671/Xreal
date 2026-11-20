@@ -15,7 +15,7 @@ def pairs(path):
     first = None; wait = [None, None]
     for kind, t, data in ar.records(path):
         if first is None: first = t
-        if kind != 1: continue
+        if kind != 1 or len(data) < 307270: continue      # a recording cut off in mid-frame ends with a short one
         dev, counter, eye = ar.meta(data)
         if eye > 1: continue
         other = wait[1 - eye]

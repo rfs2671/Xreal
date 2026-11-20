@@ -252,6 +252,7 @@ object Tracking : GlassesLink.Listener {
         users--
         if (users > 0) return
         link?.stop()
+        thread(name = "room-map-save", isDaemon = true) { try { saveRoomMap() } catch (e: Throwable) { log("room map: not saved: $e") } }
     }
 
     /**
@@ -374,9 +375,24 @@ object Tracking : GlassesLink.Listener {
             val h = Native.vioCreate(calib, config)
             if (h == 0L) { vioError = Native.lastError(); log("6DoF init failed: $vioError") }
             else {
-                // Basalt starts with zero velocity and gravity from one sample, so a start while the
-                // head moves can diverge (seen in simulation). Start only when the IMU says "still".
+                // Basalt starts with zero velocity and gravity from one sample. XR Gate's gate waits for a whole second
+                // in which the motion sensor looks at rest; a head that is worn seldom gives one (measured on five
+                // recordings, 20 November 2026, tools/tracking/vio_gate.py: the first start took 8 to 20 s, and a
+                // restart while the wearer moves about waited as long or never came back). Three frames of a head
+                // that is not turning fast are enough: replays of the same recordings give the same path, to within
+                // what two runs of one setting differ by, from about one second in (docs/SPATIAL.md).
                 Native.vioSetOption(h, "startup_imu_gate", 1.0)
+                Native.vioSetOption(h, "startup_gate_frames", 3.0); Native.vioSetOption(h, "startup_gate_gyro", 1.0); Native.vioSetOption(h, "startup_gate_gyro_std", 0.5)
+                Native.vioSetOption(h, "startup_gate_accel_err", 2.0); Native.vioSetOption(h, "startup_gate_accel_std", 1.5)
+                // Under measurement: "native.KEY=VALUE" lines in files/vio_options.txt go to the library as they are
+                // (startup_imu_gate, startup_gate_frames, startup_gate_gyro, ...), after the settings above.
+                try {
+                    for (line in File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()) {
+                        if (!line.startsWith("native.")) continue
+                        val k = line.substringAfter("native.").substringBefore('=').trim(); val v = line.substringAfter('=', "").trim().toDoubleOrNull() ?: continue
+                        log("6DoF library option $k = $v" + if (Native.vioSetOption(h, k, v)) "" else " (not taken)")
+                    }
+                } catch (e: Exception) { log("vio_options.txt native options ignored: $e") }
                 Native.vioSetOption(h, "num_threads", 2.0)
                 // A phone's USB stack can hold IMU reports back for longer than a PC's: do not restart
                 // the estimator for gaps it can integrate across.
@@ -388,6 +404,10 @@ object Tracking : GlassesLink.Listener {
                 log("6DoF stereo search start depth: $guess m" + if (guessOk) "" else " (not supported by this native library)")
                 vioError = ""
                 vio = h; log("6DoF ready: ${Native.vioVersion()}")
+                roomMapOn = try { File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty().none { it.replace(" ", "") == "room_map=off" } } catch (_: Exception) { true }
+                val freshMap = try { File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty().any { it.replace(" ", "") == "room_map=new" } } catch (_: Exception) { false }
+                slamRig = slamRigOf(calib)
+                try { openRoomMap(freshMap) } catch (e: Throwable) { log("room map: not started: $e") }
                 if (oldVio != 0L) head.onVioEpochReset()
             }
         } catch (e: Throwable) { vioError = e.toString(); log("6DoF init failed: $e") }
@@ -469,9 +489,15 @@ object Tracking : GlassesLink.Listener {
         // Head origin between the two cameras.
         head = HeadTracker(doubleArrayOf((c0.p[0] + c1.p[0]) / 2, (c0.p[1] + c1.p[1]) / 2, (c0.p[2] + c1.p[2]) / 2))
         // A recentre moves the app's world; the room found so far moves with it.
-        head.onWorldMoved = { moved -> room.transform(moved); wallMapReset = true; roomFindings = room.analyse(0.0); if (!recallShifting) synchronized(recall) { recall.moved(moved) }
+        head.onWorldMoved = { moved ->
+            // a step of a centimetre or two towards the saved map is drift being taken out: the room model's boxes are
+            // coarser than that, and clearing the wall plan at every step would leave it empty while the wearer walks
+            if (!(mapShifting && mapSmall)) { room.transform(moved); wallMapReset = true; roomFindings = room.analyse(0.0) }
+            if (!recallShifting && !mapShifting) synchronized(recall) { recall.moved(moved) }
             // a recentre carries the marked room along; putting a slipped world back is exactly what must not
-            if (!planShifting) synchronized(planLock) { planFit = planFit?.moved(moved); planBefore = planBefore?.moved(moved) } }
+            if (!planShifting && !mapShifting) synchronized(planLock) { planFit = planFit?.moved(moved); planBefore = planBefore?.moved(moved) }
+            // and it carries the saved map along
+            synchronized(mapAlign) { mapAlign.onWorldMoved(moved, own = mapShifting) } }
         room.clear(); wallMapReset = true; roomFindings = null; synchronized(recall) { recall.clear() }
         synchronized(planLock) {
             planFit = null; planBefore = null; planMaxShift = 0.0
@@ -566,7 +592,7 @@ object Tracking : GlassesLink.Listener {
             if (v != 0L && (link?.state == GlassesLink.State.STREAMING || link?.replaying == true)) {
                 val seq = Native.vioGetState(v, out)
                 // The estimator restarted (by itself or on request): its world frame is new.
-                if (out[20] != lastResetCount) { if (lastResetCount >= 0) head.onVioEpochReset(); lastResetCount = out[20] }
+                if (out[20] != lastResetCount) { if (lastResetCount >= 0) { head.onVioEpochReset(); slam.let { if (it != 0L) Native.slamNewEpoch(it) } }; lastResetCount = out[20] }
                 vioAutoResets = out[21].toLong()
                 val fresh = seq != lastSeq && out[19] > 0.5
                 if (fresh) {
@@ -707,13 +733,137 @@ object Tracking : GlassesLink.Listener {
     /** Set while a recording is replayed: every position state and every hand result is written to CSV files. */
     @Volatile var replayLog: ReplayLog? = null
 
+    // ------------------------------------------------------------ the saved map of the room (native/slam, core/MapAlign)
+    // The estimator has no memory: every session, and every restart of it, begins a world of its own. RTAB-Map keeps
+    // places (corners, their descriptors and 3D positions) in files/room_map.db. With no file a session makes one
+    // from the room pictures and writes it when tracking stops; with one, the head is looked for in it, and once it
+    // is found the app knows where the saved map lies in this session's world.
+    private val slamLock = Any()
+    @Volatile private var slam = 0L
+    @Volatile private var slamFinding = false
+    private var slamRig: String? = null
+    private var mapTick = 0
+    private var slamFoundSeen = -1.0; private var slamEpochSeen = -1.0; private var slamOpenedNs = 0L
+    val mapAlign = dev.ultraxr.core.MapAlign(HeadTracker.Z_TO_Y)
+    @Volatile var mapPlaces = 0; private set
+    @Volatile var mapResults = 0L; private set
+    @Volatile var mapFound = 0L; private set
+    @Volatile var mapMs = 0.0; private set
+    @Volatile private var mapFoundNs = 0L
+    @Volatile private var mapShifting = false; @Volatile private var mapSmall = false
+    /** Off when files/vio_options.txt says "room_map=off" (for A/B replays). */
+    @Volatile private var roomMapOn = true
+    /** The saved map's world (y up) in the app's world, once the head has been found in it this session (or while it is being made). */
+    fun appFromMap(): Pose? = synchronized(mapAlign) { mapAlign.appFromMap }
+    val mapVersion: Int get() = mapAlign.version
+    /** "making", "finding" or "" for none. */
+    val mapMode: String get() = if (slam == 0L) "" else if (slamFinding) "finding" else "making"
+    private fun mapLive() = mapFoundNs != 0L && System.nanoTime() - mapFoundNs < 10_000_000_000L
+    private fun mapFile(): File? = appContext?.getExternalFilesDir(null)?.let { File(it, "room_map.db") }
+
+    /** The calibration the estimator was given, as the map library reads it: a line a camera. */
+    private fun slamRigOf(calib: String): String? = try {
+        val v = JSONObject(calib).getJSONObject("value0"); val sb = StringBuilder()
+        for (i in 0..1) {
+            val k = v.getJSONArray("intrinsics").getJSONObject(i).getJSONObject("intrinsics"); val t = v.getJSONArray("T_imu_cam").getJSONObject(i)
+            for (n in listOf("fx", "fy", "cx", "cy", "k1", "k2", "k3", "k4")) sb.append(k.getDouble(n)).append(' ')
+            for (n in listOf("px", "py", "pz", "qx", "qy", "qz", "qw")) sb.append(t.getDouble(n)).append(' ')
+            sb.append('\n')
+        }
+        sb.toString()
+    } catch (e: Exception) { log("room map: the calibration could not be read for it: $e"); null }
+
+    /** Opens the saved map to find the head in, or begins a new one when there is none ([fresh]: forget the one there). */
+    private fun openRoomMap(fresh: Boolean) = synchronized(slamLock) {
+        val old = slam; slam = 0L
+        if (old != 0L) Native.slamDestroy(old, false)
+        synchronized(mapAlign) { mapAlign.clear() }
+        slamFoundSeen = -1.0; slamEpochSeen = -1.0; mapFound = 0; mapResults = 0; mapFoundNs = 0L
+        val rig = slamRig; val f = mapFile()
+        if (!roomMapOn || rig == null || f == null || !settings.roomScan) return@synchronized
+        if (fresh && f.isFile) f.delete()
+        val finding = f.isFile && f.length() > 0
+        val h = try { Native.slamCreate(rig, f.absolutePath, if (finding) 1 else 0, null) } catch (e: Throwable) { log("room map: not available: $e"); 0L }
+        if (h == 0L) { log("room map: could not be opened: " + Native.lastError()); return@synchronized }
+        val st = DoubleArray(18); Native.slamGetState(h, st); mapPlaces = st[13].toInt()
+        slamFinding = finding; slamOpenedNs = System.nanoTime(); slam = h
+        log(if (finding) "room map: a saved map of " + mapPlaces + " places is open; looking for the head in it (" + Native.slamVersion() + ")" else "room map: none saved, making one from this session (" + Native.slamVersion() + ")")
+    }
+
+    /** Forgets the saved map and makes a new one from now on. */
+    fun newRoomMap() { thread(name = "room-map", isDaemon = true) { openRoomMap(true) } }
+
+    /**
+     * Writes the map being made and goes on by finding the head in it. Called when tracking stops and when a replay
+     * ends; takes a second or two. Nothing to do while a saved map is only being read.
+     */
+    fun saveRoomMap() = synchronized(slamLock) {
+        val h = slam
+        if (h == 0L || slamFinding) return@synchronized
+        val st = DoubleArray(18); Native.slamGetState(h, st); val places = st[13].toInt()
+        slam = 0L
+        if (places < MAP_MIN_PLACES) {
+            Native.slamDestroy(h, false)
+            log("room map: only $places places were seen, too few to keep; a map is made next time")
+        } else {
+            val t0 = System.nanoTime(); Native.slamDestroy(h, true)
+            log("room map: saved, $places places, " + ((mapFile()?.length() ?: 0L) / 1024) + " kB, in " + (System.nanoTime() - t0) / 1_000_000 + " ms")
+            // The same session goes on in the same world: the map is its own, so what is known of where it lies stays.
+            val rig = slamRig; val f = mapFile()
+            if (rig != null && f != null && f.isFile) {
+                val n = try { Native.slamCreate(rig, f.absolutePath, 1, null) } catch (_: Throwable) { 0L }
+                if (n != 0L) { slamFinding = true; slamFoundSeen = -1.0; slamEpochSeen = -1.0; slamOpenedNs = System.nanoTime(); slam = n }
+            }
+        }
+    }
+    private const val MAP_MIN_PLACES = 8
+
+    /** One room picture and the estimator's pose for it go to the map; what the map has found since is taken up. */
+    private fun mapStep(tNs: Long, l: ByteArray, r: ByteArray, p: DoubleArray, q: DoubleArray) {
+        val h = slam; if (h == 0L) return
+        val st = DoubleArray(18)
+        synchronized(slamLock) {
+            if (slam != h) return
+            // Every room picture (three a second) until the head is found in a saved map; after that one in three, and
+            // one in two while a map is made: places are a step apart, and the estimator needs the processor more.
+            val every = if (slamFinding) (if (mapAlign.version == 0) 1 else 3) else 2
+            if (mapTick++ % every == 0) Native.slamFeed(h, tNs, l, r, 480, 640, doubleArrayOf(p[0], p[1], p[2], q[0], q[1], q[2], q[3]))
+            Native.slamGetState(h, st)
+        }
+        mapPlaces = st[13].toInt(); mapResults = st[0].toLong(); mapMs = st[16]
+        if (st[17] != slamEpochSeen) { slamEpochSeen = st[17]; slamFoundSeen = 0.0 }
+        // making a map, every result is a reading (the map is this session's own world, bent a little where a place
+        // was seen again); finding, only a pair that was recognised is one
+        val reading = st[5] > 0.5 && (if (slamFinding) st[1] > slamFoundSeen else st[0] > 0)
+        if (st[1] > slamFoundSeen) { mapFound += (st[1] - slamFoundSeen).toLong(); if (slamFinding) mapFoundNs = System.nanoTime() }
+        slamFoundSeen = st[1]
+        if (!reading) return
+        val corr = Pose(doubleArrayOf(st[6], st[7], st[8]), doubleArrayOf(st[9], st[10], st[11], st[12]))
+        val before = mapAlign.version
+        val move = synchronized(mapAlign) { mapAlign.onReading(head.appFromEstimator(), corr) }
+        val t = link?.replaySeconds ?: 0.0
+        if (before == 0 && mapAlign.version == 1) {
+            val said = if (slamFinding) "room map: the head is found in the saved map " + dev.ultraxr.core.Fmt.f((System.nanoTime() - slamOpenedNs) / 1e9, 1) + " s after it was opened (place " + st[14].toInt() + ", " + st[15].toInt() + " points agree)"
+                else "room map: this session's world is the map's"
+            log(said); replayLog?.note(t, said)
+        }
+        val am = appFromMap()
+        if (am != null) replayLog?.note(t, String.format(java.util.Locale.US, (if (slamFinding) "found " else "making ") + "map-in-app %.4f %.4f %.4f yaw %.3f off %.3f m %.2f deg place %d inliers %d ms %.0f", am.p[0], am.p[1], am.p[2], Math.toDegrees(Q.yawY(am.q)), mapAlign.lastOffM, mapAlign.lastOffDeg, st[14].toInt(), st[15].toInt(), st[16]))
+        if (move != null) {
+            val big = mapAlign.version != before
+            if (big) { val said = "room map: the world was " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffM, 2) + " m and " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffDeg, 1) + " degrees from where the map has it, and is put back"; log(said); replayLog?.note(t, said) }
+            mapSmall = !big; mapShifting = true
+            try { head.moveWorld(move) } finally { mapShifting = false; mapSmall = false }
+        }
+    }
+
     /** Replays [file] through the trackers and writes what they report next to it in [outDir]. */
     fun replay(file: File, outDir: File, tag: String, onDone: (String) -> Unit) {
         val l = link ?: run { onDone("tracking has not been started"); return }
         val rl = try { ReplayLog(outDir, tag) } catch (e: Exception) { onDone("cannot write the replay log: $e"); return }
         replayLog = rl
         positionConfidence.reset()
-        l.replay(file) { note -> replayLog = null; rl.close(note); onDone(note) }
+        l.replay(file) { note -> try { saveRoomMap() } catch (e: Throwable) { log("room map: not saved: $e") }; replayLog = null; rl.close(note); onDone(note) }
     }
 
     private fun resetVio(v: Long) {
@@ -735,13 +885,14 @@ object Tracking : GlassesLink.Listener {
         var dense: dev.ultraxr.core.DenseStereo? = null; val wallMap = dev.ultraxr.core.WallMap(); var denseWallsNow: List<dev.ultraxr.core.RoomSurface> = emptyList(); var saidWalls = -1
         val ranges = DoubleArray(300)
         while (running) {
-            var p: DoubleArray; var q: DoubleArray; var fix: Pose; var version: Int
+            var p: DoubleArray; var q: DoubleArray; var fix: Pose; var version: Int; var tPic: Long
             synchronized(roomLock) {
                 while (running && !roomReady) try { roomLock.wait(500) } catch (_: InterruptedException) {}
                 if (!running) return
                 System.arraycopy(roomLeft, 0, l, 0, l.size); System.arraycopy(roomRight, 0, r, 0, r.size)
-                p = roomP; q = roomQ; fix = roomFix; version = roomWorld; roomHave = false; roomReady = false
+                p = roomP; q = roomQ; fix = roomFix; version = roomWorld; roomHave = false; roomReady = false; tPic = roomT
             }
+            try { mapStep(tPic, l, r, p, q) } catch (e: Throwable) { log("room map: $e") }
             val rig = stereoRig ?: continue
             if (rig !== finderRig) {
                 finder = dev.ultraxr.core.StereoPoints(rig); finderRig = rig
@@ -831,7 +982,7 @@ object Tracking : GlassesLink.Listener {
                             }
                         }
                         planSaid?.let { log(it) }
-                        val pm = planMove
+                        val pm = if (mapLive()) null else planMove      // the saved map says where the world is: it is the better witness
                         if (pm != null) {
                             val far = Math.sqrt(pm.p[0] * pm.p[0] + pm.p[2] * pm.p[2]); val turn = Math.toDegrees(2 * Math.atan2(pm.q[1], pm.q[3]))
                             if (!planDrift) log("room: the marked room is found again; the world had slipped " + dev.ultraxr.core.Fmt.f(far, 2) + " m and " + dev.ultraxr.core.Fmt.f(turn, 1) + " degrees and is put back")
@@ -840,7 +991,7 @@ object Tracking : GlassesLink.Listener {
                             continue
                         }
                         val back = if (synchronized(planLock) { plan != null }) null else synchronized(recall) { if (recall.waiting) recall.find(System.nanoTime(), lines) else { recall.see(lines); null } }
-                        if (back != null) {
+                        if (back != null && !mapLive()) {
                             val far = Math.sqrt(back[0] * back[0] + back[1] * back[1])
                             if (far < 0.10) log("room: found again where it was (" + dev.ultraxr.core.Fmt.f(far, 2) + " m off)")
                             else {

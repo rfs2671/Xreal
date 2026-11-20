@@ -44,6 +44,11 @@ class DesktopWindow(
      * when the wearer walks. Not saved: a new session has a new world.
      */
     var ax = 0.0; var ay = 0.0; var az = 0.0
+    /**
+     * The same place and the window's heading in the saved map of the room (x, y, z, yaw; core/MapAlign), when there
+     * is one. Saved: a new session that finds itself in the map puts the window back where it stood.
+     */
+    var map: DoubleArray? = null
 
     /** Size and placement actually shown: a maximized window is large, centred and close. */
     fun shownWidth(): Double = if (maximized) MAXIMIZED_WIDTH else width
@@ -67,6 +72,7 @@ class DesktopWindow(
     fun toJson(): JSONObject = JSONObject().put("id", id).put("title", title).put("url", url).put("yaw", yaw).put("pitch", pitch)
         .put("distance", distance).put("width", width).put("aspect", aspect).put("follow", follow).put("minimized", minimized)
         .put("maximized", maximized).put("kind", kind).put("origin", origin)
+        .also { o -> map?.let { m -> o.put("map", org.json.JSONArray().put(m[0]).put(m[1]).put(m[2]).put(m[3])) } }
 
     companion object {
         const val MIN_WIDTH = 0.4
@@ -99,6 +105,7 @@ class DesktopWindow(
             o.optDouble("yaw", 0.0), o.optDouble("pitch", 0.0), o.optDouble("distance", DEFAULT_DISTANCE).coerceIn(MIN_DISTANCE, FAR_DISTANCE),
             o.optDouble("width", DEFAULT_WIDTH).coerceIn(MIN_WIDTH, MAX_WIDTH), o.optDouble("aspect", 16.0 / 9.0).coerceIn(MIN_ASPECT, MAX_ASPECT),
             o.optBoolean("follow", false), o.optBoolean("minimized", false), o.optBoolean("maximized", false), o.optString("kind", "web")).also { it.origin = o.optString("origin", "") }
+            .also { w -> o.optJSONArray("map")?.let { a -> if (a.length() == 4) w.map = DoubleArray(4) { i -> a.optDouble(i, 0.0) } } }
     }
 }
 

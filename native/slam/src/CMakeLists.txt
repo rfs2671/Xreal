@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.16) # under 3.21 keeps the NDK's legacy toolchain path
+project(ultra_slam C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(DEPS_PREFIX "" CACHE PATH "install prefix of RTAB-Map and its dependencies (build_android_windows.sh)")
+set(RTABMAP_SO "" CACHE FILEPATH "librtabmap_core.so")
+find_package(OpenCV REQUIRED)
+file(GLOB RTAB_INC "${DEPS_PREFIX}/include/rtabmap-*")
+add_library(rtabmap_core SHARED IMPORTED)
+set_target_properties(rtabmap_core PROPERTIES IMPORTED_LOCATION "${RTABMAP_SO}" IMPORTED_SONAME "librtabmap_core.so")
+
+add_library(ultra_slam SHARED ultra_slam.cpp)
+target_include_directories(ultra_slam PRIVATE ${RTAB_INC} "${DEPS_PREFIX}/include/pcl-1.15" "${DEPS_PREFIX}/include/eigen3" "${DEPS_PREFIX}/include")
+target_compile_definitions(ultra_slam PRIVATE DISABLE_VTK)
+target_compile_options(ultra_slam PRIVATE -fvisibility=hidden -O2)
+target_link_libraries(ultra_slam PRIVATE rtabmap_core ${OpenCV_LIBS} log)
+target_link_options(ultra_slam PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,--no-undefined")
+
+add_executable(ultra_slam_replay ../test/ultra_slam_replay.c)
+target_include_directories(ultra_slam_replay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(ultra_slam_replay PRIVATE ultra_slam m)

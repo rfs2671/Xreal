@@ -190,7 +190,8 @@ class DesktopSession(private val activity: Activity) {
             if (panelShown && desktop.focus is Focus.Shelf) { val i = tiles.indexOfFirst { it.id == before }; if (i < 0) desktop.point(Focus.Shelf(Home.first(tiles, coverCentre))) else if (i != desktop.shelfIndex) desktop.point(Focus.Shelf(i)) }
         }
     }
-    private fun trackingWord(head: HeadTracker.State) = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "position tracked" }
+    private fun trackingWord(head: HeadTracker.State) = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"
+        Tracking.mapMode == "finding" && Tracking.appFromMap() != null -> "room recognised"; Tracking.mapMode == "making" && Tracking.mapPlaces > 0 -> "learning the room"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "position tracked" }
 
     /** Select on a tile of the panel. */
     private fun activateTile(i: Int) {
@@ -291,9 +292,15 @@ class DesktopSession(private val activity: Activity) {
         web.clear(); surfaces = HashMap()
     }
 
-    fun pause() { resumed = false; save(); web.values.forEach { it.pause() } }
+    fun pause() {
+        resumed = false; save(); web.values.forEach { it.pause() }
+        // the map of the room being learnt is written now: the app may not be told when it is closed for good
+        kotlin.concurrent.thread(name = "room-map-save", isDaemon = true) { try { Tracking.saveRoomMap() } catch (e: Throwable) { Tracking.log("room map: not saved: $e") } }
+    }
     fun resume() { resumed = true; web.values.forEach { it.resume() } }
 
+    private var mapSeen = 0
+    private var mapArmed = false
     private fun save() { prefs.edit().putString("layout", desktop.toJson().toString()).apply(); savedRevision = desktop.revision }
 
     private fun ensureWeb(w: DesktopWindow): WebWindow = web.getOrPut(w.id) {
@@ -529,6 +536,10 @@ class DesktopSession(private val activity: Activity) {
             SettingRow("Forget the room", { "" }, { when { forgotten -> "The room is forgotten."; armed -> "Select again to forget the room."; Tracking.roomPlanCorners == 0 -> "No room is marked."; else -> "Forgets the room you marked." } },
                 select = { if (Tracking.roomPlanCorners > 0) { if (!armed) armed = true else { Tracking.clearRoomPlan(); armed = false; forgotten = true } } },
                 warn = { armed }, leave = { armed = false; forgotten = false }),
+            // the saved map of the room (native/slam): what it is doing, and Select twice to forget it and learn the room anew
+            SettingRow("Room memory", { when (Tracking.mapMode) { "making" -> "learning, " + Tracking.mapPlaces + " places"; "finding" -> if (Tracking.appFromMap() != null) "recognised" else "looking"; else -> "off" } },
+                { when { mapArmed -> "Select again to forget this room and learn it anew."; Tracking.mapMode == "making" -> "Look around the room. It is saved when you leave."; Tracking.mapMode == "finding" -> "Windows go back where they stood."; else -> "Needs the room scan." } },
+                select = { if (!mapArmed) mapArmed = true else { Tracking.newRoomMap(); mapArmed = false } }, warn = { mapArmed }, leave = { mapArmed = false }),
             SettingRow("About", { version }, { "Ultra XR, set in Atkinson Hyperlegible." })))
     }
 
@@ -659,7 +670,24 @@ class DesktopSession(private val activity: Activity) {
         desktop.positional = positionOk; desktop.here = origin
         if (!positionOk) anchored = false
         else {
-            if (!anchored) { anchored = true; desktop.anchorAll(); System.arraycopy(origin, 0, stage, 0, 3); stageMoving = false }
+            var placeFromMap = false
+            if (!anchored) { anchored = true; desktop.anchorAll(); System.arraycopy(origin, 0, stage, 0, 3); stageMoving = false; placeFromMap = true }
+            // The saved map of the room: once this session knows where it lies, every window that has a place in it
+            // goes back there; from then on each window's place in the map is kept up to date, and saved.
+            val am = Tracking.appFromMap(); val mv = Tracking.mapVersion
+            if (am != null) {
+                if (mv != mapSeen) { placeFromMap = placeFromMap || mapSeen == 0; mapSeen = mv }
+                if (placeFromMap) {
+                    var n = 0
+                    for (w in desktop.windows) { val m = w.map ?: continue; if (w.follow) continue
+                        val a = dev.ultraxr.core.MapAlign.fromMap(am, m); w.ax = a[0]; w.ay = a[1]; w.az = a[2]; w.yaw = Geometry.wrap(a[3]); n++ }
+                    if (n > 0) { desktop.touch(); Tracking.log("desktop: $n windows put back where they stood in the saved map") }
+                }
+                for (w in desktop.windows) if (!w.follow) {
+                    val m = dev.ultraxr.core.MapAlign.toMap(am, doubleArrayOf(w.ax, w.ay, w.az), w.yaw); val old = w.map
+                    if (old == null || Math.abs(old[0] - m[0]) + Math.abs(old[1] - m[1]) + Math.abs(old[2] - m[2]) > 0.02 || Math.abs(Geometry.wrap(old[3] - m[3])) > 0.01) { w.map = m; desktop.touch() }
+                }
+            }
             val dx = origin[0] - stage[0]; val dy = origin[1] - stage[1]; val dz = origin[2] - stage[2]
             if (Math.hypot(dx, dz) > STAGE_REACH || Math.abs(dy) > STAGE_RISE) stageMoving = true
             if (stageMoving) {

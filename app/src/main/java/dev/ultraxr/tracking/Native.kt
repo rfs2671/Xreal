@@ -40,5 +40,20 @@ object Native {
     @JvmStatic external fun handsProcess(handle: Long, tNs: Long, left: ByteArray, right: ByteArray, width: Int, height: Int, out: FloatArray, out26: FloatArray): Int
     @JvmStatic external fun handsVersion(): String
 
+    // --- the saved map of the room (RTAB-Map, native/slam)
+    /** [rig]: two lines "fx fy cx cy k1 k2 k3 k4 px py pz qx qy qz qw". [mode] 0 makes a map at [db] afresh, 1 finds the head in the one there. 0 on failure. */
+    @JvmStatic external fun slamCreate(rig: String, db: String, mode: Int, params: String?): Long
+    /** One pair with the estimator's pose for it (p xyz, q xyzw, its own world). False: the worker was busy, the pair is dropped. */
+    @JvmStatic external fun slamFeed(handle: Long, tNs: Long, left: ByteArray, right: ByteArray, width: Int, height: Int, pose: DoubleArray): Boolean
+    @JvmStatic external fun slamNewEpoch(handle: Long)
+    /**
+     * Fills [out] (18 doubles): results, found, dropped, last_t_ns, found_t_ns, has_corr, the estimator's world in the
+     * map's as p xyz q xyzw, places, last_place, inliers, last_ms, epoch. Returns results.
+     */
+    @JvmStatic external fun slamGetState(handle: Long, out: DoubleArray): Long
+    /** Blocks for a second or two when a map is written. */
+    @JvmStatic external fun slamDestroy(handle: Long, save: Boolean)
+    @JvmStatic external fun slamVersion(): String
+
     @JvmStatic external fun lastError(): String
 }

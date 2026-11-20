@@ -201,9 +201,14 @@ struct Session {
 
 // XR Gate startup IMU gate (compute_imu_health / imu_health_ok and its default
 // thresholds): the IMU window of a frame "looks stationary".
-bool imu_window_at_rest(const std::vector<ImuSample>& w, double gravity) {
+// The limits are options ("startup_gate_gyro" and so on): a head that is worn is seldom as still as XR Gate's
+// defaults ask for a whole second, so the app asks for less (see uvio_set_option).
+struct GateLimits {
+  double gyro = 0.08, gyro_std = 0.04, accel_err = 0.75, accel_std = 0.35;
+};
+bool imu_window_at_rest(const std::vector<ImuSample>& w, double gravity, const GateLimits& lim) {
   constexpr size_t kMinSamples = 10;
-  constexpr double kMaxGyroNorm = 0.08, kMaxGyroStd = 0.04, kMaxAccelMagErr = 0.75, kMaxAccelStd = 0.35;
+  const double kMaxGyroNorm = lim.gyro, kMaxGyroStd = lim.gyro_std, kMaxAccelMagErr = lim.accel_err, kMaxAccelStd = lim.accel_std;
   if (w.size() < kMinSamples) return false;
   double gs = 0, gs2 = 0, as = 0, as2 = 0;
   for (const auto& s : w) {
@@ -234,7 +239,8 @@ struct uvio {
   std::atomic<int> max_pending{2};
   std::atomic<double> gravity_magnitude{9.80665};
   std::atomic<bool> startup_imu_gate{false};
-  static constexpr int kGateGoodFrames = 30;  // XR Gate --startup-imu-good-frames
+  std::atomic<int> gate_good_frames{30};  // XR Gate --startup-imu-good-frames
+  std::atomic<double> gate_gyro{0.08}, gate_gyro_std{0.04}, gate_accel_err{0.75}, gate_accel_std{0.35};
   std::mutex tbb_mtx;
   std::unique_ptr<tbb::global_control> tbb_control;
 
@@ -505,8 +511,13 @@ bool uvio::feed(StereoFrame&& frame) {
     // and takes gravity from a single accelerometer sample, i.e. it assumes
     // the device is at rest. Hold the (re)start back until it is.
     if (startup_imu_gate.load() && !s.gate_passed) {
-      s.gate_good = imu_window_at_rest(window, std::abs(gravity_magnitude.load())) ? s.gate_good + 1 : 0;
-      if (s.gate_good < kGateGoodFrames) {
+      GateLimits lim;
+      lim.gyro = gate_gyro.load();
+      lim.gyro_std = gate_gyro_std.load();
+      lim.accel_err = gate_accel_err.load();
+      lim.accel_std = gate_accel_std.load();
+      s.gate_good = imu_window_at_rest(window, std::abs(gravity_magnitude.load()), lim) ? s.gate_good + 1 : 0;
+      if (s.gate_good < gate_good_frames.load()) {
         frames_dropped.fetch_add(1);
         return true;
       }
@@ -890,6 +901,16 @@ UVIO_API int uvio_set_option(uvio_t* h, const char* key, double value) {
       basalt::stereoGuessDepth().store(static_cast<float>(value));
     } else if (k == "startup_imu_gate") {
       h->startup_imu_gate = value != 0;
+    } else if (k == "startup_gate_frames" && value >= 1 && value <= 300) {
+      h->gate_good_frames = static_cast<int>(value);
+    } else if (k == "startup_gate_gyro" && value > 0) {
+      h->gate_gyro = value;
+    } else if (k == "startup_gate_gyro_std" && value > 0) {
+      h->gate_gyro_std = value;
+    } else if (k == "startup_gate_accel_err" && value > 0) {
+      h->gate_accel_err = value;
+    } else if (k == "startup_gate_accel_std" && value > 0) {
+      h->gate_accel_std = value;
     } else if (k == "gravity_magnitude" && value > 0) {
       h->gravity_magnitude = value;
     } else if (k == "num_threads" && value >= 0) {

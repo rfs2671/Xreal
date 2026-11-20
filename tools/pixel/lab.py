@@ -69,6 +69,16 @@ RUNS = {
     "asis":   ("", "", ""),      # no trial value: the unit's standing correction (stereo_fix_unit.txt) applies
     "verg2":  ("", "", "0,-0.4,0"),
     "vergx":  ("", "", "0.24,-0.5,0"),
+    # the estimator's start: the still second it waits for (XR Gate's limits, as shipped until 20 November), a third of
+    # a second of a head not turning fast, three frames of the same, and no wait at all; "asis" twice is the app's own
+    "g_still": ("native.startup_gate_frames=30" + chr(10) + "native.startup_gate_gyro=0.08" + chr(10) + "native.startup_gate_gyro_std=0.04" + chr(10) + "native.startup_gate_accel_err=0.75" + chr(10) + "native.startup_gate_accel_std=0.35" + chr(10), "", ""), "g_stillb": ("native.startup_gate_frames=30" + chr(10) + "native.startup_gate_gyro=0.08" + chr(10) + "native.startup_gate_gyro_std=0.04" + chr(10) + "native.startup_gate_accel_err=0.75" + chr(10) + "native.startup_gate_accel_std=0.35" + chr(10), "", ""),
+    "g_10": ("native.startup_gate_frames=10" + chr(10) + "native.startup_gate_gyro=0.5" + chr(10) + "native.startup_gate_gyro_std=0.25" + chr(10) + "native.startup_gate_accel_err=1.5" + chr(10) + "native.startup_gate_accel_std=1.0" + chr(10), "", ""), "g_10b": ("native.startup_gate_frames=10" + chr(10) + "native.startup_gate_gyro=0.5" + chr(10) + "native.startup_gate_gyro_std=0.25" + chr(10) + "native.startup_gate_accel_err=1.5" + chr(10) + "native.startup_gate_accel_std=1.0" + chr(10), "", ""),
+    "g_3": ("native.startup_gate_frames=3" + chr(10) + "native.startup_gate_gyro=1.0" + chr(10) + "native.startup_gate_gyro_std=0.5" + chr(10) + "native.startup_gate_accel_err=2.0" + chr(10) + "native.startup_gate_accel_std=1.5" + chr(10), "", ""), "g_3b": ("native.startup_gate_frames=3" + chr(10) + "native.startup_gate_gyro=1.0" + chr(10) + "native.startup_gate_gyro_std=0.5" + chr(10) + "native.startup_gate_accel_err=2.0" + chr(10) + "native.startup_gate_accel_std=1.5" + chr(10), "", ""),
+    "g_off": ("native.startup_imu_gate=0" + chr(10), "", ""), "g_offb": ("native.startup_imu_gate=0" + chr(10), "", ""),
+    "g_now": ("", "", ""), "g_nowb": ("", "", ""),
+    # the saved map of the room: a run that makes one afresh (written when the replay ends), runs that look for the
+    # head in the map that is there, and a run without any
+    "m_new": ("room_map=new" + chr(10), "", ""), "m_find": ("", "", ""), "m_findb": ("", "", ""), "m_off": ("room_map=off" + chr(10), "", ""),
 }
 
 def run(args, timeout=120):

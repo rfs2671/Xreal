@@ -6,6 +6,7 @@ from pinned upstream sources with the scripts and patches kept here, so it can b
 | Library | What | Source | Rebuild |
 |---|---|---|---|
 | `libultra_vio.so` | Basalt visual-inertial odometry behind a small C API | `vio/` | `vio/src/build_android.sh` |
+| `librtabmap_core.so`, `libultra_slam.so` | RTAB-Map (a saved map of the room: places, recognition, relocalisation) behind a small C API | `slam/` | `slam/src/rtabmap/build_all.sh` |
 | `libultra_hands.so` | Monado's Mercury hand tracker with XR Gate's C API | `hands/` | `hands/src/build_android.sh` |
 | `libopenxr_monado.so`, `libmonado-service.so` | Monado OpenXR runtime with Pocket XR's Android driver plus hand joints | `monado/` | `monado/build.sh` |
 | `libopencv_java4.so` | OpenCV 4.12.0, from the official Maven AAR `org.opencv:opencv:4.12.0` | unmodified | download |
