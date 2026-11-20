@@ -18,11 +18,13 @@ package dev.ultraxr.core
  *   keep=0|1           a tracked hand goes on with one camera while the other is unsure of it for a frame (0: the
  *                      upstream rule, the hand is dropped at once; unset: the library's default, on)
  *   verify=0|1         a hand a tile found is looked at again before it is believed (unset: on)
+ *   one_view=0|1       a find that passed its second looks twice may begin a hand from one camera; the hand is
+ *                      reported once both cameras have been sure of it (unset: on)
  *   snap=1             while pinching, hand the application a hand whose two fingertips touch, so an
  *                      application with a tighter threshold of its own (a browser) sees the pinch too
  */
 data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean? = null, val pressM: Float = PinchState.PRESS_M, val releaseM: Float = PinchState.RELEASE_M, val snap: Boolean = true, val steady: Boolean = true, val steadyTurn: Boolean = true,
-    val tiles: Int? = null, val tilesMinConf: Float? = null, val keep: Boolean? = null, val verify: Boolean? = null) {
+    val tiles: Int? = null, val tilesMinConf: Float? = null, val keep: Boolean? = null, val verify: Boolean? = null, val oneView: Boolean? = null) {
     companion object {
         fun parse(text: String?): HandOptions {
             var o = HandOptions()
@@ -40,6 +42,7 @@ data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean?
                     "tiles" -> v.toIntOrNull()?.takeIf { it in 0..12 }?.let { o.copy(tiles = it) } ?: o
                     "keep" -> o.copy(keep = v == "1")
                     "verify" -> o.copy(verify = v == "1")
+                    "one_view" -> o.copy(oneView = v == "1")
                     "tiles_min_conf" -> v.toFloatOrNull()?.takeIf { it in 0f..1f }?.let { o.copy(tilesMinConf = it) } ?: o
                     else -> o
                 }

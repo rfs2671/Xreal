@@ -1,6 +1,31 @@
 --- a/src/xrt/tracking/hand/mercury/hg_sync.cpp
 +++ b/src/xrt/tracking/hand/mercury/hg_sync.cpp
-@@ -1622,17 +1622,51 @@
+@@ -1046,6 +1046,24 @@
+ 		                     float(num_views);
+ 
+ 		bool conf_gate_pass = confidence_sum >= 0.92f;
++		// libultra_hands: while the detector runs in both views, this gate lets a hand begin only when both views
++		// found it in the same frame. A hand low over a desk is found through the tiles in one view at a time
++		// (traced on the wearer's recording of 20 November: the right hand passed its second looks eleven times
++		// in one view between 25.9 and 27.6 s and never in both at once). A find that passed its second looks
++		// twice may begin the hand from its one view; the other view gets a region from the fit.
++		// ULTRA_HANDS_ONE_VIEW=0 is the gate as it was.
++		{
++			static const bool one_view_on = []() {
++				const char *e = std::getenv("ULTRA_HANDS_ONE_VIEW");
++				return e == nullptr || e[0] != '0';
++			}();
++			const auto &o0 = infos[0].outputs[hand_idx];
++			const auto &o1 = infos[1].outputs[hand_idx];
++			if (one_view_on && !conf_gate_pass && num_views == 2 && (o0.found != o1.found) &&
++			    ((o0.found && o0.ultra_twice) || (o1.found && o1.ultra_twice))) {
++				conf_gate_pass = true;
++			}
++		}
+ 		bool attempt_replace = false;
+ 		bool good_to_go = false;
+ 		bool accepted = false;
+@@ -1622,17 +1640,51 @@
  	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
  
  
@@ -62,9 +87,47 @@
  				}
  			}
  		}
+@@ -1796,6 +1848,9 @@
+ 
+ 		hgt->history_hands[hand_idx].push_back(asf);
+ 		hgt->hand_tracked_for_num_frames[hand_idx]++;
++		if (hgt->keypoint_outputs[hand_idx].views[0].active && hgt->keypoint_outputs[hand_idx].views[1].active) {
++			hgt->ultra_both_views_seen[hand_idx] = true;
++		}
+ 	}
+ 
+ 	// Push our timestamp back as well
+@@ -1823,6 +1878,7 @@
+ 			hgt->views[1].regions_of_interest_this_frame[hand_idx].found = false;
+ 			hgt->history_hands[hand_idx].clear();
+ 			hgt->hand_tracked_for_num_frames[hand_idx] = 0;
++			hgt->ultra_both_views_seen[hand_idx] = false;
+ 		}
+ 	}
+ 
+@@ -1844,7 +1900,8 @@
+ 
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
+ 		// Don't send the hand to OpenXR until it's been tracked for 4 frames
+-		if (hgt->hand_tracked_for_num_frames[hand_idx] < hgt->tuneable_values.num_frames_before_display) {
++		if (hgt->hand_tracked_for_num_frames[hand_idx] < hgt->tuneable_values.num_frames_before_display ||
++		    !hgt->ultra_both_views_seen[hand_idx]) {
+ 			out_xrt_hands[hand_idx]->is_active = false;
+ 			if (hgt->xr_tracking_diag.enabled() && hgt->this_frame_hand_detected[hand_idx]) {
+ 				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::display_warmup);
 --- a/src/xrt/tracking/hand/mercury/hg_sync.hpp
 +++ b/src/xrt/tracking/hand/mercury/hg_sync.hpp
-@@ -224,6 +224,9 @@
+@@ -179,6 +179,9 @@
+ 	bool found;
+ 	bool hand_detection_confidence;
+ 
++	// libultra_hands: a tile found this, and its second looks agreed twice in the same place within a moment.
++	bool ultra_twice = false;
++
+ 	// XR/Mercury offline diagnostics: keep the raw detector outputs before
+ 	// Mercury thresholding/gating converts them into found/confidence booleans.
+ 	float xr_raw_hand_exists = 0.0f;
+@@ -224,6 +227,9 @@
  
  	struct hand_region_of_interest regions_of_interest_this_frame[2]; // left, right
  
@@ -74,3 +137,14 @@
  	struct keypoint_estimation_run_info run_info[2];
  };
  
+@@ -324,6 +330,10 @@
+ 	// It'd be a staring contest between your hand and the heat death of the universe!
+ 	uint64_t hand_tracked_for_num_frames[2] = {0, 0};
+ 
++	// libultra_hands: since this hand was found, both cameras' keypoint models have been sure of it in one frame.
++	// A hand begun from one camera is not reported before that: its distance is a guess until then.
++	bool ultra_both_views_seen[2] = {false, false};
++
+ 
+ 	// left hand, right hand
+ 	Eigen::Array<float, 3, 21> pose_predicted_keypoints[2];

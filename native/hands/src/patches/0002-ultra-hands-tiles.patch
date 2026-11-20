@@ -1,6 +1,6 @@
 --- a/src/xrt/tracking/hand/mercury/hg_model.cpp
 +++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
-@@ -946,6 +946,326 @@
+@@ -946,6 +946,343 @@
  	}
  }
  
@@ -221,7 +221,7 @@
 +	}
 +	bool ok = agree >= need;
 +	if (say) {
-+		fprintf(stderr, "ultra verify: view %d hand %d at %.0f,%.0f looks %.2f %.2f %.2f %.2f -> %d\n", info->view->view, hand, px, py, got[0], got[1], got[2], got[3], ok ? 1 : 0);
++		fprintf(stderr, "ultra verify: t %.3f view %d hand %d at %.0f,%.0f looks %.2f %.2f %.2f %.2f -> %d\n", (double)info->view->hgt->current_frame_timestamp / 1e9 - 1.0, info->view->view, hand, px, py, got[0], got[1], got[2], got[3], ok ? 1 : 0);
 +	}
 +	return ok;
 +}
@@ -232,6 +232,13 @@
 +	float x = 0, y = 0;
 +	int until = 0;
 +} ultra_failed[2][2];
++
++// Where a find last passed its second looks, for each view and hand, and at which run of the detector.
++static struct
++{
++	float x = 0, y = 0;
++	int at = -1000;
++} ultra_passed[2][2];
 +
 +static void
 +ultra_tiles_pass(hand_detection_run_info *info)
@@ -314,6 +321,16 @@
 +				failed.until = hgt->detection_counter + 15;
 +				continue;
 +			}
++			// Passed twice in the same place within twelve runs of the detector: in the wearer's recordings that
++			// happens for hands (20 times in the eight seconds of low hands) and never where there is none
++			// (the stands beside the laptop: 42 finds, none passed once). Such a find may begin a hand from
++			// this one camera (hg_sync.cpp, the detection gate).
++			auto &passed = ultra_passed[view->view & 1][h];
++			out[h].ultra_twice = hgt->detection_counter - passed.at <= 12 && hgt->detection_counter != passed.at &&
++			                     fabsf(px - passed.x) < 50.0f && fabsf(py - passed.y) < 50.0f;
++			passed.x = px;
++			passed.y = py;
++			passed.at = hgt->detection_counter;
 +			out[h].center_px.x = px;
 +			out[h].center_px.y = py;
 +			// As many pixels to an angle as the fisheye picture has there (it is near enough equidistant).
@@ -327,7 +344,7 @@
  static void
  run_hand_detection_unsafe(hand_detection_run_info *info)
  {
-@@ -956,6 +1276,7 @@
+@@ -956,6 +1293,7 @@
  		const bool mirror_horizontal =
  		    xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_MIRROR_HORIZONTAL");
  		xr_run_hand_detection_pass(info, mirror_horizontal, info->outputs);
@@ -335,7 +352,7 @@
  		if (xr_detector_swap_slots) {
  			std::swap(info->outputs[0], info->outputs[1]);
  		}
-@@ -1530,6 +1851,7 @@
+@@ -1530,6 +1868,7 @@
  	}
  
  	this_output.active = is_hand;

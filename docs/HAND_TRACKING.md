@@ -270,6 +270,51 @@ what four of four gave (846 of 900 tracked, 8 of 861 false); two of four reports
 - **Not measured on this recording:** pinches, fingertip steadiness, how far the reported hands are from the true
   ones. The 19 November recording was not run again with three of four.
 
+## The low hands recovered: a hand may begin from one camera (20 November 2026, afternoon)
+
+**Are the hands the tracker reports without the second look in seconds 25 to 32 real?** Yes: drawn on the left
+camera's pictures (brightened) at six moments, the reported right hand lies on the right hand over the desk and the
+reported left hand on the left hand.
+
+**Why the second look refused them.** It did not: logged with their times, the second looks pass (three of four)
+for the right hand eleven times between 25.9 and 27.6 s, always in one camera. What stops the hand is the detection
+gate after it, which (while the detector runs in both views) wants the hand found in both views in the same frame.
+
+**How often does a find pass where there is no hand?** Never, in what there is to count: 42 finds in the ten
+seconds with the stands and the phone hand (17 November), 31 finds in fifteen empty seconds (20 November), none
+passed. In the eight seconds of low hands 20 of 78 passed, 18 of them with another pass of the same camera and hand
+within 0.4 s and 50 pixels.
+
+**The change** (in the two patches): a find that passed its second looks twice in the same place within twelve
+runs of the detector may begin a hand from its one camera (`ULTRA_HANDS_ONE_VIEW=0`, or `one_view=0` in
+`hand_options.txt`, is the gate as it was). The other camera gets its region from the fit. **The hand is not
+reported until both cameras' keypoint models have been sure of it in one frame**: before that its distance rests on
+one view and the assumed hand size. Once it has been, it goes on through a camera's doubt as described above.
+
+**Measured, every pair, on the phone:**
+
+| | 20 November: hand plainly in both pictures tracked | reported where there is none | 17 November: tracked | reported where there is none |
+|---|---|---|---|---|
+| upstream | 57 of 270 (21 %) | 0 of 840 | 787 of 900 (87 %) | 7 of 861 |
+| tiles, three of four, two-camera start only | 178 of 270 (66 %) | 0 of 840 | 846 of 900 (94 %) | 8 of 861 |
+| **with the one-camera start (as it is now)** | 254 of 270 (94 %) | 0 of 840 | 848 of 900 (94 %) | 12 of 861 |
+| tiles without the second look | 223 of 270 (83 %) | 0 of 840 | 831 of 900 (92 %) | 400 of 861 |
+
+- On 20 November the low right hand is now reported in nine of nine pairs from second 26 to 35 (upstream: none),
+  and the left hand in seconds 25 to 27. In the seconds marked as not to be judged a hand is reported in 29 % of
+  results (upstream 1 %); those are mostly the low hands themselves.
+- The reports "where there is none" on 17 November are at the edges of the labels, not false hands: one result in
+  second 4, half a second before the hand labelled from second 5, and second 43, where the left hand labelled until
+  second 42 is still on its way down (upstream has 7 of these, now 11).
+- The stands start no hand (seconds 19 to 28 of 17 November: nothing reported, as upstream).
+- **Cost in the tool:** 81 ms a pair on 20 November against 19 ms upstream, 97 against 56 on 17 November: with a
+  hand missing, the tiles and second looks run every frame. Through the app, with its own threads, the earlier
+  builds made no difference to the time a result took; this build has not been timed there. This is the next
+  thing to look at.
+- **Still not measured:** the left hand low at the side in one camera only (it would begin, and then wait for the
+  second camera that never sees it: by design it is not reported); pinches and fingertip steadiness at chest
+  height; how far reported hands are from true ones; the 19 November recording with this build.
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,
