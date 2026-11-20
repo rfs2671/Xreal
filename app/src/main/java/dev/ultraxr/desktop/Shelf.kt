@@ -23,6 +23,9 @@ object Sight {
     /** A resting line (a bracket of a window not in focus), and the one in focus, which is thicker. */
     val LINE = Math.toRadians(0.075)
     val LINE_LIT = Math.toRadians(0.13)
+    /** A page's corners are rounded by this much, and the light a window in focus stands in reaches this far out. */
+    val CORNER = Math.toRadians(0.45)
+    val HALO = Math.toRadians(1.1)
     /** A piece of text is drawn on a strip this many x-heights high, the x-height in its middle. */
     const val STRIP = 3.0
     /** The space between a page's corner and its bracket. */
@@ -62,7 +65,9 @@ object Shelf {
     /** The middle of the status line: its text ends half a degree inside the top of the picture (12.6 degrees up). */
     val STATUS_PITCH = Math.toRadians(11.5)
     /** Nothing of a window in focus (its handle) comes lower than this, so that it stays clear of the resting marks. */
-    val TOP = PITCH + MARK_ANGLE + Math.toRadians(0.2)
+    val TOP = PITCH + MARK_ANGLE * DOCK + Math.toRadians(0.2)
+    /** The dock's pane of glass reaches this many mark radii above and below the middle of the row: the marks and the dots under them are on it. */
+    const val DOCK = 1.3
 
     /** How many marks are in view of [count]. */
     fun shown(count: Int) = minOf(maxOf(count, 0), IN_VIEW)

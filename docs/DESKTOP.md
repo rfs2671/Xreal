@@ -36,11 +36,15 @@ seen 19 pixels apart between the halves at 64 mm (`Stereo` in DesktopModel.kt).
 The design is in [INTERFACE.md](INTERFACE.md) (20 November 2026); this replaces the rail, the dock and the
 title-bar buttons described here before. In short:
 
-- **Light on nothing.** Black is the room. Nothing is a filled panel except a window's page.
-- **The shelf:** one row of marks 8 degrees under the line of sight: YouTube, Xbox Cloud, Browser, 3D web, All
-  apps, Settings, then the games. A Tide dot under a mark says it has a window (hollow: put away).
-- **Windows** (up to six) have a bracket at each corner, a title when in focus, and a handle of four words under
-  them: move, size, pin, close. A new one opens straight ahead, or in the nearest free place beside what stands
+- **Glass.** The owner's direction of 20 November: panes of frosted glass, cards with pictures, violet for what
+  is chosen. The glasses can only add light, so a pane is a faint veil of light with a brighter rim.
+- **The home panel** is in view whenever no window is open: a sidebar (Home, Games, Apps, Windows, Settings), a
+  large card to continue with, quick play, the room, the library and shortcuts.
+- **The dock:** while a window is open, one row of marks on a glass pill 8 degrees under the line of sight: Home,
+  YouTube, Xbox Cloud, Browser, 3D web, All apps, Settings, then the games. A dot under a mark says it has a
+  window (hollow: put away).
+- **Windows** (up to six) have rounded corners, a rim that lights with the focus, a title when in focus, and a
+  handle of four words under them: move, size, pin, close. A new one opens straight ahead, or in the nearest free place beside what stands
   there. They are where they were left the next time.
 - **One focus**, lit in amber, moved the same way by a hand's ray, the phone's touchpad, a look, or a d-pad (the
   phone's, a Bluetooth gamepad's, a keyboard's arrows): see the table in INTERFACE.md. Select opens or does; Back

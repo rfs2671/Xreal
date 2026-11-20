@@ -68,7 +68,7 @@ class DesktopWindow(
         // The glasses show about 46 x 27 degrees. A new window is 24 degrees wide and 13.5 high: with its title above
         // and its handle below it then stands between the status line and the shelf, all of it in view at once
         // (see Shelf.clearPitch; ShelfTest checks it). A maximized one fills the view.
-        const val DEFAULT_WIDTH = 0.84
+        const val DEFAULT_WIDTH = 0.80
         const val DEFAULT_DISTANCE = 2.0
         const val MAXIMIZED_WIDTH = 1.55
         const val MAX_DISTANCE = 2.2
@@ -352,6 +352,20 @@ class Desktop {
         touch()
     }
     fun restore(id: Int) { val w = find(id) ?: return; w.minimized = false; onWindow(id, Focus.Page(id)); touch() }
+    /** The shelf's focus is put on [i]: what the shelf shows has changed (the home panel for the dock, or back). */
+    fun shelfAt(i: Int) { shelfIndex = maxOf(0, i); if (focus is Focus.Shelf) setFocus(Focus.Shelf(shelfIndex)); touch() }
+    /**
+     * A window that was asked for is brought to where the wearer looks, if it is not there already: to the nearest free
+     * place in front (as a new window is placed), at the height [pitch]. Its size and distance are kept.
+     */
+    fun bringFront(id: Int, headYaw: Double, pitch: Double) {
+        val w = find(id) ?: return
+        if (w.maximized || Math.abs(Geometry.wrap(worldYaw(w) - headYaw)) < Math.toRadians(11.0) && Math.abs(w.pitch - pitch) < Math.toRadians(5.0)) return
+        val there = windows.filter { !it.minimized && it.id != id }.map { worldYaw(it) }
+        val slot = SLOTS.firstOrNull { s -> there.none { Math.abs(Geometry.wrap(it - (headYaw + Math.toRadians(s)))) < Math.toRadians(SLOT_CLEAR) } } ?: 0.0
+        val to = Geometry.wrap(headYaw + Math.toRadians(slot))
+        w.yaw = if (w.follow) Geometry.wrap(to - followAnchor.yaw) else to; w.pitch = pitch; touch()
+    }
     fun toggleMaximize(id: Int) { val w = find(id) ?: return; w.maximized = !w.maximized; w.minimized = false; onWindow(id, Focus.Page(id)); touch() }
     fun toggleFullscreen(id: Int) {
         if (find(id) == null) return; fullscreenId = if (fullscreenId == id) -1 else id; onWindow(id, Focus.Page(id))

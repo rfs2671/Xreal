@@ -81,7 +81,7 @@ class DesktopSession(private val activity: Activity) {
      */
     private val firstPage: List<HomeItem> = run {
         val games = try { dev.ultraxr.core.GameLibrary.parse(activity.assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { emptyList() }
-        HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) } + nav("All apps", "nav:apps") + nav("Settings", "nav:settings") +
+        listOf(nav("Home", "nav:panel")) + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) } + nav("All apps", "nav:apps") + nav("Settings", "nav:settings") +
             games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
                 HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, TINTS[i % TINTS.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
             } + nav("System", "nav:system")
@@ -120,8 +120,69 @@ class DesktopSession(private val activity: Activity) {
             "sys:gather" -> gather()
             "sys:closeall" -> for (w in desktop.windows.toList()) close(w.id)
         }
-        showHomePage(-1)
+        showHomePage(if (panelShown) 0 else -1)
     }
+
+    // ---- the home panel (Home): what is in view while no window is open. Its tiles are what the focus is on then:
+    // Focus.Shelf(i) is tile i of the panel while it shows, and mark i of the dock while a window is open.
+    val panelShown: Boolean get() = desktop.fullscreenId < 0 && desktop.visible.isEmpty()
+    private var homeSection = "home"; private var appsPage = 0
+    @Volatile private var tiles: List<HomeTile> = emptyList()
+    private var homeModel: HomeModel? = null; private var homeNs = 0L; private var panelWas = false; private var panelSinceNs = 0L
+    private val appIcons = HashMap<String, Bitmap?>()
+    private fun appIcon(item: HomeItem): Bitmap? {
+        if (item.kind != HomeItem.Kind.APP) return null
+        val pkg = item.url.removePrefix("app://").substringBefore('/')
+        return appIcons.getOrPut(pkg) { try { val d = activity.packageManager.getApplicationIcon(pkg); val b = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888); d.setBounds(0, 0, 128, 128); d.draw(Canvas(b)); b } catch (_: Throwable) { null } }
+    }
+    /** What the panel shows is looked up twice a second, and at once when something was chosen on it. */
+    private fun refreshHome(nowNs: Long, head: HeadTracker.State) {
+        if (homeModel != null && nowNs - homeNs < 500_000_000L) return
+        homeNs = nowNs
+        val web = firstPage.filter { it.kind == HomeItem.Kind.WEB }; val games = firstPage.filter { it.kind == HomeItem.Kind.GAME }
+        var phone = emptyList<HomeItem>(); var pages = 1
+        if (homeSection == "apps") {
+            val apps = installedApps ?: dev.ultraxr.shell.AppShell.installed(activity).also { installedApps = it }
+            pages = maxOf(1, (apps.size + Home.APPS_A_PAGE - 1) / Home.APPS_A_PAGE); appsPage = appsPage.coerceIn(0, pages - 1)
+            phone = apps.drop(appsPage * Home.APPS_A_PAGE).take(Home.APPS_A_PAGE).map { a -> HomeItem(a.label, HomeItem.Kind.APP, "app://" + a.component, appTint(a.pkg)) }
+        }
+        val running = HashMap<String, Int>(); for (w in desktop.windows) if (w.origin.isNotEmpty()) running[w.origin] = maxOf(running[w.origin] ?: 0, if (w.minimized) 1 else 2)
+        val lastTitle = prefs.getString("last", null); val now = Date()
+        val battery = try { (activity.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager).getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) } catch (_: Exception) { -1 }
+        val m = HomeModel(homeSection, web, games, phone, appsPage, pages, desktop.windows.map { Triple(it.id, it.title.ifBlank { it.origin.ifBlank { "Window" } }, it.minimized) }, running,
+            (web + games).firstOrNull { it.title == lastTitle }, Tracking.roomPlanOutline, Tracking.roomPlanPlaced, head.mode != HeadTracker.Mode.NONE, trackingWord(head), battery,
+            SimpleDateFormat("h:mm a", Locale.getDefault()).format(now), SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(now), ::appIcon)
+        if (m.key() != homeModel?.key()) {
+            val before = tiles.getOrNull(desktop.shelfIndex)?.id
+            homeModel = m; tiles = Home.layout(m)
+            // the focus stays on the same thing when the tiles change under it, and goes to the first when that thing has gone
+            if (panelShown && desktop.focus is Focus.Shelf) { val i = tiles.indexOfFirst { it.id == before }; if (i < 0) desktop.point(Focus.Shelf(Home.first(tiles))) else if (i != desktop.shelfIndex) desktop.point(Focus.Shelf(i)) }
+        }
+    }
+    private fun trackingWord(head: HeadTracker.State) = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "finding the room" }
+
+    /** Select on a tile of the panel. */
+    private fun activateTile(i: Int) {
+        val t = tiles.getOrNull(i) ?: return; val a = t.action
+        openingFrom = t.item?.title
+        try {
+            when {
+                a.startsWith("sec:") -> { homeSection = a.substring(4); appsPage = 0 }
+                a == "settings" -> { openingFrom = "Settings"; openSettings() }
+                a == "item" -> t.item?.let { activate(it) }
+                a.startsWith("win:") -> a.substring(4).toIntOrNull()?.let { bringBack(it) }
+                a.startsWith("sys:") -> system(a)
+                a == "apps:next" -> appsPage++
+                a == "apps:prev" -> appsPage--
+                a == "room" -> say(if (Tracking.roomPlanCorners > 0) "The room is marked. Mark it anew from the phone: Settings, Mark the room" else "Mark the room from the phone: Settings, Mark the room")
+            }
+        } finally { openingFrom = null }
+        homeNs = 0; onLookPress?.invoke(); changed()
+    }
+    /** A window that was put away comes back in front of the wearer. */
+    private fun bringBack(id: Int) { desktop.restore(id); desktop.find(id)?.let { desktop.bringFront(id, headYaw(), clearPitch(it)) }; changed() }
+    /** A slide on the touchpad steps the focus over the panel as the d-pad does. */
+    private var padStepX = 0.0; private var padStepY = 0.0
 
     /** Page 0 is the first page; 1 and up are the phone's apps; -1 is the system page. */
     fun showHomePage(page: Int) {
@@ -145,26 +206,36 @@ class DesktopSession(private val activity: Activity) {
 
     /** Opens what the mark stands for. */
     fun activateHome(i: Int) {
+        if (panelShown) { activateTile(i); return }
         val item = homeItems.getOrNull(i) ?: return
         openingFrom = item.title
         try {
             if (item.kind == HomeItem.Kind.NAV) {
                 if (item.url.startsWith("sys:")) system(item.url)
                 else if (item.url == "nav:settings") openSettings()
+                else if (item.url == "nav:panel") { homeSection = "home"; showHome() }
                 else showHomePage(when (item.url) { "nav:apps" -> 1; "nav:next" -> homePage + 1; "nav:system" -> -1; else -> 0 })
                 onLookPress?.invoke(); return
             }
+            activate(item)
+        } finally { openingFrom = null }
+    }
+    /** Opens a game, a web app or one of the phone's apps, and remembers it as the thing to continue with. */
+    private fun activate(item: HomeItem) {
+        if (item.kind != HomeItem.Kind.APP) prefs.edit().putString("last", item.title).apply()
+        if (openingFrom == null) openingFrom = item.title
+        run {
             if (item.kind == HomeItem.Kind.APP) {
                 // an immersive app is not opened in a window: it gets the glasses, as a game does
                 val pkg = item.url.removePrefix("app://").substringBefore('/')
-                if (dev.ultraxr.xr.XrRuntime.nativeApp(activity, pkg) != null && onLaunchNative != null) { onLaunchNative?.invoke(pkg); onLookPress?.invoke(); return }
+                if (dev.ultraxr.xr.XrRuntime.nativeApp(activity, pkg) != null && onLaunchNative != null) { onLaunchNative?.invoke(pkg); onLookPress?.invoke(); return@run }
                 if (dev.ultraxr.shell.AppShell.available) openApp(item.title, item.url.removePrefix("app://"))
-                else Tracking.log("apps: " + item.title + " not opened: the app helper is not running (tools/pixel/uxr_helper.sh)")
-                onLookPress?.invoke(); return
+                else { Tracking.log("apps: " + item.title + " not opened: the app helper is not running (tools/pixel/uxr_helper.sh)"); say("Phone apps need the helper: it is not running") }
+                onLookPress?.invoke(); return@run
             }
             if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else (HomeApps.all.firstOrNull { it.url == item.url }?.let { open(it) } ?: open(item.title, item.url, item.webKind))
             onLookPress?.invoke()
-        } finally { openingFrom = null }
+        }
     }
     /** The name of the mark that is being opened: the window that comes of it grows from that mark. */
     private var openingFrom: String? = null
@@ -231,7 +302,7 @@ class DesktopSession(private val activity: Activity) {
         // The same thing, put away earlier, comes back as it was. A window that is put away cannot be seen in the
         // glasses, so it must never be the reason a new one does not open: the one put away longest makes room.
         val from = openingFrom ?: title
-        desktop.windows.firstOrNull { it.minimized && it.kind == kind && (it.origin == from || it.url == url) }?.let { old -> desktop.restore(old.id); changed(); return true }
+        desktop.windows.firstOrNull { it.minimized && it.kind == kind && (it.origin == from || it.url == url) }?.let { old -> bringBack(old.id); return true }
         if (desktop.windows.size >= Desktop.MAX_WINDOWS) desktop.windows.firstOrNull { it.minimized }?.let { close(it.id) }
         val w = desktop.add(title, url, kind, headYaw())
         if (w == null) { say("Six windows are open: close one first"); return false }
@@ -293,14 +364,17 @@ class DesktopSession(private val activity: Activity) {
     private fun changed() { onChanged?.invoke() }
 
     /** One line per window: id;title;follow;minimized;maximized;fullscreen;focused;yaw deg;pitch deg;width;distance. */
-    fun debugState(): String = "focus;" + desktop.focus.describe() + ";" + homeItems.getOrNull(desktop.shelfIndex)?.title + "|" + desktop.windows.joinToString("|") { w ->
+    fun debugState(): String = "focus;" + desktop.focus.describe() + ";" + (if (panelShown) tiles.getOrNull(desktop.shelfIndex)?.id else homeItems.getOrNull(desktop.shelfIndex)?.title) + ";" + (if (panelShown) "panel:$homeSection" else "dock") + "|" + desktop.windows.joinToString("|") { w ->
         String.format(java.util.Locale.US, "%d;%s;%b;%b;%b;%b;%b;%.1f;%.1f;%.2f;%.2f;%.2f;%s", w.id, w.title.replace(';', ' ').replace('|', ' '), w.follow, w.minimized, w.maximized,
             desktop.fullscreenId == w.id, desktop.focusedId == w.id, Math.toDegrees(desktop.worldYaw(w)), Math.toDegrees(w.shownPitch()), w.shownWidth(), w.shownDistance(), w.shownHeight(), w.kind)
     }
 
     // ---- the one focus (desktop.focus): keys from a d-pad, and what follows from a press
     /** The shelf is one row of marks, the same whether or not windows are open. */
-    private fun shelfCount() = homeItems.size
+    private fun shelfCount() = if (panelShown) tiles.size else homeItems.size
+    /** The tile of the panel, or the mark of the dock, a ray is on. */
+    private fun shelfHit(o: DoubleArray, dir: DoubleArray, anchor: DoubleArray): Int? =
+        if (panelShown) Home.hit(tiles, o, dir, anchor, desktop.followAnchor.yaw) else Shelf.hit(o, dir, anchor, desktop.followAnchor.yaw, shelfFirst, homeItems.size)
     /** The first mark in view: the row slides when the focus passes its end ([Shelf.first]). */
     private var shelfFirst = 0
     /** The page's picture is given the window's shape (after a free sizing, or standing a window up). */
@@ -312,6 +386,12 @@ class DesktopSession(private val activity: Activity) {
      */
     fun press(key: FocusKey) {
         val was = desktop.focus
+        // on the home panel the four directions lead to the tile that lies that way
+        if (panelShown && was is Focus.Shelf && (key == FocusKey.LEFT || key == FocusKey.RIGHT || key == FocusKey.UP || key == FocusKey.DOWN)) {
+            val n = Home.neighbour(tiles, was.index.coerceIn(0, maxOf(0, tiles.size - 1)), key)
+            if (n != was.index && desktop.point(Focus.Shelf(n))) { onLookPress?.invoke(); changed() }
+            return
+        }
         val a = desktop.press(key, shelfCount(), headYaw())
         when (a) {
             is FocusAction.OpenApp -> activateHome(a.index)
@@ -454,6 +534,14 @@ class DesktopSession(private val activity: Activity) {
 
     fun padMove(dx: Double, dy: Double) {
         padTouchNs = System.nanoTime()
+        if (panelShown) {      // a slide steps the focus from tile to tile
+            padStepX += dx; padStepY += dy
+            while (Math.abs(padStepX) > PAD_STEP || Math.abs(padStepY) > PAD_STEP) {
+                if (Math.abs(padStepX) >= Math.abs(padStepY)) { press(if (padStepX > 0) FocusKey.RIGHT else FocusKey.LEFT); padStepX -= Math.signum(padStepX) * PAD_STEP; padStepY *= 0.5 }
+                else { press(if (padStepY > 0) FocusKey.DOWN else FocusKey.UP); padStepY -= Math.signum(padStepY) * PAD_STEP; padStepX *= 0.5 }
+            }
+            return
+        }
         val w = desktop.focused ?: return
         val f = desktop.focus
         if (f is Focus.Moving) { desktop.move(f.id, -dx * 1.2, -dy * 1.2); return }
@@ -542,7 +630,12 @@ class DesktopSession(private val activity: Activity) {
         val adjusting = desktop.focus is Focus.Moving || desktop.focus is Focus.Sizing
         val looking = !full && !adjusting && nowNs - padTouchNs > 700_000_000L && !handDown
         // The marks stand nearer than the windows, so a look or a ray that is on a mark is on the shelf, whatever is behind it.
-        val markLooked = if (full) null else Shelf.hit(origin, forward, anchor, shelfYaw, shelfFirst, homeItems.size)
+        refreshHome(nowNs, head)
+        if (panelShown != panelWas) {      // the panel has come or gone: on it the focus begins on its first tile, on the dock on its first mark
+            panelWas = panelShown; panelSinceNs = nowNs
+            desktop.shelfAt(if (panelShown) Home.first(tiles) else 0); shelfFirst = 0
+        }
+        val markLooked = if (full) null else shelfHit(origin, forward, anchor)
         // Gaze focus: the window a look comes to rest on gets the focus, unless the pad is in use. Once for each
         // arrival: while the look stays there the d-pad is free to take the focus elsewhere.
         if (gazeFocus && looking) {
@@ -567,7 +660,11 @@ class DesktopSession(private val activity: Activity) {
         (if (onShelf) dwell else shelfDwell).update(nowNs, null)
         val fire = timer.update(nowNs, looked)
         ringProgress = if (looked == null) 0.0 else timer.progress
-        if (onShelf && markLooked != null) {      // the ring closes round the mark itself
+        if (onShelf && markLooked != null && panelShown) {      // the ring closes on the tile
+            val t = tiles.getOrNull(markLooked)
+            if (t != null) { ringYaw = Geometry.wrap(shelfYaw - Math.atan((t.cx / Home.W - 0.5) * Home.WIDTH / Home.DISTANCE)); ringPitch = Home.PITCH + Math.atan((0.5 - t.cy / Home.H) * Home.HEIGHT / Home.DISTANCE) }
+            ringDistance = Home.DISTANCE; ringSize = 0.07
+        } else if (onShelf && markLooked != null) {      // the ring closes round the mark itself
             ringYaw = Geometry.wrap(shelfYaw + Shelf.yawOffset((markLooked - shelfFirst).toDouble(), Shelf.shown(homeItems.size))); ringPitch = Shelf.PITCH
             ringDistance = Shelf.DISTANCE; ringSize = 2 * Shelf.MARK_RADIUS * Shelf.FOCUS_SCALE * 1.2
         } else { ringYaw = Geometry.yawOf(forward); ringPitch = Geometry.pitchOf(forward); ringSize = 0.0 }
@@ -612,7 +709,7 @@ class DesktopSession(private val activity: Activity) {
             return
         }
         // a ray that is on a mark is on the shelf, whatever is behind the mark
-        val tile = Shelf.hit(o, hand.aimDir, anchor, desktop.followAnchor.yaw, shelfFirst, homeItems.size) ?: -1
+        val tile = shelfHit(o, hand.aimDir, anchor) ?: -1
         val hit = if (tile >= 0) null else desktop.hit(o, hand.aimDir, anchor)
         val target: Focus? = if (hit != null) desktop.focusAt(hit) else if (tile >= 0) Focus.Shelf(tile) else null
         // the ray moves the focus when it comes over something new, not while it rests there: the d-pad may have moved on since
@@ -723,7 +820,7 @@ class DesktopSession(private val activity: Activity) {
             val glow = glows.getOrPut(w.id) { Glide(if (lit) 1.0 else 0.0) }.toward(if (lit) 1.0 else 0.0, nowNs, Motion.FOCUS_NS, still).toFloat()
             val showCursor = inFocus && !adjusting && (fo is Focus.Page || c[1] > 1.0)
             val r = RenderWindow(w.id, desktop.worldYaw(w), w.shownPitch(), w.shownDistance(), w.shownWidth(), w.shownHeight(), focused, c[0], c[1], showCursor, pressed || handDown, false,
-                glow, inFocus, 1f, w.shownCornerReach(), if (inFocus) titlePicture(w) else null, if (inFocus) handlePicture(w, fo) else null, w.shownHandleWidth(), w.shownHandleHeight(), w.shownHandleGap(), false, pw, ph)
+                glow, inFocus, 1f, w.shownCornerReach(), if (inFocus) titlePicture(w) else null, if (inFocus) handlePicture(w, fo) else null, w.shownHandleWidth(), w.shownHandleHeight(), w.shownHandleGap(), false, pw, ph, corners = inFocus && fo is Focus.Sizing)
             resting[w.id] = r; leaving.remove(w.id)
             if (!fromMark.containsKey(w.id)) fromMark[w.id] = w.title
             // a window that was not there in the last frame grows from its mark; when it has grown, its brackets draw themselves
@@ -769,7 +866,24 @@ class DesktopSession(private val activity: Activity) {
 
     /** The shelf for this frame: the marks in view, the one in focus a quarter larger with its name beneath, and the status line above. */
     private fun shelf(nowNs: Long, fo: Focus, head: HeadTracker.State): RenderShelf {
-        val items = homeItems; val n = Shelf.shown(items.size); val yaw = desktop.followAnchor.yaw
+        val yaw = desktop.followAnchor.yaw
+        val pm = homeModel
+        if (panelShown && pm != null) {
+            val ts = tiles; val t = if (fo is Focus.Shelf) ts.getOrNull(fo.index) else null
+            val panel = pictures[pm.key()] ?: run { val drop = pictures.keys.filter { it.startsWith("panel|") }; for (k in drop) pictures.remove(k); picture(pm.key()) { Home.draw(pm, ts) } }
+            val arrive = Motion.ease(Motion.progress(panelSinceNs, nowNs, Motion.OPEN_NS, still)).toFloat()
+            if (t == null) return RenderShelf(emptyList(), null, 0.0, statusPicture(nowNs, head, true), yaw, panel = panel, panelAlpha = arrive)
+            // the light glides from tile to tile
+            val x = ringGlide[0].toward(t.cx.toDouble(), nowNs, Motion.FOCUS_NS, still); val y = ringGlide[1].toward(t.cy.toDouble(), nowNs, Motion.FOCUS_NS, still)
+            val w = ringGlide[2].toward(t.w.toDouble(), nowNs, Motion.FOCUS_NS, still); val h = ringGlide[3].toward(t.h.toDouble(), nowNs, Motion.FOCUS_NS, still)
+            val round = if (t.kind == HomeTile.Kind.ROUND) 36f else t.radius; val rw = if (t.kind == HomeTile.Kind.ROUND) 72f else t.w; val rh = if (t.kind == HomeTile.Kind.ROUND) 72f else t.h
+            val ring = picture("ring|$rw|$rh|$round") { Home.ring(rw, rh, round) }
+            val k = Home.WIDTH / Home.W; val sw = if (t.kind == HomeTile.Kind.ROUND) rw.toDouble() else w; val sh = if (t.kind == HomeTile.Kind.ROUND) rh.toDouble() else h
+            val cy = if (t.kind == HomeTile.Kind.ROUND) y - (t.h - 72f) / 2 else y
+            return RenderShelf(emptyList(), null, 0.0, statusPicture(nowNs, head, true), yaw, panel = panel, ring = ring,
+                ringX = (x - Home.W / 2.0) * k, ringY = (Home.H / 2.0 - cy) * k, ringW = (sw + 2 * Home.RING_PAD) * k, ringH = (sh + 2 * Home.RING_PAD) * k, panelAlpha = arrive)
+        }
+        val items = homeItems; val n = Shelf.shown(items.size)
         if (swellsFor !== items) { swellsFor = items; swells.clear(); slide.value = shelfFirst.toDouble() }      // another page of marks: nothing of the old one is left to move
         val first = slide.toward(shelfFirst.toDouble(), nowNs, Motion.FOCUS_NS, still)
         val on = if (fo is Focus.Shelf && items.isNotEmpty()) fo.index.coerceIn(0, items.size - 1) else -1
@@ -796,12 +910,12 @@ class DesktopSession(private val activity: Activity) {
     /** A mark: a ring in the app's colour with its letter or sign, in a picture half as large again as the mark so that the halo of the one in focus has room. */
     private fun markPicture(item: HomeItem, lit: Boolean, running: Int = 0): Sprite = picture("mark|${item.title}|${item.color}|${item.kind}|${item.verified}|$lit|$running") {
         val side = MARK_PX * 3; val b = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
-        val sign = HomeIcon.sign(item.title, if (item.kind == HomeItem.Kind.NAV) item.url else if (item.kind == HomeItem.Kind.WEB) item.webKind else "")
+        val sign = HomeIcon.sign(item.title, if (item.url == "nav:panel") "nav:home" else if (item.kind == HomeItem.Kind.NAV) item.url else if (item.kind == HomeItem.Kind.WEB) item.webKind else "")
         val c = Canvas(b); val p = Paint(Paint.ANTI_ALIAS_FLAG)
         HomeIcon.draw(c, p, side / 2f, side / 2f, MARK_PX.toFloat(), item.color, item.kind == HomeItem.Kind.GAME, sign, item.verified, lit)
         if (running > 0) {
             p.color = Ink.TIDE_INT; p.style = if (running == 2) Paint.Style.FILL else Paint.Style.STROKE; p.strokeWidth = MARK_PX * 0.035f
-            c.drawCircle(side / 2f, side / 2f + MARK_PX * 1.3f, MARK_PX * 0.075f, p); p.style = Paint.Style.FILL
+            c.drawCircle(side / 2f, side / 2f + MARK_PX * 1.12f, MARK_PX * 0.06f, p); p.style = Paint.Style.FILL
         }
         b
     }
@@ -815,7 +929,7 @@ class DesktopSession(private val activity: Activity) {
         val room = Math.round(w.shownWidth() / Sight.metres(Sight.BODY, w.shownDistance()) * TEXT_PX / 48.0).toInt().coerceAtLeast(4) * 48
         val text = w.title.ifBlank { "Window" }; val pinned = !w.follow
         return picture("title|$text|$pinned|$room") {
-            Type.label(text, TEXT_PX, Ink.CHALK_INT, Type.regular, room.toFloat(), if (!pinned) null else { c, p, cx, cy ->
+            Type.label(text, TEXT_PX, Ink.CHALK_INT, Type.regular, room.toFloat(), ground = Glass.PANE, before = if (!pinned) null else { c, p, cx, cy ->
                 // a pin: a round head and its point, in line
                 val x = TEXT_PX; p.style = Paint.Style.STROKE; p.strokeCap = Paint.Cap.ROUND; p.strokeWidth = x * 0.16f; p.color = Ink.TIDE_INT
                 c.drawCircle(cx, cy - x * 0.2f, x * 0.36f, p); c.drawLine(cx, cy + x * 0.16f, cx, cy + x * 0.95f, p)
@@ -836,6 +950,9 @@ class DesktopSession(private val activity: Activity) {
         return picture("handle|${lit?.name}|${w.follow}|$bh|$xh") {
             val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
             val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER
+            // a pane of glass under the words
+            p.color = Glass.PANE; c.drawRoundRect(1f, bh * 0.08f, bw - 1f, bh * 0.92f, bh * 0.42f, bh * 0.42f, p)
+            p.style = Paint.Style.STROKE; p.strokeWidth = 1.5f; p.color = Glass.PANE_RIM; c.drawRoundRect(1f, bh * 0.08f, bw - 1f, bh * 0.92f, bh * 0.42f, bh * 0.42f, p); p.style = Paint.Style.FILL
             p.typeface = Type.bold; p.textSize = Type.sizeFor(Type.bold, xh.toFloat())
             val quarter = bw / HandleWord.values().size.toFloat(); val widest = HandleWord.values().maxOf { p.measureText(it.label) } + xh * 1.6f
             val fit = minOf(1f, quarter / widest)
@@ -851,24 +968,26 @@ class DesktopSession(private val activity: Activity) {
     }
 
     /** The status line: the time, the phone's battery, and one word for tracking. Dusk; nothing to press. Its words are looked up once a second. */
-    private fun statusPicture(nowNs: Long, head: HeadTracker.State): Sprite {
+    private fun statusPicture(nowNs: Long, head: HeadTracker.State, onlyWhatIsSaid: Boolean = false): Sprite? {
         val said = notice
-        if (said.isNotEmpty() && nowNs < noticeUntilNs) return picture("notice|$said") { Type.label(said, TEXT_PX, Ink.EMBER_INT, Type.regular) }
+        if (said.isNotEmpty() && nowNs < noticeUntilNs) return picture("notice|$said") { Type.label(said, TEXT_PX, Ink.EMBER_INT, Type.regular, ground = Glass.PANE) }
+        if (onlyWhatIsSaid) return null      // the home panel has the time, the battery and the tracking in its own head
         if (statusText.isEmpty() || nowNs - statusNs > 1_000_000_000L) {
             statusNs = nowNs
             val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
             val battery = try { (activity.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager).getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) } catch (_: Exception) { -1 }
             // position is what the room is found by. With a room marked, it is found when the marked walls are placed in
             // the world; with none marked, when the cameras hold their position.
-            val tracking = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "finding the room" }
+            val tracking = trackingWord(head)
             // a step of the set-up that has come undone is said here, in a few words; the phone's main screen offers the step that puts it right
             val undone = if (!dev.ultraxr.xr.PointerService.enabled(activity)) "      pointer off: see the phone" else ""
             statusText = time + (if (battery in 0..100) "      $battery %" else "") + "      " + tracking + undone
         }
         val text = statusText
-        return picture("status|$text") { Type.label(text, TEXT_PX, Ink.DUSK_INT, Type.regular) }
+        return picture("status|$text") { Type.label(text, TEXT_PX, Glass.SOFT, Type.regular, ground = Glass.PANE) }
     }
     private var statusText = ""; private var statusNs = 0L
+    private val ringGlide = Array(4) { Glide(0.0) }
     /**
      * One line that takes the status line's place for a few seconds, in Ember: something that was asked for did not
      * happen, and what to do. It is the only way the glasses ever interrupt.
@@ -880,6 +999,8 @@ class DesktopSession(private val activity: Activity) {
         private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
         /** A pinch on a corner becomes a drag once the hand's ray has moved this far across the window, metres. */
         private const val CORNER_DRAG_M = 0.03
+        /** A slide this long on the touchpad (in pad widths) is one step of the focus on the home panel. */
+        private const val PAD_STEP = 0.16
         /** The kind of the window the settings are in. */
         const val SETTINGS = "settings"
         /** The phone's apps are offered this many to a page of the shelf. */

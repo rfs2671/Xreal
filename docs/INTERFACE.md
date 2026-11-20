@@ -4,6 +4,44 @@ Asked for by the owner on 19 November 2026: a finished interface, usable without
 are put, free resizing, one set-up and no questions afterwards, and a look of its own ("currently looks like sad AI
 slop"). This file is the design. What is built and what was seen on the glasses is recorded at the end.
 
+## The look: glass (20 November 2026; this replaces the line look below)
+
+The owner saw the line look ("light is the ink": marks in line, corner brackets, nothing filled) and rejected it:
+"not anywhere near". He gave a picture of what he wants: a home of frosted glass panes with a sidebar, a large
+"continue" card, cards with pictures, a room card, shortcuts and a dock. That is the direction now. Where this
+section and the older ones below disagree, this one holds; the focus table, the keys, the sizes of text as angles,
+the phone as a controller and the set-up are unchanged.
+
+What the glasses can and cannot do with it: they add light and cannot darken the room, so a dark frosted pane and
+a blur of the room behind it cannot be drawn. A pane here is a faint, even veil of cool light with a brighter rim
+and light caught along its upper edge. In a dim room it looks like the picture; in a bright one the veil is
+fainter and the cards carry it.
+
+- **Colour.** The veil `#8C96C8` at about a third strength; text `#F4F5FA`, second lines `#B9BED0`; the accent,
+  for what is chosen and what is in focus, violet `#9B8CFF` to `#6B57F5` (it was amber); green `#4ADE80` for
+  running, connected, ready; Ember for what is wrong (`Glass` in `desktop/HomePanel.kt`).
+- **The home panel** (`Home`): in view whenever no window is open. One picture, 42 by 19 degrees, 1.8 m away,
+  drawn about a pixel to a pixel of the glasses.
+  - Head: the name, a pill with the glasses (connected or not), the phone's battery and the tracking, the time.
+  - Sidebar: Home, Games, Apps, Windows, Settings. The section shown is a violet pill.
+  - Home section: a large card to continue with what was opened last (or to start with YouTube); quick play
+    (three games and "More"); the room card with the marked room's own outline and size; the library (the web
+    apps, then games); shortcuts (Recentre, Gather, Close all).
+  - Games, Apps (the phone's apps with their own icons, nineteen to a page) and Windows (every window, open or
+    put away; Select brings one back in front of the wearer) are grids of cards.
+  - Nothing on it is made up: no placeholder titles, no devices that are not there. A thing without a picture
+    of its own gets one drawn from its colour: a sign for an app, a low sun over a floor of lines for a game.
+  - The focus is a rim of light with a glow that glides from card to card. The four directions lead to the card
+    that lies that way (`Home.neighbour`); Left from a section leads to its entry in the sidebar; the sidebar is
+    walked up and down within itself. A slide on the touchpad steps the same way; a ray or a look finds the card
+    it is on (`Home.hit`). A green dot on a card says it has a window (hollow: put away).
+- **The dock**: the row of marks on a glass pill, shown instead of the panel while a window is open (a new window is 0.80 m wide at 2 m, 23 degrees, so that title, window, handle and dock all fit under the status line). Its first
+  mark is Home: it puts the windows away and shows the panel.
+- **Windows**: a page with rounded corners and a thin rim (faint at rest, white with the focus on the window,
+  violet with a soft halo when the focus is on the window itself); its title and the handle's four words stand on
+  glass pills. Corner brackets are drawn only while a window is being sized. A window that was put away comes
+  back in front of the wearer, not where it last stood.
+
 ## The material
 
 The glasses add light to the room and cannot darken it. Black is not a colour here: it is the room. A filled panel
@@ -193,6 +231,12 @@ do ("Six windows are open: close one first"). Nothing else in the glasses interr
   - `tools/ui-automation/desktop_test.py` is written anew: it drives the desktop with d-pad keys on the phone and
     checks the focus and each window's place and size, and saves an eye's picture at each step.
   - The status line now says "pointer off: see the phone" when the accessibility service is switched off.
+  - Later the same day the owner gave the glass direction (the section near the top). Built: `desktop/HomePanel.kt`
+    (layout, drawing, the directions, the ray), the dock's pill, rounded pages with rim and halo, glass under
+    titles, handle and status line, violet for amber. Unit tests: 197, none failing (`HomeTest`: every tile in
+    the picture and none overlapping, every tile reached by the directions, a ray at a tile finds it).
+    On the S21 Ultra `desktop_test.py` passes 45 of its 46 checks; the one that did not was the test's own search
+    of the log finding itself (put right, not run again). Its eye pictures are what was looked at.
   - **Still not seen:** anything through the glasses themselves (sharpness at the edges, brightness in a lit
     room, whether 0.55 degrees of x-height reads); a hand's pinch on the handle and the corners; a real
     gamepad; the set-up sequence from a fresh install; whether Android or Samsung shows any message of its own

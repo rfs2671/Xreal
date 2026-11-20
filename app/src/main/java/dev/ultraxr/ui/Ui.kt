@@ -24,7 +24,7 @@ object Ui {
     /** Text, resting lines. */
     const val CHALK = 0xFFF2F4F0.toInt()
     /** The one thing in focus: the one primary action of a screen, or the thing under the thumb. */
-    const val LAMP = 0xFFFFB454.toInt()
+    const val LAMP = 0xFF9B8CFF.toInt()      // the accent: violet, as in the glasses (Glass.VIOLET); it was an amber
     /** Pinned to the room; things that are set and steady. */
     const val TIDE = 0xFF6FD6D0.toInt()
     /** Close, delete, something wrong. */

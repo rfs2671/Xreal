@@ -103,6 +103,8 @@ object Tracking : GlassesLink.Listener {
     @Volatile private var planShifting = false
     /** For whoever tells applications about the room: corners marked, and whether the plan is placed in the world now. */
     val roomPlanCorners: Int get() = synchronized(planLock) { plan?.corners?.size ?: 0 }
+    /** The marked room's corners as (x, z) in the plan's own frame, in the order they were marked; empty with no room marked. */
+    val roomPlanOutline: List<DoubleArray> get() = synchronized(planLock) { plan?.corners?.map { doubleArrayOf(it[0], it[1]) } ?: emptyList() }
     val roomPlanPlaced: Boolean get() = synchronized(planLock) { plan != null && planFit != null }
 
     /**

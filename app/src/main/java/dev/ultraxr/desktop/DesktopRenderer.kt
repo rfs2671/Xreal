@@ -34,6 +34,8 @@ class RenderWindow(
     val growing: Boolean = false,
     /** The size of the page's picture, which follows the window's shape. */
     val pixelW: Int = WebWindow.PIXEL_WIDTH, val pixelH: Int = WebWindow.PIXEL_HEIGHT,
+    /** Its corners are drawn as brackets: it is being sized. */
+    val corners: Boolean = false,
 )
 
 /** One mark of the shelf: which way it lies from the wearer, how large (1 at rest, [Shelf.FOCUS_SCALE] in focus), and how strongly it is drawn. */
@@ -44,7 +46,9 @@ class RenderMark(val yaw: Double, val scale: Double, val sprite: Sprite, val alp
  * mark at [nameYaw]; [moreLeft] and [moreRight] are where a small dot says that the row goes on (NaN for none).
  */
 class RenderShelf(val marks: List<RenderMark>, val name: Sprite?, val nameYaw: Double, val status: Sprite?, val yaw: Double,
-    val moreLeft: Double = Double.NaN, val moreRight: Double = Double.NaN)
+    val moreLeft: Double = Double.NaN, val moreRight: Double = Double.NaN,
+    /** The home panel ([Home]), shown in the shelf's place when no window is open, and the light round its tile in focus: where its middle is on the panel (metres right and up) and how large. */
+    val panel: Sprite? = null, val ring: Sprite? = null, val ringX: Double = 0.0, val ringY: Double = 0.0, val ringW: Double = 0.0, val ringH: Double = 0.0, val panelAlpha: Float = 1f)
 
 class RenderFrame(val windows: List<RenderWindow>, val anchor: DoubleArray, val shelf: RenderShelf?, val usePosition: Boolean, val dim: Float,
     /** Everything the glasses are shown is multiplied by this (the picture brightness of the settings). */
@@ -58,12 +62,12 @@ class RenderFrame(val windows: List<RenderWindow>, val anchor: DoubleArray, val 
  */
 object Ink {
     val WHITE = floatArrayOf(0.949f, 0.957f, 0.941f)   // Chalk #F2F4F0: text, resting lines
-    val AMBER = floatArrayOf(1.0f, 0.706f, 0.329f)     // Lamp #FFB454: the one thing in focus
+    val AMBER = floatArrayOf(0.608f, 0.549f, 1.0f)     // the one thing in focus: violet #9B8CFF (Glass.VIOLET; it was Lamp, an amber)
     val TIDE = floatArrayOf(0.435f, 0.839f, 0.816f)    // Tide #6FD6D0: pinned to the room; things that are set and steady
     val CORAL = floatArrayOf(1.0f, 0.420f, 0.369f)     // Ember #FF6B5E: close, delete, something wrong
     val DUSK = floatArrayOf(0.541f, 0.580f, 0.620f)    // Dusk #8A949E: labels of things not in focus, hints
     val SLATE = floatArrayOf(0.361f, 0.400f, 0.439f)   // Slate #5C6670: idle lines far from focus
-    const val CHALK_INT = 0xFFF2F4F0.toInt(); const val LAMP_INT = 0xFFFFB454.toInt(); const val TIDE_INT = 0xFF6FD6D0.toInt()
+    const val CHALK_INT = 0xFFF2F4F0.toInt(); const val LAMP_INT = 0xFF9B8CFF.toInt(); const val TIDE_INT = 0xFF6FD6D0.toInt()
     const val EMBER_INT = 0xFFFF6B5E.toInt(); const val DUSK_INT = 0xFF8A949E.toInt(); const val SLATE_INT = 0xFF5C6670.toInt()
     // the names the colours had before they were given their own
     const val WHITE_INT = CHALK_INT; const val AMBER_INT = LAMP_INT; const val CORAL_INT = EMBER_INT
@@ -136,7 +140,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
             prog2d = program(vs, "#version 300 es\nprecision highp float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform sampler2D uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vec2(vUv.x, 1.0 - vUv.y)); o = vec4(c.rgb * uTint.rgb, c.a * uTint.a) * mask(vLocal); }")
             // uRing: a ring instead of the shape (the cursor, the look-to-press ring). uGlow: a halo instead of the shape, nothing
             // at the quad's edge and full that far inside it: the light a lit line spills.
-            progFlat = program(vs, "#version 300 es\nprecision highp float; in vec2 vUv; in vec2 vLocal; out vec4 o;$shape\nuniform float uRing; uniform float uGlow;\nvoid main(){ float m = mask(vLocal); if (uGlow > 0.0) { float g = clamp(-sdf(vLocal) / uGlow, 0.0, 1.0); m = g * g; } if (uRing > 0.0) { float r = length(vLocal) * 2.0; m = smoothstep(uRing - 0.12, uRing, r) * (1.0 - smoothstep(0.88, 1.0, r)); } o = uTint * m; }")
+            progFlat = program(vs, "#version 300 es\nprecision highp float; in vec2 vUv; in vec2 vLocal; out vec4 o;$shape\nuniform float uRing; uniform float uGlow; uniform float uEdge;\nvoid main(){ float m = mask(vLocal); if (uGlow > 0.0) { float g = clamp(-sdf(vLocal) / uGlow, 0.0, 1.0); m = g * g; } if (uEdge > 0.0) { float d = sdf(vLocal); float w = fwidth(d) + 1e-6; m = (1.0 - smoothstep(-w, w, d)) * smoothstep(-uEdge - w, -uEdge + w, d); } if (uRing > 0.0) { float r = length(vLocal) * 2.0; m = smoothstep(uRing - 0.12, uRing, r) * (1.0 - smoothstep(0.88, 1.0, r)); } o = uTint * m; }")
             val ids = IntArray(1); GLES30.glGenVertexArrays(1, ids, 0); vao = ids[0]; GLES30.glBindVertexArray(vao)
             GLES30.glGenBuffers(1, ids, 0); GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, ids[0])
             val q = floatArrayOf(-0.5f, -0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f)
@@ -255,6 +259,20 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     /** The status line at the top of the view, the row of marks, and the name under the one in focus: each faces the wearer from its place on the arc. */
     private fun drawShelf(f: RenderFrame) {
         val s = f.shelf ?: return
+        if (s.panel != null) {      // the home panel, a little larger while it arrives, and the light round its tile in focus
+            val c = Geometry.centre(f.anchor, s.yaw, Home.PITCH, Home.DISTANCE)
+            sprite(s.panel, c, s.yaw, Home.PITCH, Home.HEIGHT * (1.04 - 0.04 * s.panelAlpha), s.panelAlpha, 0, vp)
+            s.ring?.let { r -> if (!r.bitmap.isRecycled) { Geometry.modelMatrix(offset(c, s.yaw, Home.PITCH, s.ringX, s.ringY), s.yaw, Home.PITCH, s.ringW, s.ringH, model); draw(prog2d, GLES30.GL_TEXTURE_2D, texture(r), vp, ident, s.ringW, s.ringH, 0.0, WHITE, s.panelAlpha) } }
+            s.status?.let { sprite(it, Geometry.centre(f.anchor, s.yaw, Shelf.STATUS_PITCH, Shelf.DISTANCE), s.yaw, Shelf.STATUS_PITCH, Sight.STRIP * Sight.metres(Sight.BODY, Shelf.DISTANCE), 1f, 0, vp) }
+            return
+        }
+        // the dock: a pane of glass behind the row of marks
+        if (s.marks.isNotEmpty()) {
+            val dw = 2 * Shelf.DISTANCE * Math.tan(Shelf.SPACING * (s.marks.size - 1) / 2 + Shelf.MARK_ANGLE * 2.2); val dh = 2 * Shelf.DISTANCE * Math.tan(Shelf.MARK_ANGLE * Shelf.DOCK)
+            Geometry.modelMatrix(Geometry.centre(f.anchor, s.yaw, Shelf.PITCH, Shelf.DISTANCE * 1.02), s.yaw, Shelf.PITCH, dw, dh, model)
+            draw(progFlat, 0, 0, vp, ident, dw, dh, dh / 2, PANE, 0.30f)
+            draw(progFlat, 0, 0, vp, ident, dw, dh, dh / 2, WHITE, 0.30f, edge = Sight.metres(Math.toRadians(0.045), Shelf.DISTANCE).toFloat())
+        }
         s.status?.let { sprite(it, Geometry.centre(f.anchor, s.yaw, Shelf.STATUS_PITCH, Shelf.DISTANCE), s.yaw, Shelf.STATUS_PITCH, Sight.STRIP * Sight.metres(Sight.BODY, Shelf.DISTANCE), 1f, 0, vp) }
         for (m in s.marks) {
             // a mark's picture has room round the mark for its halo: it is half as large again as the mark
@@ -282,7 +300,9 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     /** The texture a sprite's picture is in: made when the sprite is first drawn, kept while it goes on being drawn. */
     private fun texture(s: Sprite): Int {
         sprites[s.key]?.let { return it }
-        val t = newTexture2d(); upload(t, s.bitmap); sprites[s.key] = t
+        val t = newTexture2d(); upload(t, s.bitmap)
+        if (s.key.startsWith("panel|")) { val old = sprites.entries.iterator(); while (old.hasNext()) { val e = old.next(); if (e.key.startsWith("panel|")) { GLES30.glDeleteTextures(1, intArrayOf(e.value), 0); old.remove() } } }
+        sprites[s.key] = t
         if (sprites.size > MAX_SPRITES) { val e = sprites.entries.iterator(); val old = e.next(); e.remove(); GLES30.glDeleteTextures(1, intArrayOf(old.value), 0) }
         return t
     }
@@ -296,13 +316,26 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         val hair = Sight.metres(Sight.LINE, w.distance)
         // The page is the only filled thing. Before it has drawn itself there is nothing there, only its brackets; on
         // its way out of its mark it is a hairline that grows, so that there is something to see growing.
-        if (t.hasFrame) { Geometry.modelMatrix(c, yaw, pitch, w.width, w.height, model); shadeRgb[0] = shade; shadeRgb[1] = shade; shadeRgb[2] = shade; draw(progOes, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.oes, matrix, t.m, w.width, w.height, 0.0, shadeRgb, 1f) }
+        val round = if (w.headLocked) 0.0 else Sight.metres(Sight.CORNER, w.distance)
+        if (!w.headLocked && !w.growing && w.glow > 0.02f) {      // the window in focus stands in its own light
+            val halo = Sight.metres(Sight.HALO, w.distance)
+            Geometry.modelMatrix(c, yaw, pitch, w.width + 2 * halo, w.height + 2 * halo, model)
+            draw(progFlat, 0, 0, matrix, ident, w.width + 2 * halo, w.height + 2 * halo, round + halo, Ink.AMBER, 0.55f * w.glow, glow = halo.toFloat())
+        }
+        if (t.hasFrame) { Geometry.modelMatrix(c, yaw, pitch, w.width, w.height, model); shadeRgb[0] = shade; shadeRgb[1] = shade; shadeRgb[2] = shade; draw(progOes, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.oes, matrix, t.m, w.width, w.height, round, shadeRgb, 1f) }
         else if (w.growing) for (side in 0 until 4) {
             val across = side < 2; val sign = if (side % 2 == 0) 1.0 else -1.0
             line(c, yaw, pitch, if (across) 0.0 else sign * w.width / 2, if (across) sign * w.height / 2 else 0.0, if (across) w.width else hair, if (across) hair else w.height, Ink.SLATE, 1f, 0.0, matrix)
         }
         if (w.headLocked) { cursor(w, c, yaw, pitch, matrix); return }
-        if (w.bracket > 0f) brackets(w, c, yaw, pitch, matrix)
+        if (w.bracket > 0f && !w.growing) {      // the rim of the pane: faint at rest, white while the focus is on the window, violet when it is on the window itself
+            val g = w.glow.coerceIn(0f, 1f); val rim = Sight.metres(Sight.LINE + (Sight.LINE_LIT - Sight.LINE) * g, w.distance)
+            val base = if (w.near) Ink.WHITE else Ink.SLATE
+            for (i in 0 until 3) lineRgb[i] = base[i] + (Ink.AMBER[i] - base[i]) * g
+            Geometry.modelMatrix(c, yaw, pitch, w.width + 2 * rim, w.height + 2 * rim, model)
+            draw(progFlat, 0, 0, matrix, ident, w.width + 2 * rim, w.height + 2 * rim, round + rim, lineRgb, (if (w.near) 0.9f else 0.6f) * w.bracket, edge = rim.toFloat())
+        }
+        if (w.corners) brackets(w, c, yaw, pitch, matrix)      // while it is being sized: its corners
         val gap = Sight.metres(Sight.BRACKET_GAP, w.distance); val lit = Sight.metres(Sight.LINE_LIT, w.distance)
         w.title?.let {      // above the top-left bracket, beginning where the bracket begins
             val h = Sight.STRIP * Sight.metres(Sight.BODY, w.distance)
@@ -362,7 +395,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         return doubleArrayOf(c[0] + cy * x + sy * sp * y, c[1] + cp * y, c[2] - sy * x + cy * sp * y)
     }
 
-    private fun draw(prog: Int, target: Int, texture: Int, viewProj: FloatArray, texM: FloatArray, w: Double, h: Double, radius: Double, rgb: FloatArray, a: Float, ring: Float = 0f, glow: Float = 0f) {
+    private fun draw(prog: Int, target: Int, texture: Int, viewProj: FloatArray, texM: FloatArray, w: Double, h: Double, radius: Double, rgb: FloatArray, a: Float, ring: Float = 0f, glow: Float = 0f, edge: Float = 0f) {
         // uniform locations are looked up once per program, not on every draw
         val u = uniforms.getOrPut(prog) { IntArray(UNIFORM_NAMES.size) { GLES30.glGetUniformLocation(prog, UNIFORM_NAMES[it]) } }
         if (boundProgram != prog) { GLES30.glUseProgram(prog); boundProgram = prog }
@@ -374,7 +407,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         // light is what is drawn, so the picture's brightness scales the colour and leaves alone how much it covers
         val k = a * bright
         GLES30.glUniform4f(u[4], rgb[0] * k, rgb[1] * k, rgb[2] * k, a)
-        if (prog == progFlat) { GLES30.glUniform1f(u[5], ring); GLES30.glUniform1f(u[6], glow) }
+        if (prog == progFlat) { GLES30.glUniform1f(u[5], ring); GLES30.glUniform1f(u[6], glow); GLES30.glUniform1f(u[8], edge) }
         if (texture != 0) { GLES30.glActiveTexture(GLES30.GL_TEXTURE0); GLES30.glBindTexture(target, texture); GLES30.glUniform1i(u[7], 0) }
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
     }
@@ -417,7 +450,9 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
 
     companion object {
         private const val NEAR = 0.08
-        private val UNIFORM_NAMES = arrayOf("uMvp", "uTex", "uSize", "uRadius", "uTint", "uRing", "uGlow", "uSampler")
+        private val UNIFORM_NAMES = arrayOf("uMvp", "uTex", "uSize", "uRadius", "uTint", "uRing", "uGlow", "uSampler", "uEdge")
+        /** The cool veil a pane of glass is ([Glass.PANE]), as light. */
+        private val PANE = floatArrayOf(0.55f, 0.59f, 0.78f)
         private val WHITE = floatArrayOf(1f, 1f, 1f)
         private val SIGNS = doubleArrayOf(-1.0, 1.0)
         private const val MAX_SPRITES = 96

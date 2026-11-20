@@ -4,11 +4,11 @@
   python desktop_test.py -s SERIAL [--out DIR]
 
 Opens the desktop on the phone (no glasses needed), presses the keys a d-pad or a gamepad sends, and checks what
-they did through the state the screen exposes for accessibility (the focus, and each window's place, size and
-flags). At every step it also saves the picture one eye of the glasses would get (a debug build draws it on
-request, at the glasses' own field of view: DesktopRenderer.eyeCapture), so the look can be judged without the
-glasses on. This covers the interface; it says nothing about tracking, and nothing about how it looks through the
-glasses' own optics.
+they did through the state the screen exposes for accessibility (the focus, whether the home panel or the dock is
+shown, and each window's place, size and flags). At every step it also saves the picture one eye of the glasses
+would get (a debug build draws it on request, at the glasses' own field of view: DesktopRenderer.eyeCapture), so
+the look can be judged without the glasses on. This covers the interface; it says nothing about tracking, and
+nothing about how it looks through the glasses' own optics.
 
 It closes the windows that are open when it starts, and leaves none behind.
 """
@@ -20,7 +20,7 @@ def check(name, ok, detail=""):
     results.append((name, bool(ok), detail)); print(("PASS  " if ok else "FAIL  ") + name + ("  [" + str(detail) + "]" if detail else ""), flush=True)
 
 def state():
-    """(focus, name of the shelf's mark, windows) from the status line's description."""
+    """(focus, name of the tile or mark in focus, windows, "panel:SECTION" or "dock") from the status line's description."""
     for n in uia.nodes():
         d = n["desc"]
         if not d.startswith("focus;"): continue
@@ -30,8 +30,8 @@ def state():
             if len(g) < 13: continue
             ws.append(dict(id=int(g[0]), title=g[1], follow=g[2] == "true", minimized=g[3] == "true", maximized=g[4] == "true", fullscreen=g[5] == "true",
                            focused=g[6] == "true", yaw=float(g[7]), pitch=float(g[8]), width=float(g[9]), distance=float(g[10]), height=float(g[11]), kind=g[12]))
-        return f[1], (f[2] if len(f) > 2 else ""), ws
-    return None, None, []
+        return f[1], (f[2] if len(f) > 2 else ""), ws, (f[3] if len(f) > 3 else "")
+    return None, None, [], ""
 
 def key(*names, pause=0.35):
     for k in names: uia.sh("input keyevent " + k); time.sleep(pause)
@@ -60,24 +60,45 @@ def lit(path, box=None):
     if box: im = im.crop((int(box[0] * im.width), int(box[1] * im.height), int(box[2] * im.width), int(box[3] * im.height)))
     h = im.histogram(); return sum(h[24:]) / float(im.width * im.height)
 
+def visible(ws): return [w for w in ws if not w["minimized"]]
+def focused(ws): return next((w for w in ws if w["focused"]), None)
+
 def to_shelf():
-    """Back until the focus is on the shelf (Back: page -> window -> shelf). A keyboard's Escape is Back; the phone's own Back key would leave the screen from the shelf."""
+    """Back until the focus is on the panel or the dock (Back: page -> window -> shelf). A keyboard's Escape is Back; the phone's own Back key would leave the screen from there."""
     for _ in range(4):
         if (state()[0] or "").startswith("shelf"): return
         key("ESCAPE")
 
-def shelf_to(title):
-    """Walks the shelf's focus to the mark called [title]."""
+def dock_to(title):
+    """Walks the dock's focus to the mark called [title] (the dock is shown while a window is open)."""
     to_shelf()
-    for _ in range(30):      # to the first mark, then right until it is found
-        f, _, _ = state()
-        if f == "shelf 0": break
+    for _ in range(30):
+        if state()[0] == "shelf 0": break
         key("DPAD_LEFT", pause=0.15)
     for _ in range(30):
-        f, name, _ = state()
-        if name == title: return True
+        if state()[1] == title: return True
         key("DPAD_RIGHT", pause=0.15)
     return False
+
+def side_to(name):
+    """On the home panel: the focus to the sidebar's entry [name] (home, games, apps, windows, settings)."""
+    to_shelf()
+    for _ in range(8):
+        if (state()[1] or "").startswith("side:"): break
+        key("DPAD_LEFT", pause=0.2)
+    key("DPAD_UP", "DPAD_UP", "DPAD_UP", "DPAD_UP", pause=0.15)
+    for _ in range(5):
+        if state()[1] == "side:" + name: return True
+        key("DPAD_DOWN", pause=0.2)
+    return state()[1] == "side:" + name
+
+def row_to(name, way="DPAD_RIGHT"):
+    """Along a row of the panel until the tile called [name] is in focus."""
+    for _ in range(24):
+        if state()[1] == name: return True
+        before = state()[0]; key(way, pause=0.2)
+        if state()[0] == before: break
+    return state()[1] == name
 
 def handle_to(wid, word):
     """Takes the focus to a word of the handle of window [wid], from wherever on that window it is."""
@@ -93,7 +114,16 @@ def handle_to(wid, word):
         key("DPAD_RIGHT", pause=0.2)
     return state()[0] == "handle %d %s" % (wid, word)
 
-def focused(ws): return next((w for w in ws if w["focused"]), None)
+def close_everything():
+    """Every window closed, open or put away: "Close all" on the dock's System page or in the panel's Windows section."""
+    for _ in range(3):
+        f, name, ws, mode = state()
+        if not ws: return True
+        if mode == "dock":
+            dock_to("System"); key("DPAD_CENTER"); time.sleep(0.6); dock_to("Close all"); key("DPAD_CENTER"); time.sleep(1.0)
+        else:
+            side_to("windows"); key("DPAD_CENTER"); time.sleep(0.8); key("DPAD_RIGHT"); row_to("sys:closeall"); key("DPAD_CENTER"); time.sleep(1.0)
+    return not state()[2]
 
 def main():
     a = sys.argv[1:]; out = "desktop_test_out"
@@ -107,44 +137,48 @@ def main():
     n = uia.find("Open in the glasses"); check("the main screen offers one action: Open in the glasses", n is not None)
     if n is None: return finish()
     uia.sh("input tap %d %d" % (n["x"], n["y"])); time.sleep(3.5)
-    f, name, ws = wait(lambda s: True)
-    check("the desktop opens and says where the focus is", f is not None, f)
+    f, name, ws, mode = wait(lambda s: True)
+    check("the desktop opens and says where the focus is", f is not None, "%s, %s" % (f, mode))
     if f is None: return finish()
 
-    # ---- start from nothing: "Close all" on the shelf's System page (windows put away are closed by hand below)
-    check("the shelf has a System mark", shelf_to("System")); key("DPAD_CENTER"); time.sleep(0.6)
-    check("its page has 'Close all'", shelf_to("Close all")); key("DPAD_CENTER"); time.sleep(0.8)
-    shelf_to("Home"); key("DPAD_CENTER"); time.sleep(0.6)
-    f, name, ws = state()
-    check("'Close all' closes every open window and the focus is on the shelf", f.startswith("shelf") and not [w for w in ws if not w["minimized"]], f)
+    # ---- start from nothing
+    check("every window of earlier days can be closed with 'Close all'", close_everything(), [w["id"] for w in state()[2]])
+    side_to("home"); key("DPAD_CENTER", "DPAD_RIGHT"); time.sleep(0.5)
 
-    # ---- the shelf
-    check("the shelf begins with YouTube", shelf_to("YouTube") and state()[0] == "shelf 0", state()[:2])
-    p = shot("01-shelf")
-    check("an eye's picture of the shelf can be taken, and is mostly the room (black)", p is not None and 0.003 < lit(p) < 0.12, "%.1f%% lit" % (100 * lit(p)) if p else "no picture")
-    key("DPAD_RIGHT"); check("Right moves the focus to the next mark", state()[:2] == ("shelf 1", "Xbox Cloud"), state()[:2])
-    key("DPAD_LEFT", "DPAD_LEFT"); check("Left moves it back, and stops at the first", state()[0] == "shelf 0", state()[0])
-    key("DPAD_DOWN", "ESCAPE"); check("Down and Back do nothing on the shelf", state()[0] == "shelf 0" and uia.find("Open in the glasses") is None, state()[0])
+    # ---- the home panel
+    f, name, ws, mode = state()
+    check("with no window open the home panel is shown", mode == "panel:home" and f.startswith("shelf"), mode)
+    check("right of the sidebar is the large card", name == "hero", name)
+    p = shot("01-home")
+    check("an eye's picture of the home panel can be taken, and the panel fills its middle", p is not None and lit(p, (0.05, 0.2, 0.95, 0.8)) > 0.5, "%.0f%% lit" % (100 * lit(p, (0.05, 0.2, 0.95, 0.8))) if p else "no picture")
+    key("DPAD_RIGHT"); check("Right goes to the quick games", (state()[1] or "").startswith("quick:"), state()[1])
+    key("DPAD_LEFT"); check("Left comes back", state()[1] == "hero", state()[1])
+    key("DPAD_LEFT"); check("Left again goes to the sidebar, on the section shown", state()[1] == "side:home", state()[1])
+    key("DPAD_DOWN", "DPAD_CENTER"); time.sleep(0.8); check("Down and Select show the games", state()[3] == "panel:games" and state()[1] == "side:games", state()[1:4:2]); shot("02-games")
+    key("DPAD_DOWN", "DPAD_CENTER"); time.sleep(1.5); check("the phone's apps are a section too", state()[3] == "panel:apps", state()[3]); shot("03-apps")
+    key("ESCAPE"); check("Back does nothing on the panel, and the screen is not left", state()[3] == "panel:apps" and uia.find("Open in the glasses") is None, state()[3])
+    check("Home is at the top of the sidebar", side_to("home")); key("DPAD_CENTER"); time.sleep(0.6)
 
     # ---- a window
-    check("the Browser's mark is on the shelf", shelf_to("Browser"))
+    key("DPAD_RIGHT", "DPAD_DOWN"); check("under the large card is the library", (state()[1] or "").startswith("lib:"), state()[1])
+    row_to("lib:YouTube", "DPAD_LEFT"); check("the library has the Browser", row_to("lib:Browser"), state()[1])
     key("DPAD_CENTER")
-    f, _, ws = wait(lambda s: s[0].startswith("page") and len([w for w in s[2] if not w["minimized"]]) == 1)
+    f, _, ws, mode = wait(lambda s: s[0].startswith("page") and len(visible(s[2])) == 1)
     w = focused(ws)
-    check("Select opens it in a window and the keys go to its page", w is not None and f == "page %d" % w["id"], f)
+    check("Select opens it in a window, the keys go to its page, and the panel gives way to the dock", w is not None and f == "page %d" % w["id"] and mode == "dock", "%s, %s" % (f, mode))
     if w is None: return finish()
     wid = w["id"]; time.sleep(5)
-    p = shot("02-page-in-use")
+    p = shot("04-page-in-use")
     check("the page draws in the window", p is not None and lit(p, (0.3, 0.2, 0.7, 0.6)) > 0.3, "%.0f%% of the middle lit" % (100 * lit(p, (0.3, 0.2, 0.7, 0.6))) if p else "")
-    check("a new window is pinned to the room, 24 degrees wide, clear of the shelf", not w["follow"] and 20 < 2 * 57.3 * (w["width"] / 2 / w["distance"]) < 28 and w["pitch"] > 0, "%.2f m at %.1f m, pitch %.1f" % (w["width"], w["distance"], w["pitch"]))
-    key("ESCAPE"); check("Back leaves the page: the window itself is in focus", state()[0] == "window %d" % wid, state()[0]); shot("03-window-in-focus")
-    key("DPAD_DOWN"); check("Down goes to its handle, on 'move'", state()[0] == "handle %d move" % wid, state()[0]); shot("04-handle")
+    check("a new window is pinned to the room, straight ahead, 24 degrees wide", not w["follow"] and abs(w["yaw"]) < 1 and 20 < 2 * 57.3 * (w["width"] / 2 / w["distance"]) < 28 and w["pitch"] > 0, "%.2f m at %.1f m, yaw %.1f, pitch %.1f" % (w["width"], w["distance"], w["yaw"], w["pitch"]))
+    key("ESCAPE"); check("Back leaves the page: the window itself is in focus", state()[0] == "window %d" % wid, state()[0]); shot("05-window-in-focus")
+    key("DPAD_DOWN"); check("Down goes to its handle, on 'move'", state()[0] == "handle %d move" % wid, state()[0]); shot("06-handle")
 
     # ---- size
     key("DPAD_RIGHT"); check("Right goes to 'size'", state()[0] == "handle %d size" % wid, state()[0])
     key("DPAD_CENTER"); check("Select begins sizing", state()[0] == "sizing %d" % wid, state()[0])
     w0 = focused(state()[2])
-    key("DPAD_RIGHT", "DPAD_RIGHT", "DPAD_RIGHT", "DPAD_DOWN", "DPAD_DOWN", pause=0.2); w1 = focused(state()[2]); shot("05-sizing")
+    key("DPAD_RIGHT", "DPAD_RIGHT", "DPAD_RIGHT", "DPAD_DOWN", "DPAD_DOWN", pause=0.2); w1 = focused(state()[2]); shot("07-sizing")
     check("Right makes it wider and Down taller (the lower right corner follows the keys), freely", w1["width"] > w0["width"] * 1.1 and w1["height"] > w0["height"] * 1.06, "%.2f x %.2f -> %.2f x %.2f" % (w0["width"], w0["height"], w1["width"], w1["height"]))
     key("ESCAPE"); w2 = focused(state()[2])
     check("Back puts it back as it was", abs(w2["width"] - w0["width"]) < 0.01 and abs(w2["height"] - w0["height"]) < 0.01 and not state()[0].startswith("sizing"), state()[0])
@@ -155,7 +189,7 @@ def main():
     # ---- move
     handle_to(wid, "move")
     key("DPAD_CENTER"); check("Select on 'move' begins moving", state()[0] == "moving %d" % wid, state()[0])
-    m0 = focused(state()[2]); key("DPAD_LEFT", "DPAD_LEFT", "DPAD_LEFT", "DPAD_UP", pause=0.2); key("BUTTON_R1", "BUTTON_R1", pause=0.2); m1 = focused(state()[2]); shot("06-moving")
+    m0 = focused(state()[2]); key("DPAD_LEFT", "DPAD_LEFT", "DPAD_LEFT", "DPAD_UP", pause=0.2); key("BUTTON_R1", "BUTTON_R1", pause=0.2); m1 = focused(state()[2]); shot("08-moving")
     check("the directions carry it round the wearer and up, the shoulder keys further away", abs(m1["yaw"] - m0["yaw"]) > 3 and m1["pitch"] > m0["pitch"] and m1["distance"] > m0["distance"],
           "yaw %.1f -> %.1f, pitch %.1f -> %.1f, %.2f -> %.2f m" % (m0["yaw"], m1["yaw"], m0["pitch"], m1["pitch"], m0["distance"], m1["distance"]))
     key("DPAD_CENTER"); m2 = focused(state()[2])
@@ -163,48 +197,51 @@ def main():
 
     # ---- pin
     handle_to(wid, "pin")
-    key("DPAD_CENTER"); check("'pin' lets a window follow the head", focused(state()[2])["follow"], ""); shot("07-following")
+    key("DPAD_CENTER"); check("'pin' lets a window follow the head", focused(state()[2])["follow"], "")
     key("DPAD_CENTER"); check("and pins it to the room again", not focused(state()[2])["follow"], "")
 
-    # ---- a second window, and from one to the other
-    check("YouTube's mark is found again", shelf_to("YouTube"))
+    # ---- the dock, a second window, and from one to the other
+    to_shelf(); f, name, _, mode = state()
+    check("with a window open the dock is shown, and Back from the window is on its first mark, Home", mode == "dock" and f == "shelf 0" and name == "Home", "%s %s %s" % (f, name, mode)); shot("09-dock")
+    check("YouTube is on the dock", dock_to("YouTube"))
     key("DPAD_CENTER")
-    f, _, ws = wait(lambda s: len([w for w in s[2] if not w["minimized"]]) == 2 and s[0].startswith("page"))
-    vis = [w for w in ws if not w["minimized"]]
+    f, _, ws, _ = wait(lambda s: len(visible(s[2])) == 2 and s[0].startswith("page"))
+    vis = visible(ws)
     check("a second window opens beside the first", len(vis) == 2 and abs(vis[0]["yaw"] - vis[1]["yaw"]) > 10, [(w["id"], w["yaw"]) for w in vis])
-    time.sleep(4); key("ESCAPE"); shot("08-two-windows")
-    second = focused(state()[2])["id"] if focused(state()[2]) else -1
+    time.sleep(4); key("ESCAPE"); shot("10-two-windows")
     key("DPAD_LEFT"); a1 = state()[0]; key("DPAD_RIGHT"); a2 = state()[0]
-    check("Left and Right go from window to window", {a1, a2} == {"window %d" % wid, "window %d" % second} or (a1 != a2 and a1.startswith("window") and a2.startswith("window")), "%s, %s" % (a1, a2))
+    check("Left and Right go from window to window", a1 != a2 and a1.startswith("window") and a2.startswith("window"), "%s, %s" % (a1, a2))
 
     # ---- settings, as a window
-    check("the settings' mark is on the shelf", shelf_to("Settings"))
-    key("DPAD_CENTER"); f, _, ws = wait(lambda s: any(w["kind"] == "settings" and not w["minimized"] for w in s[2]))
+    check("the settings' mark is on the dock", dock_to("Settings"))
+    key("DPAD_CENTER"); f, _, ws, _ = wait(lambda s: any(w["kind"] == "settings" and not w["minimized"] for w in s[2]))
     st = next((w for w in ws if w["kind"] == "settings"), None)
-    check("Select opens the settings as a window", st is not None and f == "page %d" % st["id"], f)
-    time.sleep(1.0); p = shot("09-settings")
+    check("Select opens the settings as a window, straight ahead and nearer than the others", st is not None and f == "page %d" % st["id"] and abs(st["yaw"]) < 1 and st["distance"] < 1.9, "%s, %s" % (f, (st or {}).get("distance")))
+    time.sleep(1.0); p = shot("11-settings")
     check("the settings draw their rows", p is not None and lit(p) > 0.01, "%.1f%% lit" % (100 * lit(p)) if p else "")
-    key("DPAD_DOWN", "DPAD_DOWN"); shot("10-settings-third-row")
-    key("ESCAPE", "DPAD_DOWN", "DPAD_RIGHT", "DPAD_RIGHT", "DPAD_RIGHT"); check("its handle has 'close'", state()[0].endswith("close"), state()[0]); shot("11-close-in-focus")
+    key("ESCAPE", "DPAD_DOWN", "DPAD_RIGHT", "DPAD_RIGHT", "DPAD_RIGHT"); check("its handle has 'close'", state()[0].endswith("close"), state()[0])
     key("DPAD_CENTER"); time.sleep(0.6)
     check("Select on 'close' closes it and the focus goes to a window that is left", not any(w["kind"] == "settings" for w in state()[2]) and state()[0].startswith(("window", "page")), state()[0])
 
-    # ---- six windows, and what is said when a seventh is asked for
-    for t in ("Xbox Cloud", "3D web"):
-        shelf_to(t); key("DPAD_CENTER"); time.sleep(2.0)
-    n = len([w for w in state()[2] if not w["minimized"]])
-    check("four windows are open at once", n == 4, n); time.sleep(3); to_shelf(); shot("12-four-windows")
+    # ---- home puts the windows away; what was put away comes back in front
+    check("Home is the dock's first mark", dock_to("Home")); key("DPAD_CENTER"); time.sleep(1.0)
+    f, name, ws, mode = state()
+    check("Select on it puts the windows away and shows the home panel", mode == "panel:home" and len(ws) == 2 and not visible(ws), "%s, %d windows, %d in view" % (mode, len(ws), len(visible(ws)))); shot("12-home-with-windows-away")
+    side_to("windows"); key("DPAD_CENTER"); time.sleep(0.8); key("DPAD_RIGHT")
+    check("the Windows section lists them", (state()[1] or "").startswith("win:"), state()[1]); shot("13-windows")
+    key("DPAD_CENTER"); f, _, ws, mode = wait(lambda s: len(visible(s[2])) == 1)
+    back = focused(ws)
+    check("Select on one brings it back, in front of the wearer", back is not None and abs(back["yaw"]) < 12 and mode == "dock", "yaw %.1f, %s" % (back["yaw"] if back else 99, mode))
 
-    # ---- close them all from their handles
-    for _ in range(8):
-        vis = [w for w in state()[2] if not w["minimized"]]
-        if not vis: break
-        to_shelf(); key("DPAD_UP", "DPAD_DOWN", "DPAD_RIGHT", "DPAD_RIGHT", "DPAD_RIGHT", "DPAD_CENTER", pause=0.25); time.sleep(0.5)
-    f, _, ws = state()
-    check("every window can be closed by the d-pad alone, and the focus ends on the shelf", not [w for w in ws if not w["minimized"]] and f.startswith("shelf"), f)
-    log = uia.sh("logcat -d -t 3000 | grep -E 'FATAL EXCEPTION|AndroidRuntime: Process: dev.ultraxr'")
+    # ---- close what is open from its handle; the rest with Close all
+    if back is not None and handle_to(back["id"], "close"): key("DPAD_CENTER"); time.sleep(0.8)
+    f, name, ws, mode = state()
+    check("closing the last window in view from its handle shows the home panel again", mode.startswith("panel") and f.startswith("shelf") and not visible(ws), "%s %s" % (f, mode))
+    check("and 'Close all' leaves nothing behind", close_everything(), [w["id"] for w in state()[2]])
+    side_to("home"); key("DPAD_CENTER")
+    log = uia.sh("logcat -d -t 4000 | grep -E 'FATAL EXCEPTION|AndroidRuntime: Process: dev.ultraxr' | grep -v adbd")
     check("no crash was logged", not log.strip(), log.strip()[-160:])
-    perf = [l for l in uia.sh("logcat -d -t 3000 | grep 'desktop: .* fps'").splitlines() if l.strip()]
+    perf = [l for l in uia.sh("logcat -d -t 4000 | grep 'desktop: .* fps'").splitlines() if l.strip()]
     fps = float(re.search(r"desktop: (\d+) fps", perf[-1]).group(1)) if perf else 0
     check("the desktop draws at the screen's rate", fps >= 55, perf[-1].split("UltraXR :")[-1].strip() if perf else "no line")
     finish()

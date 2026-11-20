@@ -22,7 +22,7 @@ import android.view.View
  */
 object HomeIcon {
     private const val CHALK = 0xFFF2F4F0.toInt()      // Ink.WHITE
-    private const val LAMP = 0xFFFFB454.toInt()       // Ink.AMBER: the one thing in focus
+    private const val LAMP = 0xFF9B8CFF.toInt()       // Ink.AMBER: the one thing in focus (violet, Glass.VIOLET)
 
     /** The app's colour as a line colour: its hue kept, washed half way to white and brought up to full brightness. */
     private fun line(color: Int): Int {
@@ -43,7 +43,7 @@ object HomeIcon {
     }
 
     /** One of the drawings, in line, in a square of side 2 [t] round ([cx], [cy]). */
-    private fun glyph(c: Canvas, p: Paint, cx: Float, cy: Float, t: Float, sign: String) {
+    fun glyph(c: Canvas, p: Paint, cx: Float, cy: Float, t: Float, sign: String) {
         val path = Path()
         when (sign) {
             "#video" -> {      // a screen with a play mark
@@ -75,6 +75,23 @@ object HomeIcon {
                 path.moveTo(cx - t * 0.95f, cy - t * 0.05f); path.lineTo(cx, cy - t * 0.9f); path.lineTo(cx + t * 0.95f, cy - t * 0.05f); c.drawPath(path, p)
                 path.reset(); path.moveTo(cx - t * 0.62f, cy - t * 0.3f); path.lineTo(cx - t * 0.62f, cy + t * 0.8f); path.lineTo(cx + t * 0.62f, cy + t * 0.8f); path.lineTo(cx + t * 0.62f, cy - t * 0.3f); c.drawPath(path, p)
             }
+            "#windows" -> {      // two windows, one before the other
+                c.drawRoundRect(cx - t * 0.95f, cy - t * 0.35f, cx + t * 0.45f, cy + t * 0.85f, t * 0.2f, t * 0.2f, p)
+                path.moveTo(cx - t * 0.45f, cy - t * 0.35f); path.lineTo(cx - t * 0.45f, cy - t * 0.85f); path.lineTo(cx + t * 0.95f, cy - t * 0.85f); path.lineTo(cx + t * 0.95f, cy + t * 0.35f); path.lineTo(cx + t * 0.45f, cy + t * 0.35f); c.drawPath(path, p)
+            }
+            "#target" -> { c.drawCircle(cx, cy, t * 0.62f, p); for (i in 0 until 4) { val dx = floatArrayOf(1f, -1f, 0f, 0f)[i]; val dy = floatArrayOf(0f, 0f, 1f, -1f)[i]; c.drawLine(cx + dx * t * 0.62f, cy + dy * t * 0.62f, cx + dx * t * 1.02f, cy + dy * t * 1.02f, p) }
+                p.style = Paint.Style.FILL; c.drawCircle(cx, cy, t * 0.14f, p); p.style = Paint.Style.STROKE }
+            "#gather" -> for (i in 0 until 4) {      // four corners coming in
+                val sx = if (i % 2 == 0) 1f else -1f; val sy = if (i < 2) 1f else -1f
+                path.reset(); path.moveTo(cx + sx * t * 0.95f, cy + sy * t * 0.4f); path.lineTo(cx + sx * t * 0.4f, cy + sy * t * 0.4f); path.lineTo(cx + sx * t * 0.4f, cy + sy * t * 0.95f); c.drawPath(path, p)
+            }
+            "#x" -> { c.drawLine(cx - t * 0.7f, cy - t * 0.7f, cx + t * 0.7f, cy + t * 0.7f, p); c.drawLine(cx + t * 0.7f, cy - t * 0.7f, cx - t * 0.7f, cy + t * 0.7f, p) }
+            "#glasses" -> {
+                c.drawRoundRect(cx - t * 1.15f, cy - t * 0.38f, cx - t * 0.15f, cy + t * 0.42f, t * 0.3f, t * 0.3f, p); c.drawRoundRect(cx + t * 0.15f, cy - t * 0.38f, cx + t * 1.15f, cy + t * 0.42f, t * 0.3f, t * 0.3f, p)
+                c.drawLine(cx - t * 0.15f, cy - t * 0.1f, cx + t * 0.15f, cy - t * 0.1f, p)
+            }
+            "#phone" -> { c.drawRoundRect(cx - t * 0.55f, cy - t, cx + t * 0.55f, cy + t, t * 0.22f, t * 0.22f, p); c.drawLine(cx - t * 0.14f, cy + t * 0.68f, cx + t * 0.14f, cy + t * 0.68f, p) }
+            "#back" -> { path.moveTo(cx + t * 0.35f, cy - t * 0.7f); path.lineTo(cx - t * 0.4f, cy); path.lineTo(cx + t * 0.35f, cy + t * 0.7f); c.drawPath(path, p) }
             else -> { path.moveTo(cx - t * 0.35f, cy - t * 0.7f); path.lineTo(cx + t * 0.4f, cy); path.lineTo(cx - t * 0.35f, cy + t * 0.7f); c.drawPath(path, p) }      // "#more": onwards
         }
     }

@@ -42,12 +42,16 @@ object Type {
      * [maxWidthPx] is shortened with an ellipsis. [before] may draw a sign in front of the text, in a square of the
      * strip's height, and is given the canvas, the paint and the square's middle.
      */
-    fun label(text: String, xHeightPx: Float, color: Int, face: Typeface, maxWidthPx: Float = Float.MAX_VALUE, before: ((Canvas, Paint, Float, Float) -> Unit)? = null): Bitmap {
+    fun label(text: String, xHeightPx: Float, color: Int, face: Typeface, maxWidthPx: Float = Float.MAX_VALUE, before: ((Canvas, Paint, Float, Float) -> Unit)? = null, ground: Int = 0): Bitmap {
         val p = TextPaint(Paint.ANTI_ALIAS_FLAG); p.typeface = face; p.textSize = sizeFor(face, xHeightPx); p.color = color
         val h = Math.round(xHeightPx * Sight.STRIP.toFloat()); val pad = xHeightPx * 0.5f; val lead = if (before != null) xHeightPx * 2.2f else 0f
         val shown = if (maxWidthPx < Float.MAX_VALUE) TextUtils.ellipsize(text, p, (maxWidthPx - 2 * pad - lead).coerceAtLeast(xHeightPx * 4), TextUtils.TruncateAt.END).toString() else text
         val w = Math.ceil((p.measureText(shown) + 2 * pad + lead).toDouble()).toInt().coerceAtLeast(8)
         val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); val c = Canvas(b)
+        if (ground != 0) {      // a pane of glass under the text
+            val g = Paint(Paint.ANTI_ALIAS_FLAG); val r = h * 0.4f; g.color = ground; c.drawRoundRect(1f, h * 0.1f, w - 1f, h * 0.9f, r, r, g)
+            g.style = Paint.Style.STROKE; g.strokeWidth = 1.5f; g.color = Glass.PANE_RIM; c.drawRoundRect(1f, h * 0.1f, w - 1f, h * 0.9f, r, r, g)
+        }
         before?.invoke(c, p, pad + lead * 0.4f, h / 2f)
         p.style = Paint.Style.FILL; p.color = color
         c.drawText(shown, pad + lead, h / 2f + xHeightPx / 2f, p)
