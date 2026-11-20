@@ -525,6 +525,15 @@ unmistakably corners of that outline. One room at a time is what the tool should
 While the plan was not placed the log listed what the cameras found, for instance four walls of 1.4 to 3.3 m and
 one table top; those lists are what a fit that does not come can now be studied with.
 
+### One room marked (19 November, 19:01)
+
+The owner marked one room: 6 corners in 22 s, closed and kept ("6 corners, 6 walls (0.7 3.6 2.6 1.6 2.5 2.5 m),
+1 table tops as landmarks"). In the seconds after, the plan was looked at five times against the walls found, once
+they could be laid on it, and 7 cm of drift was taken out: the first time the correction has acted on the glasses.
+
+The walk meant to measure it did not happen: the phone's battery was at 6 % and the glasses were no longer
+attached. Still without a number: whether the walls stay on the real ones through a walk.
+
 ## Open
 
 1. **No Quest game has been run.** There is no game APK here. Everything above is measured with the synthetic test,
