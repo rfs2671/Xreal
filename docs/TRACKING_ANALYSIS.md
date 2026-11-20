@@ -338,3 +338,26 @@ there are any; they stand from the floor to 2.3 m. Replayed on the Pixel: three 
 `dense_walls=0` in `files/vio_options.txt`.
 
 Not seen in the glasses. Not built: table tops from dense depth, a usable mesh, hiding virtual things behind real ones.
+
+## A single-camera hand tracker, tried on the recordings (19 November 2026, evening)
+
+The owner asked for hands to be read over more of what the cameras see. The tracker in use (Mercury) needs a hand
+in both cameras. MediaPipe's Hand Landmarker (Apache 2.0, one picture at a time) was run on the laptop over the
+two hand recordings, each camera's upright 480x640 picture by itself, detection threshold 0.3
+(`tools/tracking/mono_hands_trial.py`; the library and its model are outside the repository).
+
+| Recording | Mercury finds a hand (its results on the phone) | MediaPipe finds one in either camera | in both |
+|---|---|---|---|
+| 17 November, 44 s, hands raised and lowered | 23 % | 38 % of 78 pairs | 3 % |
+| the same, pictures brightened (CLAHE) | | 10 % | 0 % |
+| 19 November on the S21 Ultra, 70 s, hands held up | 84 % | 18 % of 349 pairs | 5 % |
+
+In the ten seconds of the first recording where the hands hang low at the sides (Mercury: none), MediaPipe found
+none either: there the hands are at the very edge of the fisheye pictures, cut off and stretched. Where a hand is
+held up it mostly finds it in one camera and not the other, and on the second recording it finds far fewer than
+Mercury does.
+
+So as it comes, on these dim grey fisheye pictures, it is worse than what is in use and does not reach the hands
+it was hoped for. Not adopted. What it would take to try in earnest: turning each fisheye picture into ordinary
+views aimed down and to the sides before detection, and then measuring again on these same recordings.
+
