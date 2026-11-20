@@ -64,6 +64,39 @@ class RoomMemoryTest {
         assertFalse(m.read("nonsense"))
     }
 
+    /** A depth picture of a room made of [walls]: how far the camera at the origin sees along the line to a point. */
+    private fun picture(walls: List<RoomSurface>, hole: Double = Double.NaN): (DoubleArray) -> Double = { p ->
+        val d = Math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]); var best = Double.MAX_VALUE
+        for (w in walls) { val t = w.hit(0.0, 0.0, 0.0, p[0] / d, p[1] / d, p[2] / d); if (!t.isNaN() && t < best) best = t }
+        if (best == Double.MAX_VALUE) hole else best
+    }
+
+    @Test fun aKeptWallThatIsSeenThroughIsDroppedAndOneThatStandsIsNot() {
+        val m = RoomMemory(); val map = yUp(0.0, 0.0, 0.0, 0.0)
+        val near = wall(-1.5, -1.5, 1.5, -1.5); val far = wall(-2.0, -3.0, 2.0, -3.0); val side = wall(1.8, -3.0, 1.8, 0.5)
+        m.see(map, found(near, far, side)); val kept = RoomMemory(); kept.read(m.write())
+        // the room now: the near wall has gone (a partition taken away); behind it the far wall is seen
+        val now = picture(listOf(far, side))
+        var dropped = 0; var pictures = 0
+        while (pictures < 30 && dropped == 0) { dropped += kept.look(Pose(), now); pictures++ }
+        assertEquals(1, dropped); assertEquals(RoomMemory.LOOK_PICTURES, pictures)
+        assertEquals(2, kept.kept.count { it.kind == Kind.WALL })
+        assertTrue(kept.kept.none { Math.abs(it.cz + 1.5) < 0.01 && Math.abs(it.cx) < 0.01 })
+        assertEquals(2, kept.shown(map, null).first!!.surfaces.size)
+        // looked at for long, the walls that stand stay
+        repeat(100) { assertEquals(0, kept.look(Pose(), now)) }
+    }
+
+    @Test fun picturesWithNoAnswerOrOneBadPictureTakeNothingAway() {
+        val m = RoomMemory(); val map = yUp(0.0, 0.0, 0.0, 0.0); val w = wall(-1.5, -1.5, 1.5, -1.5)
+        m.see(map, found(w)); val kept = RoomMemory(); kept.read(m.write())
+        val there = picture(listOf(w)); val blank: (DoubleArray) -> Double = { Double.NaN }; val wrong: (DoubleArray) -> Double = { 6.0 }
+        repeat(50) { assertEquals(0, kept.look(Pose(), blank)) }
+        // seven bad pictures among good ones are not eight in a row's worth
+        repeat(10) { repeat(3) { kept.look(Pose(), wrong) }; repeat(2) { kept.look(Pose(), there) } }
+        assertEquals(1, kept.kept.count { it.kind == Kind.WALL })
+    }
+
     @Test fun lookingAgainAtTheSameRoomDoesNotChangeWhatIsKept() {
         val m = RoomMemory(); val map = yUp(0.2, 0.0, 0.1, 10.0); val f = found(wall(-2.0, -1.5, 2.0, -1.5), table(0.5, 0.2))
         m.see(map, f); m.write()

@@ -120,6 +120,27 @@ class MapAlign(private val zToY: DoubleArray) {
             return Pose(doubleArrayOf(near[0] + (there[0] - near[0]) * f - r[0], near[1] + (there[1] - near[1]) * f - r[1], near[2] + (there[2] - near[2]) * f - r[2]), q)
         }
 
+        /**
+         * One of [n] equal slices of a move (a turn about the vertical and a shift): made [n] times over it is the
+         * move, exactly. A turn and a shift along the floor are one turn about some upright line; each slice is the
+         * n-th part of that turn about the same line (and of the rise), so everything travels on an arc from where it
+         * was to where the move puts it. With no turn to speak of it is the n-th part of the shift.
+         */
+        fun slice(move: Pose, n: Int): Pose {
+            val th = Q.yawY(move.q); val t = move.p
+            if (Math.abs(th) < 1e-5) return Pose(doubleArrayOf(t[0] / n, t[1] / n, t[2] / n), Q.axisAngle(0.0, 1.0, 0.0, th / n))
+            // the line that stays put: (I - R) c = t, with R the turn by th about +y (x' = cos x + sin z, z' = -sin x + cos z)
+            val c = Math.cos(th); val s = Math.sin(th); val det = 2 * (1 - c)
+            val cx = ((1 - c) * t[0] + s * t[2]) / det; val cz = (-s * t[0] + (1 - c) * t[2]) / det
+            val q = Q.axisAngle(0.0, 1.0, 0.0, th / n); val r = Q.rotate(q, doubleArrayOf(cx, 0.0, cz))
+            return Pose(doubleArrayOf(cx - r[0], t[1] / n, cz - r[2]), q)
+        }
+        /** How many slices a move takes at no more than [partM] metres (of the point [near]) and [partRad] of turn a slice. */
+        fun slices(move: Pose, near: DoubleArray, partM: Double, partRad: Double, least: Int, most: Int): Int {
+            val to = move.apply(near); val d = Math.sqrt((to[0] - near[0]) * (to[0] - near[0]) + (to[1] - near[1]) * (to[1] - near[1]) + (to[2] - near[2]) * (to[2] - near[2]))
+            return Math.ceil(maxOf(d / partM, Math.abs(Q.yawY(move.q)) / partRad)).toInt().coerceIn(least, most)
+        }
+
         /** A place and heading in the app's world as map coordinates (x, y, z, yaw), and back. */
         fun toMap(appFromMap: Pose, p: DoubleArray, yaw: Double): DoubleArray {
             val inv = appFromMap.inverse(); val m = inv.apply(p)

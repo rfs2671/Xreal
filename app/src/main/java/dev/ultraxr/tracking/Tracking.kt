@@ -384,6 +384,7 @@ object Tracking : GlassesLink.Listener {
                 Native.vioSetOption(h, "startup_imu_gate", 1.0)
                 Native.vioSetOption(h, "startup_gate_frames", 3.0); Native.vioSetOption(h, "startup_gate_gyro", 1.0); Native.vioSetOption(h, "startup_gate_gyro_std", 0.5)
                 Native.vioSetOption(h, "startup_gate_accel_err", 2.0); Native.vioSetOption(h, "startup_gate_accel_std", 1.5)
+                Native.vioSetOption(h, "num_threads", 2.0)
                 // Under measurement: "native.KEY=VALUE" lines in files/vio_options.txt go to the library as they are
                 // (startup_imu_gate, startup_gate_frames, startup_gate_gyro, ...), after the settings above.
                 try {
@@ -393,7 +394,6 @@ object Tracking : GlassesLink.Listener {
                         log("6DoF library option $k = $v" + if (Native.vioSetOption(h, k, v)) "" else " (not taken)")
                     }
                 } catch (e: Exception) { log("vio_options.txt native options ignored: $e") }
-                Native.vioSetOption(h, "num_threads", 2.0)
                 // A phone's USB stack can hold IMU reports back for longer than a PC's: do not restart
                 // the estimator for gaps it can integrate across.
                 Native.vioSetOption(h, "max_imu_gap_s", 0.2)
@@ -409,6 +409,13 @@ object Tracking : GlassesLink.Listener {
                 val freshMap = try { File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty().any { it.replace(" ", "") == "room_map=new" } } catch (_: Exception) { false }
                 mapTestSlip = try { File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty().firstOrNull { it.startsWith("map_test_slip=") }?.substringAfter('=')?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }?.takeIf { it.size == 4 }?.toDoubleArray() } catch (_: Exception) { null }
                 mapSlipDone = false
+                try {
+                    val lines = File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()
+                    mapGlide = lines.any { it.replace(" ", "") == "map_glide=1" }; roomMeshOn = lines.any { it.replace(" ", "") == "room_mesh=1" }
+                    testBlind = lines.firstOrNull { it.startsWith("test_blind=") }?.substringAfter('=')?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }?.takeIf { it.size == 2 }?.toDoubleArray()
+                    testLight = lines.firstOrNull { it.startsWith("test_light=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: 1.0
+                    if (testBlind != null || testLight != 1.0) log("test: " + (testBlind?.let { "the cameras see nothing from " + it[0] + " to " + it[1] + " s of a replay; " } ?: "") + (if (testLight != 1.0) "pictures at $testLight of their brightness" else ""))
+                } catch (_: Exception) { testBlind = null; testLight = 1.0 }
                 slamRig = slamRigOf(calib)
                 try { openRoomMap(freshMap) } catch (e: Throwable) { log("room map: not started: $e") }
                 if (oldVio != 0L) head.onVioEpochReset()
@@ -543,7 +550,22 @@ object Tracking : GlassesLink.Listener {
         if (v != 0L) Native.vioPushImu(v, tNs, gyro[0], gyro[1], gyro[2], accel[0], accel[1], accel[2])
     }
 
+    // Tests of what happens when things go wrong, for replays only (files/vio_options.txt):
+    //   test_blind=FROM,TO   between those seconds of the recording the cameras see nothing (both pictures a flat grey):
+    //                        position is lost as when the glasses are covered or the room goes dark, and must come back
+    //   test_light=GAIN      every picture is made darker (under 1) or brighter by that factor: a session in another light
+    @Volatile private var testBlind: DoubleArray? = null
+    @Volatile private var testLight = 1.0
+    private fun testPictures(left: ByteArray, right: ByteArray) {
+        val l = link ?: return; if (!l.replaying) return
+        val t = l.replaySeconds; val b = testBlind
+        if (b != null && t >= b[0] && t < b[1]) { java.util.Arrays.fill(left, 40.toByte()); java.util.Arrays.fill(right, 40.toByte()); return }
+        val g = testLight
+        if (g != 1.0) for (a in arrayOf(left, right)) for (i in a.indices) a[i] = ((a[i].toInt() and 0xff) * g).toInt().coerceIn(0, 255).toByte()
+    }
+
     override fun onStereo(tNs: Long, left: ByteArray, right: ByteArray) {
+        if (testBlind != null || testLight != 1.0) testPictures(left, right)
         val v = vio
         if (v != 0L) { Native.vioPushStereo(v, tNs, left, right, 480, 640); supervisor.onFrame(System.nanoTime()) }
         pairIndex++
@@ -793,6 +815,11 @@ object Tracking : GlassesLink.Listener {
         if (fresh && f.isFile) f.delete()
         synchronized(roomMemory) {
             roomMemory.clear(); roomMemorySaid = false
+            synchronized(meshLock) {
+                roomMesh.clear(); meshDirty = false; furnitureInMap = emptyList(); roomMeshBlocks = 0
+                if (fresh || !f.isFile) roomMeshFile()?.delete()
+                else if (roomMeshOn) try { roomMeshFile()?.takeIf { it.isFile }?.let { mf -> java.io.DataInputStream(mf.inputStream().buffered(1 shl 16)).use { if (roomMesh.read(it)) { roomMeshBlocks = roomMesh.blockCount; log("room mesh: " + roomMesh.blockCount + " blocks are kept with the saved map") } } } } catch (e: Exception) { log("room mesh: not read: $e") }
+            }
             if (fresh || !f.isFile) roomMemoryFile()?.delete()
             else if (roomMemory.read(try { roomMemoryFile()?.takeIf { it.isFile }?.readText() } catch (_: Exception) { null })) log("room memory: " + roomMemory.keptBefore + " walls and table tops are kept with the saved map; they are shown once the room is recognised")
         }
@@ -826,7 +853,7 @@ object Tracking : GlassesLink.Listener {
      */
     fun saveRoomMap() = synchronized(slamLock) {
         val h = slam
-        saveRoomMemory()
+        saveRoomMemory(); saveRoomMesh()
         if (h == 0L || slamFinding) return@synchronized
         val st = DoubleArray(18); Native.slamGetState(h, st); val places = st[13].toInt()
         // nothing new since it was opened or last written: leave it be
@@ -881,10 +908,13 @@ object Tracking : GlassesLink.Listener {
             log("room map: " + mapMode + ", " + mapPlaces + " places, " + mapResults + " pictures looked at, " + mapFound + " recognised" +
                 (if (mapFoundNs != 0L) " (last " + dev.ultraxr.core.Fmt.f((nowNs - mapFoundNs) / 1e9, 1) + " s ago)" else "") + ", a picture takes " + dev.ultraxr.core.Fmt.f(mapMs, 0) + " ms; " +
                 (if (mapAlign.version == 0) "the map's place in this session is not known" + (if (mapAlign.unsure > 0) " (" + mapAlign.unsure + " readings without enough agreement)" else "")
-                 else "last seen " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffM * 100, 1) + " cm and " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffDeg, 2) + " degrees from where it is held; " + mapSmallSteps + " small steps (" + dev.ultraxr.core.Fmt.f(mapStepSumM * 100, 0) + " cm in all), " + mapBigMoves + " put back at once") +
-                "; estimator " + dev.ultraxr.core.Fmt.f(vioProcessMs, 0) + " ms a frame")
+                 else "last seen " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffM * 100, 1) + " cm and " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffDeg, 2) + " degrees from where it is held; " + mapSmallSteps + " small steps (" + dev.ultraxr.core.Fmt.f(mapStepSumM * 100, 0) + " cm in all), " + mapBigMoves + " large ones put back (" + (if (mapGlide) dev.ultraxr.core.Fmt.f(mapGlideParts * 0.025, 1) + " s of gliding" else "at once") + ")") +
+                "; estimator " + dev.ultraxr.core.Fmt.f(vioProcessMs, 0) + " ms a frame; room: " + synchronized(roomMemory) { roomMemory.kept.size.toString() + " surfaces kept, " + roomMemory.dropped + " dropped" } +
+                ", mesh " + roomMeshBlocks + " blocks (" + dev.ultraxr.core.Fmt.f(roomMeshMs, 0) + " ms a picture), " + furnitureInMap.size + " pieces of furniture")
         }
         if (!reading) return
+        // while the world glides back nothing new is asked of the map: what it says now is of a world on its way
+        if (mapGliding) return
         val corr = Pose(doubleArrayOf(st[6], st[7], st[8]), doubleArrayOf(st[9], st[10], st[11], st[12]))
         val before = mapAlign.version
         val move = synchronized(mapAlign) { mapAlign.onReading(head.appFromEstimator(), corr) }
@@ -901,11 +931,20 @@ object Tracking : GlassesLink.Listener {
             if (big) {
                 val said = "room map: the world was " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffM, 2) + " m and " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffDeg, 1) + " degrees from where the map has it, and is put back"; log(said); replayLog?.note(t, said)
                 mapBigMoves++
-                synchronized(mapMoveLock) { mapPart = null; mapPartsLeft = 0; mapSmall = false; mapShifting = true; try { head.moveWorld(move) } finally { mapShifting = false } }
+                // Not at once either (until 20 November, late, it was: a jump of a metre). The world glides back at no
+                // more than half a metre and twenty degrees a second, everything on an arc to where it belongs: plainly
+                // seen, but nothing leaps. What the room finder holds is put where the map has it now, in one go.
+                // (Built and unit-tested, not yet measured on the phone: on only with "map_glide=1" in vio_options.txt.)
+                if (!mapGlide) synchronized(mapMoveLock) { mapPart = null; mapPartsLeft = 0; mapSmall = false; mapShifting = true; try { head.moveWorld(move) } finally { mapShifting = false } }
+                else synchronized(mapMoveLock) {
+                    val n = dev.ultraxr.core.MapAlign.slices(move, head.appFromEstimator().p, MAP_GLIDE_PART_M, MAP_GLIDE_PART_RAD, MAP_STEP_PARTS, 600)
+                    room.transform(move); wallMapReset = true; roomFindings = room.analyse(0.0); head.bumpWorld()
+                    mapPart = dev.ultraxr.core.MapAlign.slice(move, n); mapPartsLeft = n; mapGliding = true; mapGlideParts += n
+                }
             } else synchronized(mapMoveLock) {
                 // a small step is not made at once but in parts over a third of a second (the estimator's loop makes them)
+                mapPart = dev.ultraxr.core.MapAlign.slice(move, MAP_STEP_PARTS); mapPartsLeft = MAP_STEP_PARTS; mapGliding = false
                 mapSmallSteps++; mapStepSumM += (mapAlign.lastOffM * dev.ultraxr.core.MapAlign.STEP_SHARE).coerceIn(dev.ultraxr.core.MapAlign.STEP_M, dev.ultraxr.core.MapAlign.STEP_MAX_M).coerceAtMost(mapAlign.lastOffM)
-                mapPart = dev.ultraxr.core.MapAlign.part(move, head.appFromEstimator().p, 1.0 / MAP_STEP_PARTS); mapPartsLeft = MAP_STEP_PARTS
             }
         }
         // A test of the correction (files/vio_options.txt, "map_test_slip=T,dx,dz,yaw degrees"): at second T of a replay
@@ -923,6 +962,13 @@ object Tracking : GlassesLink.Listener {
     private var mapPart: Pose? = null; private var mapPartsLeft = 0
     private var mapSaidNs = 0L
     private const val MAP_STEP_PARTS = 12
+    private const val MAP_GLIDE_PART_M = 0.0125      // a part every 25 ms: half a metre a second
+    private val MAP_GLIDE_PART_RAD = Math.toRadians(0.5)
+    @Volatile private var mapGliding = false
+    @Volatile private var mapGlide = false
+    /** The mesh kept with the map, furniture, and dropping of kept surfaces seen through: on with "room_mesh=1" in vio_options.txt until its cost on the phone is measured. */
+    @Volatile private var roomMeshOn = false
+    @Volatile var mapGlideParts = 0; private set
     @Volatile private var mapTestSlip: DoubleArray? = null; private var mapSlipDone = false
     /** For the diagnostics: corrections of the world against the saved map so far in this session. */
     @Volatile var mapBigMoves = 0; private set
@@ -936,6 +982,7 @@ object Tracking : GlassesLink.Listener {
             if (mapPartsLeft-- <= 0) return
             mapSmall = true; mapShifting = true
             try { head.moveWorld(p, quiet = true) } finally { mapShifting = false; mapSmall = false }
+            if (mapPartsLeft == 0 && mapGliding) { mapGliding = false; head.bumpWorld(); replayLog?.note(link?.replaySeconds ?: 0.0, "room map: the world is where the map has it again") }
         }
     }
 
@@ -963,6 +1010,59 @@ object Tracking : GlassesLink.Listener {
             if (roomMemory.changed && now - roomMemorySavedNs > 20_000_000_000L) { roomMemorySavedNs = now; saveRoomMemory() }
         }
     }
+    // ---- the room as a surface, kept with the map (core/RoomMesh in the map's coordinates): files/room_mesh.bin.
+    // Every depth picture is added while the map's place is known; being in map coordinates it needs no moving when the
+    // world is corrected, and it is there again when the room is recognised. Furniture is found in it (core/Furniture),
+    // and kept walls and table tops the pictures see through are dropped (RoomMemory.look).
+    private val roomMesh = dev.ultraxr.core.RoomMesh()
+    private val meshLock = Any()
+    private var meshSavedNs = 0L; private var meshDirty = false; private var furnitureNs = 0L
+    @Volatile var roomMeshMs = 0.0; private set
+    @Volatile var roomMeshBlocks = 0; private set
+    /** Things standing in the room, in the map's coordinates. */
+    @Volatile var furnitureInMap: List<dev.ultraxr.core.FurnitureBox> = emptyList(); private set
+    private fun roomMeshFile(): File? = appContext?.getExternalFilesDir(null)?.let { File(it, "room_mesh.bin") }
+    private fun roomMeshStep(ds: dev.ultraxr.core.DenseStereo, cam: Pose) {
+        if (!roomMeshOn) return
+        val am = appFromMap() ?: return
+        val camInMap = am.inverse() * cam; val t0 = System.nanoTime()
+        synchronized(meshLock) { roomMesh.integrate(ds, camInMap); meshDirty = true; roomMeshBlocks = roomMesh.blockCount }
+        val gone = synchronized(roomMemory) { roomMemory.look(camInMap.inverse()) { q -> ds.rangeToward(q) } }
+        if (gone > 0) { val said = "room memory: $gone kept surfaces are not there any more (the cameras see through where they stood) and are dropped"; log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said) }
+        val now = System.nanoTime()
+        if (now - furnitureNs > 5_000_000_000L) {
+            furnitureNs = now
+            val floor = roomFindings?.floorY?.takeIf { !it.isNaN() }?.let { it - am.p[1] } ?: synchronized(roomMemory) { roomMemory.keptFloorInMap }
+            val walls = synchronized(roomMemory) { roomMemory.kept }
+            val cells = synchronized(meshLock) { roomMesh.cells(weight = dev.ultraxr.core.Furniture.CELL_WEIGHT, band = dev.ultraxr.core.Furniture.CELL_BAND) }
+            val found = dev.ultraxr.core.Furniture.detect(cells, floor, walls)
+            if (found.size != furnitureInMap.size) replayLog?.note(link?.replaySeconds ?: 0.0, "furniture: " + found.size + " things: " + found.take(8).joinToString("; ") { String.format(java.util.Locale.US, "%s %.2fx%.2f h%.2f", it.label, it.hx * 2, it.hz * 2, it.hy * 2) })
+            furnitureInMap = found
+        }
+        roomMeshMs = (System.nanoTime() - t0) / 1e6
+        if (meshDirty && now - meshSavedNs > 120_000_000_000L) saveRoomMesh()
+    }
+    private fun saveRoomMesh() {
+        val f = roomMeshFile() ?: return
+        try {
+            val bytes = java.io.ByteArrayOutputStream(1 shl 20)
+            synchronized(meshLock) { if (!meshDirty) return; roomMesh.write(java.io.DataOutputStream(bytes)); meshDirty = false; meshSavedNs = System.nanoTime() }
+            val tmp = File(f.parentFile, f.name + ".new"); tmp.writeBytes(bytes.toByteArray()); tmp.renameTo(f)
+        } catch (e: Exception) { log("room mesh: not written: $e") }
+    }
+    /** Furniture in the app's world, once the map's place is known. */
+    fun furnitureShown(): List<dev.ultraxr.core.FurnitureBox> {
+        val am = appFromMap() ?: return emptyList(); val turn = Q.yawY(am.q)
+        return furnitureInMap.map { b -> val c = am.apply(doubleArrayOf(b.cx, b.cy, b.cz)); dev.ultraxr.core.FurnitureBox(c[0], c[1], c[2], b.yaw + turn, b.hx, b.hy, b.hz, b.label, b.cells, b.confidence) }
+    }
+    /** The room's surface as triangles in the app's world (nine numbers each), at most [max]; empty until the map's place is known. */
+    fun roomMeshTriangles(max: Int = 60_000): FloatArray {
+        val am = appFromMap() ?: return FloatArray(0)
+        val t = synchronized(meshLock) { roomMesh.triangles(max) }; val v = DoubleArray(3)
+        var i = 0; while (i + 2 < t.size) { v[0] = t[i].toDouble(); v[1] = t[i + 1].toDouble(); v[2] = t[i + 2].toDouble(); val w = am.apply(v); t[i] = w[0].toFloat(); t[i + 1] = w[1].toFloat(); t[i + 2] = w[2].toFloat(); i += 3 }
+        return t
+    }
+
     private fun saveRoomMemory() = synchronized(roomMemory) {
         if (!roomMemory.changed && roomMemoryFile()?.isFile == true) return@synchronized
         try { val f = roomMemoryFile() ?: return@synchronized; val tmp = File(f.parentFile, f.name + ".new"); tmp.writeText(roomMemory.write()); tmp.renameTo(f) } catch (e: Exception) { log("room memory: not written: $e") }
@@ -1042,6 +1142,7 @@ object Tracking : GlassesLink.Listener {
                 if (denseWalls && dsNow != null && !floorNow.isNaN() && frame % 3 == 0) {
                     val td = System.nanoTime()
                     dsNow.compute(l, r); wallMap.add(dsNow, cam, floorNow)
+                    try { roomMeshStep(dsNow, cam) } catch (e: Throwable) { log("room mesh: $e") }
                     if (wallMap.pictures % 2 == 0) {
                         val found = wallMap.walls()
                         // Position had been lost: the walls say how far the world slipped meanwhile, and it is put back.

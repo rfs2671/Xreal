@@ -103,13 +103,24 @@ int main(int argc, char **argv) {
 
 	// UX_EXTEND="from to": between making and finding, the map is opened again and added to from that stretch of the
 	// first recording, as a session of its own whose world is turned and shifted (another unknown offset)
-	double ext[2] = {0, 0};
-	const int extend = getenv("UX_EXTEND") && sscanf(getenv("UX_EXTEND"), "%lf %lf", &ext[0], &ext[1]) == 2;
-	const double yaw2 = -65.0 * M_PI / 180.0;
-	const double G2[7] = {-0.8, 2.1, -0.2, 0, 0, sin(yaw2 / 2), cos(yaw2 / 2)};
-	for (int step = 0; step < 3; step++) {
-		const int phase = step == 2 ? 1 : 0, ex = step == 1;
-		if (ex && !extend) continue;
+	double exts[6][2];
+	int next = 0;
+	if (getenv("UX_EXTEND")) {
+		const char *q = getenv("UX_EXTEND");
+		while (next < 6 && sscanf(q, "%lf %lf", &exts[next][0], &exts[next][1]) == 2) {
+			next++;
+			q = strchr(q, ';');
+			if (!q) break;
+			q++;
+		}
+	}
+	for (int step = 0; step < 2 + next; step++) {
+		const int ex = step >= 1 && step <= next, phase = step == 1 + next ? 1 : 0;
+		double ext[2] = {0, 0};
+		if (ex) ext[0] = exts[step - 1][0], ext[1] = exts[step - 1][1];
+		// each adding session has an offset of its own
+		const double yaw2 = (-65.0 + 37.0 * (step - 1)) * M_PI / 180.0;
+		const double G2[7] = {-0.8 + 0.5 * (step - 1), 2.1 - 0.7 * (step - 1), -0.2, 0, 0, sin(yaw2 / 2), cos(yaw2 / 2)};
 		if (step == 0 && (strcmp(argv[1], "-") == 0 || getenv("UX_SKIP_MAP"))) continue;      // UX_SKIP_MAP: the map file is used as it is
 		int np = 0;
 		pose_t *poses = read_poses(argv[2 + 2 * phase], &np);
@@ -171,7 +182,7 @@ int main(int argc, char **argv) {
 		qsort(ms, n, sizeof(double), cmp);
 		printf("%s %.0f to %.0f s: %d pairs given, %d places in the map, %lld pairs matched to it; a pair takes median %.0f ms, 90th %.0f, worst %.0f\n", ex ? "extend" : phase == 0 ? "map" : "find",
 		       from, to, n, st.places, (long long)st.found, n ? ms[n / 2] : 0, n ? ms[n * 9 / 10] : 0, n ? ms[n - 1] : 0);
-		if (ex) printf("extend: %s\n", st.linked ? "the new places were tied to the map" : "the new places were never tied to the map: nothing is written");
+		if (ex) printf("extend: %s\n", !st.linked ? "the session never saw the map: nothing is written" : !st.added ? "nothing was added: all of it was in the map" : "places were added");
 		if (phase == 1 || ex) {
 			if (first_found < 0) printf("find: the head was never found in the saved map\n");
 			else {

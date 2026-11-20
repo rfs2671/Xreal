@@ -160,6 +160,9 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         onWorldMoved?.invoke(moved)
     }
 
+    /** Work begun in the world as it was is to be dropped, although no single move says so (a move made in many small parts). */
+    @Synchronized fun bumpWorld() { worldVersion++ }
+
     /** Called when a recentre moves the app world: every point p of the old world is now at the given pose applied to p. */
     @Volatile var onWorldMoved: ((Pose) -> Unit)? = null
     /** Counts recentres, so work begun in the old world can be told from work begun in the new one. */

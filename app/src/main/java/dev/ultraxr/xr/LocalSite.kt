@@ -98,6 +98,13 @@ object LocalSite {
             out.write(("HTTP/1.1 204 No Content\r\n${CORS}Connection: close\r\n\r\n").toByteArray()); out.flush(); return
         }
         if (path == "/room.json") { send(out, "200 OK", "application/json", roomJson().toByteArray()); return }
+        // the room's surface as triangles: little-endian floats, nine a triangle (x, y, z of three corners), in room.json's frame
+        if (path == "/room_mesh.bin") {
+            val t = Tracking.roomMeshTriangles(); val hh = XrHost.originHeight
+            val bb = java.nio.ByteBuffer.allocate(t.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            for (i in t.indices) bb.putFloat(if (i % 3 == 1) t[i] + hh else t[i])
+            send(out, "200 OK", "application/octet-stream", bb.array()); return
+        }
         // The room set-up tool hands over the corners the owner marked: /room_plan?c=x,z;x,z;... in the room's frame
         // (x and z are the application world's), or /room_plan?clear=1 to forget the plan.
         if (path == "/room_plan") {
@@ -199,6 +206,17 @@ object LocalSite {
                 .append("],\"hu\":").append(f(s.halfU)).append(",\"hv\":").append(f(s.halfV)).append(",\"support\":").append(s.support).append(",\"conf\":").append(f(conf.getOrElse(si) { 0.7 })).append('}')
         }
         sb.append("]")
+        // things standing in the room (core/Furniture): upright boxes, each with a guess at what it is and how far it is to be believed
+        val furniture = Tracking.furnitureShown()
+        if (tracked && furniture.isNotEmpty()) {
+            sb.append(",\"furniture\":[")
+            for ((i, b) in furniture.withIndex()) {
+                if (i > 0) sb.append(',')
+                sb.append("{\"label\":\"").append(b.label).append("\",\"fc\":[").append(f(b.cx)).append(',').append(f(b.cy + h)).append(',').append(f(b.cz)).append("],\"fyaw\":").append(f(b.yaw))
+                    .append(",\"fhalf\":[").append(f(b.hx)).append(',').append(f(b.hy)).append(',').append(f(b.hz)).append("],\"fconf\":").append(f(b.confidence)).append('}')
+            }
+            sb.append("]")
+        }
         mapJson(h)?.let { sb.append(it) }
         // where the cameras measured things in their newest picture, while it is fresh: a page can draw them on the things
         val pts = Tracking.roomPoints

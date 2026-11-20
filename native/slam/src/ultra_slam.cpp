@@ -81,11 +81,62 @@ struct uslam {
 	std::unique_ptr<StereoCameraModel> model;
 	std::unique_ptr<Rtabmap> rt;
 	int root = 0; // the map's first place
+	// USLAM_EXTEND: is the map being added to just now, or only read?
+	// add_always: every place of every session is added (measured, docs/SPATIAL.md section 8). Adding only where the
+	// map has no places ("Ultra/AddAlways=0") is built and not yet measured on the phone, so it is not the default.
+	bool adding = false, add_always = true, dangling = false, have_hit_at = false;
+	int misses = 0, old_hits = 0, old_max = 0, spells = 0;
+	double hit_at[3] = {0, 0, 0};
+	double add_after_m = 0.4;
+	int add_after_misses = 4, read_after_hits = 3;
+
+	void set_adding(bool on) {
+		ParametersMap p;
+		p[Parameters::kMemIncrementalMemory()] = on ? "true" : "false";
+		p[Parameters::kRGBDLinearUpdate()] = on ? params[Parameters::kRGBDLinearUpdate()] : "0";
+		p[Parameters::kRGBDAngularUpdate()] = on ? params[Parameters::kRGBDAngularUpdate()] : "0";
+		rt->parseParameters(p);
+		adding = on;
+		misses = old_hits = 0;
+		if (on) {
+			spells++;
+			old_max = 0;
+			if (rt->getMemory()) {
+				const std::set<int> ids = rt->getMemory()->getAllSignatureIds();
+				if (!ids.empty()) old_max = *ids.rbegin();
+			}
+		}
+		LOGI("%s (%d places)", on ? "nothing here is in the map: adding places" : "back among places the map has: reading only", rt->getWMSize() + rt->getSTMSize());
+	}
+
+	// Called after every pair of a map that is added to. Places are added only where the map has none: while pairs
+	// are recognised nothing is added; after some that are not, and some way from where one last was, the map is
+	// added to; and once pairs are again recognised as places that were there before this spell, it is read again.
+	// So walking a room the map already has adds nothing to it, however often.
+	void adding_step(int hit, const double *ps, bool tied) {
+		if (mode != USLAM_EXTEND || add_always) return;
+		if (!adding) {
+			if (hit > 0) {
+				misses = 0, have_hit_at = true;
+				hit_at[0] = ps[0], hit_at[1] = ps[1], hit_at[2] = ps[2];
+			} else if (have_hit_at) {
+				const double d = std::sqrt((ps[0] - hit_at[0]) * (ps[0] - hit_at[0]) + (ps[1] - hit_at[1]) * (ps[1] - hit_at[1]) + (ps[2] - hit_at[2]) * (ps[2] - hit_at[2]));
+				if (++misses >= add_after_misses && d > add_after_m) set_adding(true);
+			}
+		} else {
+			old_hits = hit > 0 && hit <= old_max ? old_hits + 1 : 0;
+			if (old_hits >= read_after_hits) {
+				if (!tied) dangling = true; // should not be: recognised as old places and still not linked to them
+				hit_at[0] = ps[0], hit_at[1] = ps[1], hit_at[2] = ps[2];
+				set_adding(false);
+			}
+		}
+	}
 
 	std::mutex mtx;
 	std::condition_variable cv, idle;
 	std::thread worker;
-	bool stop = false, busy = false, pending = false, epoch_due = false;
+	bool stop = false, busy = false, pending = false, epoch_due = false, last_tied = false;
 	std::vector<uint8_t> left, right;
 	int64_t t_ns = 0;
 	double pose[7];
@@ -127,9 +178,13 @@ struct uslam {
 
 	void open() {
 		ParametersMap p = params;
-		p[Parameters::kMemIncrementalMemory()] = mode == USLAM_FIND ? "false" : "true";
+		// A map that is added to is read at first, like one that is only read: places are added only where the map
+		// has none (see adding_step). "Ultra/AddAlways=1" is the way of before: every place of every session is added.
+		adding = mode == USLAM_MAP || (mode == USLAM_EXTEND && add_always);
+		misses = old_hits = 0, have_hit_at = false, dangling = false;
+		p[Parameters::kMemIncrementalMemory()] = adding ? "true" : "false";
 		if (mode != USLAM_MAP) p[Parameters::kMemInitWMWithAllNodes()] = "true";
-		if (mode == USLAM_FIND) {
+		if (!adding) {
 			p[Parameters::kRGBDLinearUpdate()] = "0";
 			p[Parameters::kRGBDAngularUpdate()] = "0";
 		}
@@ -180,9 +235,9 @@ struct uslam {
 				if (epoch) {
 					const int e = st.epoch + 1, places = st.places;
 					const int64_t dropped = st.dropped;
-					const int linked = st.linked;
+					const int linked = st.linked, added = st.added;
 					st = uslam_state{};
-					st.epoch = e, st.mode = mode, st.places = places, st.dropped = dropped, st.linked = linked;
+					st.epoch = e, st.mode = mode, st.places = places, st.dropped = dropped, st.linked = linked, st.added = added;
 				}
 				if (!pending) {
 					if (!epoch) continue;
@@ -201,7 +256,16 @@ struct uslam {
 					open();
 				}
 				// Making a map: what follows is a piece of its own until a place of the earlier piece is seen again.
-				if (epoch && mode != USLAM_FIND) rt->triggerNewMap();
+				if (epoch && mode == USLAM_MAP) rt->triggerNewMap();
+				if (epoch && mode == USLAM_EXTEND) {
+					// what was being added hangs in the air unless it was tied to the map; where the head is now is
+					// not known: read until it is
+					if (adding && !add_always) {
+						if (!last_tied) dangling = true;
+						set_adding(false);
+					} else if (adding) rt->triggerNewMap();
+					have_hit_at = false;
+				}
 				if (l.empty()) continue;
 				if (!model) rectifier(W, H);
 				cv::Mat lr, rr;
@@ -222,7 +286,7 @@ struct uslam {
 				// newer is linked to them.
 				bool tied = false;
 				{
-					const int from = mode == USLAM_FIND ? hit : rt->getLastLocationId();
+					const int from = adding ? rt->getLastLocationId() : hit;
 					if (root != 0 && from == root) tied = true;
 					else if (root != 0 && from > 0 && rt->getMemory()) tied = rt->getMemory()->getNeighborsId(from, 0).count(root) > 0;
 				}
@@ -245,13 +309,16 @@ struct uslam {
 					st.inliers = inl;
 				}
 				st.has_corr = 0;
+				last_tied = tied;
 				if (mode == USLAM_EXTEND && tied) st.linked = 1;
-				if (!corr.isNull() && (mode == USLAM_FIND ? (tied && st.found > 0) : (tied || (mode == USLAM_MAP && st.epoch == 0)))) {
+				if (mode == USLAM_EXTEND && adding) st.added = 1;
+				if (!corr.isNull() && (!adding ? (tied && st.found > 0) : (tied || (mode == USLAM_MAP && st.epoch == 0)))) {
 					const Eigen::Quaternionf q = corr.getQuaternionf();
 					st.corr[0] = corr.x(), st.corr[1] = corr.y(), st.corr[2] = corr.z();
 					st.corr[3] = q.x(), st.corr[4] = q.y(), st.corr[5] = q.z(), st.corr[6] = q.w();
 					st.has_corr = 1;
 				}
+				adding_step(hit, ps, tied);
 			} catch (const std::exception &e) {
 				LOGW("a pair failed: %s", e.what());
 			}
@@ -325,6 +392,8 @@ USLAM_API uslam_t *uslam_create(const char *rig, const char *db, int mode, const
 				if (eq == std::string::npos || eq == 0) continue;
 				const std::string k = line.substr(0, eq), v = line.substr(eq + 1);
 				if (k == "Ultra/Cores") h->cores = v;
+				else if (k == "Ultra/AddAlways") h->add_always = atoi(v.c_str()) != 0;
+				else if (k == "Ultra/AddAfterM") h->add_after_m = atof(v.c_str());
 				else if (k == "Ultra/CvThreads") h->cv_threads = atoi(v.c_str());
 				else p[k] = v;
 			}
@@ -386,7 +455,10 @@ USLAM_API void uslam_destroy(uslam_t *h, int save) {
 	if (h->worker.joinable()) h->worker.join();
 	try {
 		const double t0 = now_ms();
-		const bool keep = save && (h->mode == USLAM_MAP || (h->mode == USLAM_EXTEND && h->st.linked));
+		// a map that was added to is written if anything was added, all of it tied to the map; what was being added
+		// last must be tied too
+		if (h->mode == USLAM_EXTEND && h->adding && !h->last_tied) h->dangling = true;
+		const bool keep = save && (h->mode == USLAM_MAP || (h->mode == USLAM_EXTEND && h->st.linked && h->st.added && !h->dangling));
 		if (h->rt) h->rt->close(keep);
 		if (h->mode == USLAM_MAP && !save) remove(h->db.c_str());
 		if (!h->saved.empty()) {
@@ -394,7 +466,7 @@ USLAM_API void uslam_destroy(uslam_t *h, int save) {
 				if (rename(h->db.c_str(), h->saved.c_str()) != 0) LOGW("the map that was added to could not take the saved one's place");
 			} else remove(h->db.c_str());
 		}
-		LOGI("closed in %.0f ms%s", now_ms() - t0, keep ? ", map written" : h->mode == USLAM_EXTEND && save ? ", nothing written: the new places were never tied to the map" : "");
+		LOGI("closed in %.0f ms%s", now_ms() - t0, keep ? ", map written" : h->mode == USLAM_EXTEND && save ? (!h->st.added ? ", nothing written: nothing was added" : ", nothing written: new places were not tied to the map") : "");
 	} catch (const std::exception &e) {
 		LOGW("close failed: %s", e.what());
 	}

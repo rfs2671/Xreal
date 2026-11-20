@@ -323,12 +323,83 @@ This is a beginning, not better geometry: the surfaces are the same planes as be
 is ever dropped (a wardrobe that was moved stays until the room is learnt anew), the kept surfaces are not used for
 the floor the app itself stands games on, there is still no mesh and nothing for furniture that is not a table top.
 
+## 9. Built on 20 November (night), measured only where the laptop could measure it
+
+The phone was at 20 % and off its charger, and the owner had said to charge it before more testing. So this section
+has two kinds of things, and they are kept apart:
+
+- **measured on the laptop:** the geometry (it runs on a recording with `GeometryRecordingTest`), and everything that
+  is arithmetic (unit tests; there are 220, two of which run only when given a recording);
+- **built, unit-tested where it can be, and NOT measured:** everything that needs the phone. **None of it is switched
+  on in the app:** each has a switch (`slam.Ultra/AddAlways=0`, `map_glide=1`, `room_mesh=1`, `native.thread_nice`
+  and the estimator's settings in `vio_options.txt`), and the app as built behaves as section 8 left it until the
+  numbers are in. One command runs all of it once the phone is charging: `bash tools/tracking/next_phone_batch.sh` (about 70 minutes; it refuses to start
+  under 50 % unless the phone is charging). Until its numbers are in, none of these is an improvement, only a change.
+
+### Not measured yet (needs the phone)
+
+- **No duplicate places.** A map that is added to is now read first, like one that is only read. Places are added
+  only after four pictures running were not recognised and the head is 40 cm from where one last was; once three
+  running are recognised as places that were there before, it reads again. A session over a room the map has
+  should add nothing and write nothing; a session into new ground should add that ground. What was being added must
+  be tied to the map through the graph when the session ends, or the saved map is left as it was. The risk that is
+  not known: whether RTAB-Map links the first new place to the map when it is switched from reading to adding
+  (if not, new ground stays untied until the wearer walks back, and is thrown away if they do not).
+  `Ultra/AddAlways=1` is the way of before.
+- **A large correction glides.** In place of the jump, the world is turned and shifted back in slices 25 ms apart, at
+  no more than half a metre and twenty degrees a second (a metre and 25 degrees: 2 s), every point on an arc to where
+  it belongs. The slices compose exactly to the whole move (unit test, to a nanometre), and none moves a nearby point
+  more than 2 cm. While it glides the map is not asked again. Whether a glide is easier on the eye than a jump is for
+  the wearer to say.
+- **The estimator's time for a frame** (target: under 25 ms; it is 35 to 43). Prepared: its threads ahead of ordinary
+  ones (`thread_nice`, a new option of `libultra_vio.so`: Basalt's own threads are born with the priority of the
+  thread that makes them), three and four threads, fewer optimiser and optical-flow iterations, a coarser corner
+  grid, fewer keyframes, and combinations; each to be judged by its time and by whether the path stays the same.
+  Nothing is known about which of these helps.
+- **Reliability by replay:** the cameras covered for 6 and 15 s (`test_blind`), with and without the map, and sessions
+  at 0.35, 0.6 and 1.6 of the light (`test_light`). A change of light made this way is a poor stand-in for a lamp
+  switched on or daylight through a window; a walk through several rooms cannot be made up at all and needs a worn
+  recording.
+
+### Measured on the laptop: the mesh, furniture, and kept surfaces that are gone
+
+`core/RoomMesh` is now filled in the map's coordinates from every depth picture while the map's place is known, kept
+in `files/room_mesh.bin`, and read back when the map is opened; being in map coordinates it needs no moving when the
+world is corrected. `/room_mesh.bin` on the local site gives it as triangles. `core/Furniture` finds what stands on
+the floor in it; `RoomMemory.look` drops kept walls and table tops the cameras see through.
+
+| | 83 s, moving about | 78 s, 18 November |
+|---|---|---|
+| depth pictures | 80 | 75 |
+| mesh | 2516 blocks, 124 908 triangles, 10.3 MB | 1682 blocks, 52 654 triangles, 6.9 MB |
+| written and read back | the same cells and triangles; 16 ms and 9 ms on the laptop | the same; 15 and 8 ms |
+| adding a picture, on the laptop | 4 ms | 3 ms |
+| furniture found | 6 things: tables 0.96 x 0.58 m and 0.70 x 1.08 m at 0.85 and 0.75 m, one 0.66 x 0.83 at 0.95 m, three "tall" | 3 things, all "tall"; one is 0.40 x 2.34 m and 1.83 m high, which is a wall the wall finder missed |
+| the same furniture from each half of the recording | 3 of the first half's 6 are among the second half's 7 | none of the first half's 4 are among the second half's 2 |
+| kept walls looked at again | of 3 real walls none dropped; of 2 made up across the wearer's path, 1 dropped (after 8 s) | of 1 real none; of 2 made up, 1 dropped (after 19 s) |
+
+What that says, plainly:
+
+- **The mesh is kept exactly, and it is as rough as it was.** Counting every cell that has been seen, a whole room
+  hangs together as one thing; only cells seen about four times as often as the minimum, close to where the surface
+  runs, separate into things. It is still not good enough to hide things behind.
+- **Furniture is a first attempt and is not stable.** The sizes and heights of the tables found are plausible, and
+  there is nothing to check them against. Half of what one half of a walk finds is not what the other half finds, and
+  an unfound wall is taken for a cupboard. It is given to pages in `room.json` (`"furniture"`, each with a
+  confidence) and to nothing else: games do not get it.
+- **A kept surface that is gone is dropped when it is looked through for eight pictures more than it is seen in
+  place; one that stands is not.** On two recordings no real wall was dropped; one of two made-up walls was each
+  time. The other was never looked through from within 3 m for long enough.
+
 ## What is known to be weak (measured, `docs/QUEST_COMPAT.md`, `docs/TRACKING_ANALYSIS.md`)
 
 - **A saved map only since 20 November** (sections 7 and 8), for the desktop's windows, games' anchors and the room's
   surfaces; **not yet worn**, so how well a room is found again from other viewpoints and in other light is not
   known. Before it, an anchor put on a wall was 0.73 m off in the next run and 2.70 m off after walking.
-- **A map that is added to keeps growing** when the same room is walked again (section 8).
+- **A map that is added to keeps growing** when the same room is walked again (section 8). A change against that is
+  built and not measured (section 9).
+- **Section 9's phone work is unmeasured**: no duplicate places, the glide, the estimator's settings, the tests of
+  covered cameras and changed light.
 - **Position was lost while walking** (seconds at a time, worn, 18 and 19 November); each loss of more than 2 s makes
   the room model forget its surfaces. The long wait after a loss is fixed (section 7); why it is lost is not known,
   and no recording reproduces it.
@@ -340,7 +411,7 @@ the floor the app itself stands games on, there is still no mesh and nothing for
 
 ## Where the code is
 
-`native/vio/` (Basalt and its wrapper), `native/slam/` (RTAB-Map and its wrapper), `core/MapAlign.kt`, `core/RoomMemory.kt`, `tracking/Tracking.kt` (the loops that tie it together),
+`native/vio/` (Basalt and its wrapper), `native/slam/` (RTAB-Map and its wrapper), `core/MapAlign.kt`, `core/RoomMemory.kt`, `core/RoomMesh.kt`, `core/Furniture.kt`, `tracking/Tracking.kt` (the loops that tie it together),
 `core/HeadTracker.kt`, `core/PositionConfidence.kt`, `core/FactoryCalibration.kt`, `core/FloorCalibrator.kt`,
 `core/StereoPoints.kt`, `core/RoomModel.kt`, `core/RoomTidy.kt`, `core/DenseStereo.kt`, `core/WallMap.kt`,
 `core/RoomMesh.kt`, `core/RoomPlan.kt`, `core/RoomRecall.kt`, `xr/XrHost.kt`, `questlab/src/main/cpp/meta_layer.cpp`.

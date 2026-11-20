@@ -11,7 +11,7 @@ milestone (learn the room, place three windows, walk, close the app, open it aga
   - the ten-second status lines' last word: places, pictures looked at and recognised, time a picture takes, the
     estimator's time for a frame, how far the map was last seen from where it is held, small steps and corrections
     made at once
-  - every correction made at once (the world put back), with its size: these are the jumps a wearer can see
+  - every large correction (the world glided back onto the map), with its size: these a wearer can see
   - windows and room surfaces put back from the saved room; anchors are in the game's own uxr_quest_diag.txt (ANCHORS)
   - every loss of position ("rotation only") with how long it lasted, and every restart of the estimator with its reason
 """

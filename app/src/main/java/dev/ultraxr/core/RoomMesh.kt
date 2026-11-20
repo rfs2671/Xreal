@@ -130,6 +130,59 @@ class RoomMesh(val voxel: Double = 0.05, private val minWeight: Float = MIN_WEIG
         return r
     }
 
+    /**
+     * The centres of the cells the surface runs through (x, y, z one after another): cells seen often enough whose
+     * number is near zero. What stands in the room is found from these ([Furniture]).
+     */
+    fun cells(max: Int = 400_000, weight: Float = minWeight, band: Float = 0.5f): DoubleArray {
+        val out = ArrayList<Double>(1 shl 14); var n = 0
+        loop@ for ((k, blk) in blocks) {
+            val bx = ((k shr 42) and 0x1FFFFF).toInt() - OFF; val by = ((k shr 21) and 0x1FFFFF).toInt() - OFF; val bz = (k and 0x1FFFFF).toInt() - OFF
+            for (i in 0 until 512) {
+                if (blk.w[i] < weight || blk.d[i] > band || blk.d[i] < -band) continue
+                out.add(((bx shl 3) + (i shr 6) + 0.5) * voxel); out.add(((by shl 3) + ((i shr 3) and 7) + 0.5) * voxel); out.add(((bz shl 3) + (i and 7) + 0.5) * voxel)
+                if (++n >= max) break@loop
+            }
+        }
+        return out.toDoubleArray()
+    }
+
+    /** The number kept at a place and how much it was seen: false where nothing was ever seen. [out]: distance (-1 behind .. +1 in front or empty), weight. */
+    fun value(x: Double, y: Double, z: Double, out: FloatArray): Boolean {
+        val ix = cell(x); val iy = cell(y); val iz = cell(z)
+        val b = blocks[key(ix shr 3, iy shr 3, iz shr 3)] ?: return false
+        val i = ((ix and 7) shl 6) or ((iy and 7) shl 3) or (iz and 7)
+        out[0] = b.d[i]; out[1] = b.w[i]; return b.w[i] > 0f
+    }
+
+    /**
+     * Everything, to keep between sessions (with the saved map of the room, in whose coordinates it then is): the
+     * cell size, then every block that has anything in it. About 4 kB a block.
+     */
+    fun write(o: java.io.DataOutputStream) {
+        o.writeInt(MAGIC); o.writeDouble(voxel); o.writeInt(integrations)
+        val live = blocks.filter { e -> e.value.w.any { it > 0f } }
+        o.writeInt(live.size)
+        val buf = java.nio.ByteBuffer.allocate(512 * 8)
+        for ((k, b) in live) {
+            o.writeLong(k); buf.clear(); val fb = buf.asFloatBuffer(); fb.put(b.d); fb.put(b.w); o.write(buf.array())
+        }
+    }
+    /** Reads what [write] wrote in place of what is held; false (and nothing held) if it is not that, or was made with another cell size. */
+    fun read(inp: java.io.DataInputStream): Boolean {
+        clear()
+        try {
+            if (inp.readInt() != MAGIC || Math.abs(inp.readDouble() - voxel) > 1e-9) return false
+            val was = inp.readInt(); val n = inp.readInt(); if (n < 0 || n > MAX_BLOCKS) return false
+            val raw = ByteArray(512 * 8)
+            repeat(n) {
+                val k = inp.readLong(); inp.readFully(raw); val b = Block(); val fb = java.nio.ByteBuffer.wrap(raw).asFloatBuffer(); fb.get(b.d); fb.get(b.w); blocks[k] = b
+            }
+            integrations = was
+            return true
+        } catch (_: Exception) { clear(); return false }
+    }
+
     /** Moves everything by [delta] (the world was recentred): the cells are put where they now are. Coarse, and rare. */
     fun transform(delta: Pose) {
         val old = HashMap(blocks); blocks.clear()
@@ -148,6 +201,7 @@ class RoomMesh(val voxel: Double = 0.05, private val minWeight: Float = MIN_WEIG
 
     companion object {
         private const val OFF = 1 shl 20
+        private const val MAGIC = 0x55584d31      // "UXM1"
         /** A cell counts once sight lines worth this much have agreed on it: a few pictures at two metres. */
         const val MIN_WEIGHT = 0.9f
         const val MAX_WEIGHT = 40f

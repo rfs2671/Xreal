@@ -93,6 +93,30 @@ RUNS = {
     "s_20": ("room_map=find" + chr(10) + "map_test_slip=30,0.15,0.13,3" + chr(10), "", ""), "s_100": ("room_map=find" + chr(10) + "map_test_slip=30,0.8,-0.6,25" + chr(10), "", ""),
     # the map added to with RTAB-Map merging a new place into the old one it was recognised as (Mem/ReduceGraph)
     "r_new": ("room_map=new" + chr(10) + "slam.Mem/ReduceGraph=true" + chr(10), "", ""), "r_grow": ("slam.Mem/ReduceGraph=true" + chr(10), "", ""), "r_growb": ("slam.Mem/ReduceGraph=true" + chr(10), "", ""),
+    # the estimator's time for a frame, without the map: its settings one at a time against "e_base" (as shipped), the
+    # estimator's threads ahead of ordinary ones, and what looked best together. Each is judged by its time AND by
+    # whether the path stays the same (tools/tracking/vio_loss.py against e_base).
+    "e_base": ("room_map=off" + chr(10) + "native.num_threads=2" + chr(10), "", ""), "e_baseb": ("room_map=off" + chr(10) + "native.num_threads=2" + chr(10), "", ""), "e_basec": ("room_map=off" + chr(10) + "native.num_threads=2" + chr(10), "", ""),
+    "e_t3": ("room_map=off" + chr(10) + "native.num_threads=3" + chr(10), "", ""), "e_t4": ("room_map=off" + chr(10) + "native.num_threads=4" + chr(10), "", ""),
+    "e_nice": ("room_map=off" + chr(10) + "native.thread_nice=-8" + chr(10), "", ""), "e_nice4t": ("room_map=off" + chr(10) + "native.thread_nice=-8" + chr(10) + "native.num_threads=4" + chr(10), "", ""),
+    "e_it5": ("room_map=off" + chr(10) + "config.vio_max_iterations=5" + chr(10), "", ""), "e_it4": ("room_map=off" + chr(10) + "config.vio_max_iterations=4" + chr(10), "", ""),
+    "e_grid60": ("room_map=off" + chr(10) + "config.optical_flow_detection_grid_size=60" + chr(10), "", ""), "e_grid70": ("room_map=off" + chr(10) + "config.optical_flow_detection_grid_size=70" + chr(10), "", ""),
+    "e_of3": ("room_map=off" + chr(10) + "config.optical_flow_max_iterations=3" + chr(10), "", ""), "e_kf5": ("room_map=off" + chr(10) + "config.vio_max_kfs=5" + chr(10), "", ""),
+    "e_mix": ("room_map=off" + chr(10) + "native.thread_nice=-8" + chr(10) + "native.num_threads=3" + chr(10) + "config.vio_max_iterations=5" + chr(10), "", ""), "e_mixb": ("room_map=off" + chr(10) + "native.thread_nice=-8" + chr(10) + "native.num_threads=3" + chr(10) + "config.vio_max_iterations=5" + chr(10), "", ""),
+    "e_mix2": ("room_map=off" + chr(10) + "native.thread_nice=-8" + chr(10) + "native.num_threads=3" + chr(10) + "config.vio_max_iterations=5" + chr(10) + "config.optical_flow_detection_grid_size=60" + chr(10), "", ""),
+    # reliability, by replay: the cameras covered for six seconds (position must come back, and the world must be put
+    # back onto the saved map: compare with x_blind_nomap, where nothing puts it back), and sessions in another light
+    "x_blind": ("room_map=find" + chr(10) + "map_glide=1" + chr(10) + "test_blind=30,36" + chr(10), "", ""), "x_blind_nomap": ("room_map=off" + chr(10) + "test_blind=30,36" + chr(10), "", ""),
+    "x_blind15": ("room_map=find" + chr(10) + "map_glide=1" + chr(10) + "test_blind=30,45" + chr(10), "", ""),
+    "x_dim": ("room_map=find" + chr(10) + "test_light=0.6" + chr(10), "", ""), "x_dark": ("room_map=find" + chr(10) + "test_light=0.35" + chr(10), "", ""),
+    "x_bright": ("room_map=find" + chr(10) + "test_light=1.6" + chr(10), "", ""),
+    # the map added to only where it has no places (the way from 20 November, night) against every place of every session
+    "a_grow": ("slam.Ultra/AddAlways=0" + chr(10), "", ""), "a_growb": ("slam.Ultra/AddAlways=0" + chr(10), "", ""), "a_growc": ("slam.Ultra/AddAlways=0" + chr(10), "", ""),
+    # the mesh kept with the map, furniture and the dropping of kept surfaces: what it costs and what it finds
+    "g_mesh": ("room_map=find" + chr(10) + "room_mesh=1" + chr(10), "", ""), "g_meshb": ("room_map=find" + chr(10) + "room_mesh=1" + chr(10), "", ""),
+    # a slip of a metre glided back in place of the jump
+    "s_100g": ("room_map=find" + chr(10) + "map_glide=1" + chr(10) + "map_test_slip=30,0.8,-0.6,25" + chr(10), "", ""),
+    "a_always": ("slam.Ultra/AddAlways=1" + chr(10), "", ""), "a_alwaysb": ("slam.Ultra/AddAlways=1" + chr(10), "", ""),
     "m_new": ("room_map=new" + chr(10), "", ""), "m_find": ("room_map=find" + chr(10), "", ""), "m_findb": ("room_map=find" + chr(10), "", ""),
     "m_grow": ("", "", ""), "m_growb": ("", "", ""),      # the map is added to (the app's own way from 20 November, late)
     "m_off": ("room_map=off" + chr(10), "", ""),

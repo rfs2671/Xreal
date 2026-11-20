@@ -8,7 +8,10 @@
 
 #include "ultra_vio.h"
 
+#include <sys/resource.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -239,6 +242,7 @@ struct uvio {
   std::atomic<int> max_pending{2};
   std::atomic<double> gravity_magnitude{9.80665};
   std::atomic<bool> startup_imu_gate{false};
+  std::atomic<int> thread_nice{0};
   std::atomic<int> gate_good_frames{30};  // XR Gate --startup-imu-good-frames
   std::atomic<double> gate_gyro{0.08}, gate_gyro_std{0.04}, gate_accel_err{0.75}, gate_accel_std{0.35};
   std::mutex tbb_mtx;
@@ -295,7 +299,24 @@ void uvio::clock_restarted_locked(const char* who, int64_t t_ns) {
   reset_requested.fetch_add(1);
 }
 
+// The estimator's own threads (optical flow, the optimiser, TBB's workers) are made by Basalt; a thread is born with
+// the priority of the one that makes it. So for the time a session's threads are being made, the making thread takes
+// the priority asked for with the option "thread_nice" (0: as it is; negative: ahead of ordinary threads).
+struct NiceScope {
+  int before = 0, wanted = 0;
+  explicit NiceScope(int nice) : wanted(nice) {
+    if (wanted == 0) return;
+    errno = 0;
+    before = getpriority(PRIO_PROCESS, 0);
+    if (setpriority(PRIO_PROCESS, 0, wanted) != 0) wanted = 0;
+  }
+  ~NiceScope() {
+    if (wanted != 0) setpriority(PRIO_PROCESS, 0, before);
+  }
+};
+
 void uvio::start_session() {
+  NiceScope nice_scope(thread_nice.load());
   auto s = std::make_unique<Session>();
   const double g = std::abs(gravity_magnitude.load());
   s->opt_flow = basalt::OpticalFlowFactory::getOpticalFlow(config, calib);
@@ -552,6 +573,7 @@ bool uvio::feed(StereoFrame&& frame) {
   if (!s.started.load()) {
     // Initialize only once a complete input exists: sending nullptr as the
     // first IMU to an initialized VIO aborts upstream.
+    NiceScope nice_scope(thread_nice.load());
     s.vio->initialize(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
     s.started = true;
   }
@@ -901,6 +923,9 @@ UVIO_API int uvio_set_option(uvio_t* h, const char* key, double value) {
       basalt::stereoGuessDepth().store(static_cast<float>(value));
     } else if (k == "startup_imu_gate") {
       h->startup_imu_gate = value != 0;
+    } else if (k == "thread_nice" && value >= -19 && value <= 19) {
+      // the threads there are were made with the priority of before: the estimator is started afresh with the new one
+      if (h->thread_nice.exchange(static_cast<int>(value)) != static_cast<int>(value)) uvio_reset(h);
     } else if (k == "startup_gate_frames" && value >= 1 && value <= 300) {
       h->gate_good_frames = static_cast<int>(value);
     } else if (k == "startup_gate_gyro" && value > 0) {

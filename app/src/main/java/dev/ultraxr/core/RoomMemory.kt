@@ -15,7 +15,10 @@ import java.util.Locale
  *   0.7   found in this session only
  *   0.4   kept from an earlier session, not seen in this one: it is where it was, if the room has not changed
  *
- * Nothing is ever dropped yet: a wardrobe that was moved stays where it stood until the room is learnt anew.
+ * A kept wall or table top is dropped when the cameras look at where it should be and see through it ([look]):
+ * of the points on it that a depth picture has an answer for, most are seen at least 30 cm further away, in eight
+ * pictures more than it is seen in place. So a wardrobe that was moved, or a door that now stands open, goes after a
+ * few seconds of being looked at, and one bad picture does not take a wall away.
  */
 class RoomMemory {
     /** In map coordinates (y up). */
@@ -24,7 +27,49 @@ class RoomMemory {
     private var before: List<RoomSurface> = emptyList()
     var changed = false; private set
 
-    fun clear() { kept = emptyList(); before = emptyList(); changed = false }
+    /** For each kept surface (by its place in [kept]): pictures that saw through it less pictures that saw it in place. */
+    private var through = IntArray(0)
+    var dropped = 0; private set
+
+    fun clear() { kept = emptyList(); before = emptyList(); changed = false; through = IntArray(0); dropped = 0 }
+
+    /**
+     * One depth picture. [camFromMap] takes a point of the map into the camera's frame; [range] is how far the
+     * picture saw along the line to a point in that frame (NaN: no answer there; negative: outside the picture), as
+     * [DenseStereo.rangeToward]. Kept surfaces the picture looks through are counted, and dropped when it is plain.
+     * Returns how many were dropped by this picture.
+     */
+    fun look(camFromMap: Pose, range: (DoubleArray) -> Double): Int {
+        if (through.size != kept.size) through = IntArray(kept.size)
+        val gone = ArrayList<Int>()
+        for ((i, s) in kept.withIndex()) {
+            if (s.kind == RoomSurface.Kind.FLOOR) continue
+            var seen = 0; var past = 0; var asked = 0
+            val nu = Math.max(1, Math.round(s.halfU / LOOK_STEP).toInt()); val nv = Math.max(1, Math.round(s.halfV / LOOK_STEP).toInt())
+            for (a in -nu..nu) for (b in -nv..nv) {
+                // the rim is left out: a wall's end and a table's edge are the least sure part of it
+                val fu = a.toDouble() / (nu + 0.5); val fv = b.toDouble() / (nv + 0.5)
+                val p = camFromMap.apply(doubleArrayOf(s.cx + fu * s.halfU * s.ux + fv * s.halfV * s.vx, s.cy + fu * s.halfU * s.uy + fv * s.halfV * s.vy, s.cz + fu * s.halfU * s.uz + fv * s.halfV * s.vz))
+                val d = Math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]); if (d < 0.6 || d > LOOK_RANGE) continue
+                val r = range(p); if (r < 0.0) continue
+                asked++
+                if (r.isNaN()) continue
+                if (r > d + LOOK_PAST) past++ else if (r > d - LOOK_PAST) seen++
+            }
+            // enough of it in view and answered for the picture to have a say
+            if (asked < LOOK_MIN_POINTS || seen + past < LOOK_MIN_POINTS / 2) continue
+            if (past >= 0.7 * (seen + past)) through[i]++ else if (seen >= 0.5 * (seen + past)) through[i] = Math.max(0, through[i] - 2)
+            if (through[i] >= LOOK_PICTURES) gone.add(i)
+        }
+        if (gone.isEmpty()) return 0
+        val goneSurfaces = gone.map { kept[it] }
+        through = through.filterIndexed { i, _ -> i !in gone }.toIntArray()
+        kept = kept.filterIndexed { i, _ -> i !in gone }
+        // and it is not shown as "from an earlier session" any more
+        before = before.filter { b -> goneSurfaces.none { g -> b.kind == g.kind && RoomTidy.tidy(listOf(b, g)).size == 1 } }
+        dropped += gone.size; changed = true
+        return gone.size
+    }
 
     /** What this session found, with where the map lies in the app's world: taken into what is kept. */
     fun see(appFromMap: Pose, found: RoomFindings) {
@@ -36,7 +81,11 @@ class RoomMemory {
         // wall kept for long is not turned by one poor sighting of it
         val all = RoomTidy.tidy(kept.filter { it.kind != RoomSurface.Kind.FLOOR } + now).map { capped(it) }
         val next = (if (floor != null) listOf(floor) else emptyList()) + all
-        if (text(next) != text(kept)) { kept = next; changed = true }
+        if (text(next) != text(kept)) {
+            // the counts of [look] go with the surfaces they belong to (matched by place: tidy keeps the kept one where it is)
+            val t = IntArray(next.size); for ((i, s) in next.withIndex()) { val j = kept.indexOfFirst { it.kind == s.kind && Math.abs(it.cx - s.cx) + Math.abs(it.cy - s.cy) + Math.abs(it.cz - s.cz) < 0.5 }; if (j >= 0 && j < through.size) t[i] = through[j] }
+            kept = next; through = t; changed = true
+        }
     }
 
     /**
@@ -97,6 +146,11 @@ class RoomMemory {
     companion object {
         const val BOTH = 1.0; const val LIVE = 0.7; const val KEPT = 0.4
         const val MAX_SUPPORT = 100_000
+        const val LOOK_STEP = 0.15
+        const val LOOK_RANGE = 3.0
+        const val LOOK_PAST = 0.30
+        const val LOOK_MIN_POINTS = 12
+        const val LOOK_PICTURES = 8
         /** [s] moved by [t]: a turn about the vertical and a shift. */
         fun moved(t: Pose, s: RoomSurface): RoomSurface {
             val c = t.apply(doubleArrayOf(s.cx, s.cy, s.cz)); val u = Q.rotate(t.q, doubleArrayOf(s.ux, s.uy, s.uz)); val v = Q.rotate(t.q, doubleArrayOf(s.vx, s.vy, s.vz))

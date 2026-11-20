@@ -234,6 +234,22 @@ class DenseStereo(rig: StereoRig, srcW: Int = 480, srcH: Int = 640) {
         label[j] = l; return true
     }
 
+    /**
+     * How far the newest depth picture saw along the line from camera 0 to the point [p] (camera 0's frame): metres
+     * to what it saw there, NaN where it has no answer for that pixel, and -1 when the point is outside the picture
+     * or behind the camera. For asking whether something that should stand at [p] was seen, or seen through.
+     */
+    fun rangeToward(p: DoubleArray): Double {
+        // into the rectified camera: the transpose of the turn point() makes
+        val x = rect[0] * p[0] + rect[3] * p[1] + rect[6] * p[2]; val y = rect[1] * p[0] + rect[4] * p[1] + rect[7] * p[2]; val z = rect[2] * p[0] + rect[5] * p[1] + rect[8] * p[2]
+        if (z < 0.2) return -1.0
+        val u = Math.round(FOCAL * x / z + CX).toInt(); val v = Math.round(FOCAL * y / z + CY).toInt()
+        if (u < 3 || v < 3 || u >= W - 3 || v >= H - 3) return -1.0
+        val d = disparity[v * W + u]; if (d <= 0f) return Double.NaN
+        val zz = FOCAL * baseline / d
+        return zz * Math.sqrt(x * x + y * y + z * z) / z
+    }
+
     /** The place in camera 0's frame (x right, y down, z forward) of rectified pixel ([u], [v]) with [disp]; false when there is no answer. */
     fun point(u: Int, v: Int, disp: Float, out: DoubleArray): Boolean {
         if (disp <= 0f) return false

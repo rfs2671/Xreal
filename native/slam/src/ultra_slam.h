@@ -37,7 +37,8 @@ typedef struct {
 	int64_t last_t_ns;  /* time of the last pair worked through */
 	int64_t found_t_ns; /* time of the last pair recognised */
 	int has_corr;       /* corr is set: the newest place hangs together with the map's first place (its frame is the map's) */
-	int linked;         /* EXTEND: the new places were tied to the old map at some time in this session */
+	int linked;         /* EXTEND: the session was tied to the old map at some time */
+	int added;          /* EXTEND: places were added in this session (it is written at the end if all of them are tied) */
 	double corr[7];     /* the estimator's world in the map's world: p xyz, q xyzw */
 	int places;         /* places in the map */
 	int last_place;     /* the place the last pair was matched to, 0 for none */

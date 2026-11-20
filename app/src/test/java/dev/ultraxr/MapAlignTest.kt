@@ -105,6 +105,21 @@ class MapAlignTest {
         assertTrue(dist(part.apply(near), near) < 0.0015)
     }
 
+    @Test fun aLargeMoveInSlicesEndsExactlyWhereItShouldAndNothingLeaps() {
+        val near = doubleArrayOf(0.4, 1.6, -0.2); val move = yUp(0.8, 0.02, -0.6, 25.0)       // a metre and 25 degrees
+        val n = MapAlign.slices(move, near, 0.0125, Math.toRadians(0.5), 12, 600)
+        assertTrue("slices: $n", n in 60..120)
+        val part = MapAlign.slice(move, n)
+        var done = Pose(); var worst = 0.0; var at = near
+        repeat(n) { done = part * done; val now = done.apply(near); worst = maxOf(worst, dist(now, at)); at = now }
+        for (p in listOf(near, doubleArrayOf(3.0, 0.5, 2.0), doubleArrayOf(-2.0, 2.0, -4.0))) assertEquals(0.0, dist(done.apply(p), move.apply(p)), 1e-9)
+        assertEquals(Q.yawY(move.q), Q.yawY(done.q), 1e-9)
+        assertTrue("the nearby point moves $worst m in one slice", worst < 0.02)
+        // and a move with no turn is cut the same way
+        val shift = yUp(0.03, 0.0, 0.01, 0.0); val s = MapAlign.slice(shift, 12); var d2 = Pose(); repeat(12) { d2 = s * d2 }
+        assertEquals(0.0, dist(d2.apply(near), shift.apply(near)), 1e-12)
+    }
+
     @Test fun noiseIsLeftAlone() {
         val a = MapAlign(zy); val fix = yUp(0.0, 0.0, 0.0, 0.0)
         a.thrice(fix, Pose())
