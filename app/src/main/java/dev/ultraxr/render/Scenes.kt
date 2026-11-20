@@ -66,7 +66,7 @@ class HomeScene : BaseScene() {
     override fun draw(d: Draw, head: HeadTracker.State) {
         drawFloor(d, head)
         val a = anchor ?: inFront(head, 0.0, 0.0, 2.0)
-        d.text("ULTRA XR", a[0], a[1] + 0.16, a[2], 0.16, 0.85f, 0.95f, 1f)
+        d.text("Ultra XR", a[0], a[1] + 0.16, a[2], 0.16, 0.85f, 0.95f, 1f)
         d.text(subtitle, a[0], a[1] - 0.02, a[2], 0.05, 0.55f, 0.8f, 0.9f)
         // A slow ring of orbs around the title, to give the eyes real depth to lock on to.
         for (i in 0 until 8) {
@@ -106,7 +106,7 @@ class GameScene(val game: Game) : BaseScene() {
             orb(d, o, pulse)
             val label = when (g.phase) {
                 Game.Phase.FINISHED -> "Score ${g.score}   Best ${g.best}"
-                else -> "LUMEN"
+                else -> "Lumen"
             }
             d.text(label, o.p[0], o.p[1] + 0.2, o.p[2], 0.06, 0.9f, 0.95f, 1f)
             d.text(if (g.gazeActive) "Look at the orb to start" else "Touch the orb to start", o.p[0], o.p[1] + 0.12, o.p[2], 0.03, 0.6f, 0.8f, 0.9f)
@@ -127,7 +127,7 @@ class GameScene(val game: Game) : BaseScene() {
             val t = inFront(head, 0.0, 0.135, 1.8)
             val secs = g.timeLeft.toInt()
             d.text("${secs / 60}:${(secs % 60).toString().padStart(2, '0')}" + (if (g.combo > 1) "   x${1 + (g.combo - 1).coerceAtMost(9) / 3}" else ""), t[0], t[1], t[2], 0.03, 0.6f, 0.85f, 1f, 0.85f)
-            if (g.hitFlash > 0) { val h = inFront(head, 0.0, 0.0, 1.2); d.text("HIT", h[0], h[1], h[2], 0.12, 1f, 0.2f, 0.15f, (g.hitFlash * 2).toFloat().coerceAtMost(1f)) }
+            if (g.hitFlash > 0) { val h = inFront(head, 0.0, 0.0, 1.2); d.text("Hit", h[0], h[1], h[2], 0.12, 1f, 0.2f, 0.15f, (g.hitFlash * 2).toFloat().coerceAtMost(1f)) }
         }
         drawStatus(d, head)
     }
@@ -167,8 +167,8 @@ class CheckScene : BaseScene() {
         }
         // Each eye gets its own label: if you can read both words at once, both eyes see their own image.
         val l = inFront(head, -0.22, 0.2, 1.5); val r = inFront(head, 0.22, 0.2, 1.5)
-        if (d.eyeIndex == 0 || d.eyeIndex == -1) d.text("LEFT", l[0], l[1], l[2], 0.06, 1f, 0.35f, 0.3f)
-        if (d.eyeIndex == 1 || d.eyeIndex == -1) d.text("RIGHT", r[0], r[1], r[2], 0.06, 0.3f, 0.6f, 1f)
+        if (d.eyeIndex == 0 || d.eyeIndex == -1) d.text("Left", l[0], l[1], l[2], 0.06, 1f, 0.35f, 0.3f)
+        if (d.eyeIndex == 1 || d.eyeIndex == -1) d.text("Right", r[0], r[1], r[2], 0.06, 0.3f, 0.6f, 1f)
         if (prompt.isNotEmpty()) { val p = inFront(head, 0.0, -0.22, 1.5); d.text(prompt, p[0], p[1], p[2], 0.04, 1f, 1f, 1f) }
         drawHands(d)
     }

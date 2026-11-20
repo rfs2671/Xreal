@@ -1,6 +1,5 @@
 package dev.ultraxr
 
-import dev.ultraxr.desktop.BarButton
 import dev.ultraxr.desktop.Desktop
 import dev.ultraxr.desktop.DesktopWindow
 import dev.ultraxr.desktop.FollowAnchor
@@ -20,7 +19,7 @@ class DesktopTest {
     @Test fun aWindowStraightAheadIsHitInItsCentreAndMissedBesideIt() {
         val d = Desktop(); val w = d.add("A", "https://a.example")!!
         val h = d.hit(origin, Geometry.direction(0.0, 0.0), origin)!!
-        assertEquals(w.id, h.window.id); assertEquals(0.5, h.u, 1e-6); assertEquals(0.5, h.v, 1e-6); assertFalse(h.onBar)
+        assertEquals(w.id, h.window.id); assertEquals(0.5, h.u, 1e-6); assertEquals(0.5, h.v, 1e-6); assertTrue(h.onPage)
         assertEquals(w.distance, h.distance, 1e-6)
         assertNull(d.hit(origin, Geometry.direction(Math.toRadians(40.0), 0.0), origin))
         assertNull("looking away from it", d.hit(origin, doubleArrayOf(0.0, 0.0, 1.0), origin))
@@ -34,15 +33,10 @@ class DesktopTest {
         assertEquals(0.9, h.u, 1e-6); assertEquals(0.1, h.v, 1e-6)
     }
 
-    @Test fun titleBarAndItsButtonsAreHitAboveTheContent() {
+    @Test fun aWindowHasNoTitleBarSoThereIsNothingToHitAboveThePage() {
         val d = Desktop(); val w = d.add("A", "u")!!
-        fun ray(u: Double) = doubleArrayOf((u - 0.5) * w.width, w.height / 2 + w.barHeight / 2, -w.distance)
-        val drag = d.hit(origin, ray(0.3), origin)!!
-        assertTrue(drag.onBar); assertNull(drag.barButton)
-        assertEquals(BarButton.CLOSE, d.hit(origin, ray(0.97), origin)!!.barButton)
-        assertEquals(BarButton.MAXIMIZE, d.hit(origin, ray(0.90), origin)!!.barButton)
-        assertEquals(BarButton.MINIMIZE, d.hit(origin, ray(0.83), origin)!!.barButton)
-        assertEquals(BarButton.FOLLOW, d.hit(origin, ray(0.76), origin)!!.barButton)
+        // where the title stands when the window is in focus: it is to be read, not pressed
+        for (u in listOf(0.03, 0.3, 0.76, 0.97)) assertNull(d.hit(origin, doubleArrayOf((u - 0.5) * w.width, w.height / 2 + 0.03, -w.distance), origin))
     }
 
     @Test fun theNearestOfTwoOverlappingWindowsWins() {
@@ -156,9 +150,10 @@ class DesktopTest {
     @Test fun newAndMaximizedWindowsFitInsideTheGlassesFieldOfView() {
         // display half-angles from the factory calibration: tan 0.3875 horizontally, 0.2191 vertically
         val w = DesktopWindow(1, "A", "u")
-        assertTrue(w.width / 2 / w.distance < 0.3875 * 0.8); assertTrue((w.height / 2 + w.barHeight) / w.distance < 0.2191)
+        // with its handle under it (the title above is checked with the shelf, in ShelfTest)
+        assertTrue(w.width / 2 / w.distance < 0.3875 * 0.8); assertTrue(w.shownBelow() / w.distance < 0.2191)
         w.maximized = true
-        assertTrue(w.shownWidth() / 2 / w.shownDistance() < 0.3875); assertTrue((w.shownHeight() / 2 + w.shownBarHeight()) / w.shownDistance() < 0.2191 * 1.12)
+        assertTrue(w.shownWidth() / 2 / w.shownDistance() < 0.3875); assertTrue(w.shownHeight() / 2 / w.shownDistance() < 0.2191)
     }
 
     @Test fun typedTextBecomesAUrlOrASearch() {

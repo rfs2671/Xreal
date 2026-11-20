@@ -14,7 +14,7 @@ enum class HandleWord(val label: String) { MOVE("move"), SIZE("size"), PIN("pin"
 
 /** Where the focus is. */
 sealed class Focus {
-    /** A mark of the shelf (today: an icon of the home view, or a tile of the dock when windows show). */
+    /** A mark of the shelf ([Shelf]). */
     data class Shelf(val index: Int) : Focus()
     data class Window(val id: Int) : Focus()
     data class Handle(val id: Int, val word: HandleWord) : Focus()
@@ -179,14 +179,15 @@ class BackHold(private val holdNs: Long = 1_000_000_000L) {
     fun due(nowNs: Long): Boolean { if (downNs == 0L || fired || nowNs - downNs < holdNs) return false; fired = true; return true }
 }
 
-/** The handle under the focused window: four words side by side across the window's width, a little below the page. */
+/**
+ * The handle under the focused window: four words side by side, a little below the page, in the middle under it. How
+ * wide and high the strip is and how far below the page is the window's to say ([DesktopWindow.shownHandleWidth],
+ * [DesktopWindow.shownHandleHeight], [DesktopWindow.shownHandleGap]); each word has a quarter of the strip.
+ */
 object HandleStrip {
-    /** The space between the page's lower edge and the words, metres. */
-    const val GAP = 0.012
-
-    /** The word at [u] (0..1 across the window), or null beside it. */
+    /** The word at [u] (0..1 across the handle), or null beside it. */
     fun wordAt(u: Double): HandleWord? { val n = HandleWord.values().size; return if (u < 0.0 || u >= 1.0) null else HandleWord.values()[(u * n).toInt().coerceIn(0, n - 1)] }
 
-    /** The middle of a word, 0..1 across the window. */
+    /** The middle of a word, 0..1 across the handle. */
     fun centre(word: HandleWord): Double = (word.ordinal + 0.5) / HandleWord.values().size
 }

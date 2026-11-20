@@ -4,10 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Typeface
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -28,18 +25,17 @@ import java.util.Locale
 class DesktopSession(private val activity: Activity) {
     val desktop = Desktop()
     private val web = HashMap<Int, WebWindow>()
-    private val bars = HashMap<Int, Pair<Bitmap, String>>()
-    private val barVersions = HashMap<Int, Long>()
     private val cursors = HashMap<Int, DoubleArray>()
     private val prefs = activity.getSharedPreferences("desktop", Context.MODE_PRIVATE)
-    private var homeBitmap: Bitmap? = null
-    private var homeVersion = 0L; private var homeMinute = ""
+    /** The pictures drawn with the 2D canvas (marks, names, titles, the handle's words, the status line), by what they show. The ones not asked for for longest are dropped. */
+    private val pictures = object : LinkedHashMap<String, Sprite>(64, 0.75f, true) { override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Sprite>?) = size > 96 }
+    private fun picture(key: String, make: () -> Bitmap): Sprite = pictures[key] ?: Sprite(key, make()).also { pictures[key] = it }
     private var savedRevision = -1L
     private var lastTickNs = 0L
     private var pressed = false
     private var gazeCandidate = -1; private var gazeSinceNs = 0L
     private var padTouchNs = 0L
-    private var handDown = false; private var handDragWindow = -1; private var handDownHit: WindowHit? = null; private var handMoved = false
+    private var handDown = false; private var handDownHit: WindowHit? = null
     private var lastHandRay: Pair<DoubleArray, DoubleArray>? = null
     // The one focus is desktop.focus. Each pointer remembers what it was last over, so that it moves the focus when it
     // comes over something new and not while it rests there (the d-pad may have taken the focus elsewhere since).
@@ -48,9 +44,7 @@ class DesktopSession(private val activity: Activity) {
     private var handCorner: DoubleArray? = null; private var handSizeWindow = -1
     /** The window being moved was taken up by a hand's pinch on "move": it follows the hand's ray. */
     private var moveByHand = false
-    private var gazeDone = false; private var gazeHover = -1
-    private val handles = HashMap<Int, Pair<Bitmap, String>>(); private val handleVersions = HashMap<Int, Long>()
-    private var dockLit = -2; private var dockVersion = 0L
+    private var gazeDone = false
     private var loggedFocus: Focus? = null
     @Volatile private var surfaces = HashMap<Int, Surface>()
     var onChanged: (() -> Unit)? = null
@@ -65,7 +59,7 @@ class DesktopSession(private val activity: Activity) {
     var dimUnfocused: Boolean get() = prefs.getBoolean("dim", true); set(v) { prefs.edit().putBoolean("dim", v).apply() }
     /** Pages in their dark theme (black is see-through on the glasses). Applies to windows opened afterwards. */
     var darkPages: Boolean get() = prefs.getBoolean("darkPages", true); set(v) { prefs.edit().putBoolean("darkPages", v).apply() }
-    /** Resting the gaze on a dock app or a title-bar button presses it: no phone and no hands needed. */
+    /** Resting the gaze on a mark of the shelf or a word of the handle presses it: no phone and no hands needed. */
     var lookToPress: Boolean get() = prefs.getBoolean("lookToPress", true); set(v) { prefs.edit().putBoolean("lookToPress", v).apply() }
 
     /** Real depth: the glasses' half-width 3D mode, when the link to them holds. Falls back to 2D by itself. */
@@ -74,43 +68,50 @@ class DesktopSession(private val activity: Activity) {
     /** Test builds: draw two eye views on the attached display without glasses, to check the picture. */
     var forceStereo = false
 
-    private val regular: Typeface = try { Typeface.createFromAsset(activity.assets, "fonts/AtkinsonHyperlegible-Regular.ttf") } catch (_: Exception) { Typeface.SANS_SERIF }
-    private val bold: Typeface = try { Typeface.createFromAsset(activity.assets, "fonts/AtkinsonHyperlegible-Bold.ttf") } catch (_: Exception) { Typeface.DEFAULT_BOLD }
+    init { Type.load(activity) }
     private val dwell = Dwell()
-    private val homeDwell = Dwell(holdNs = 1_700_000_000L, armNs = 500_000_000L)
+    /** A mark of the shelf opens by looking alone only after a longer look, so that glancing along the shelf does not start things. */
+    private val shelfDwell = Dwell(holdNs = 1_700_000_000L, armNs = 300_000_000L)
 
-    // ---- the home view: what it offers, and which icon is looked at
-    /** WebXR games that are not known to be broken, then the web apps. */
+    // ---- the shelf: what it offers
+    /** WebXR games that are not known to be broken, the web apps, the phone's apps, what the desktop does itself, and last the settings. */
     private val firstPage: List<HomeItem> = run {
         val games = try { dev.ultraxr.core.GameLibrary.parse(activity.assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { emptyList() }
-        val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
-        (games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
-            HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, tints[i % tints.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
-        } + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) }).take(HomeGrid.MAX - 2) +
-            HomeItem("All apps", HomeItem.Kind.NAV, "nav:apps", 0xFF607D8B.toInt()) + HomeItem("System", HomeItem.Kind.NAV, "nav:system", 0xFF455A64.toInt())
+        games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
+            HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, TINTS[i % TINTS.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
+        } + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) } +
+            nav("All apps", "nav:apps") + nav("System", "nav:system") + nav("Settings", "nav:settings")
     }
-    /** What the home view shows now: its first page (games, the web apps, "All apps"), or a page of the phone's apps. */
+    /** A mark that is no app has no colour of its own: its ring is Chalk. */
+    private fun nav(title: String, what: String) = HomeItem(title, HomeItem.Kind.NAV, what, Ink.CHALK_INT)
+    /** What the shelf shows now: its first page (games, the web apps, "All apps", "System", "Settings"), or a page of the phone's apps. */
     @Volatile var homeItems: List<HomeItem> = firstPage; private set
     private var homePage = 0
     private var installedApps: List<dev.ultraxr.shell.AppShell.App>? = null
-    private val appIcons = HashMap<String, Bitmap?>()
-    private fun appIcon(pkg: String): Bitmap? = appIcons.getOrPut(pkg) {
+    private val appTints = HashMap<String, Int>()
+    /**
+     * An installed app's own colour, for the ring of its mark: the mean of the strongly coloured parts of its icon. The
+     * icon itself is not drawn in the glasses: it is a filled disc of colour, and there everything is drawn in line.
+     */
+    private fun appTint(pkg: String): Int = appTints.getOrPut(pkg) {
         try {
-            val d = activity.packageManager.getApplicationIcon(pkg); val b = Bitmap.createBitmap(144, 144, Bitmap.Config.ARGB_8888)
-            d.setBounds(0, 0, 144, 144); d.draw(Canvas(b)); b
-        } catch (_: Throwable) { null }
+            val d = activity.packageManager.getApplicationIcon(pkg); val n = 24; val b = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+            d.setBounds(0, 0, n, n); d.draw(Canvas(b))
+            var r = 0.0; var g = 0.0; var bl = 0.0; var sum = 0.0; val hsv = FloatArray(3)
+            for (y in 0 until n) for (x in 0 until n) {
+                val c = b.getPixel(x, y); if (c ushr 24 < 128) continue
+                android.graphics.Color.colorToHSV(c, hsv); val weight = (hsv[1] * hsv[2]).toDouble()
+                r += (c shr 16 and 255) * weight; g += (c shr 8 and 255) * weight; bl += (c and 255) * weight; sum += weight
+            }
+            b.recycle()
+            if (sum < 1.0) Ink.CHALK_INT else android.graphics.Color.rgb((r / sum).toInt(), (g / sum).toInt(), (bl / sum).toInt())
+        } catch (_: Throwable) { Ink.CHALK_INT }
     }
-    /** The system page: what otherwise needs the phone's screen. Each tile says what it is now and does the other. */
-    private fun systemPage(): List<HomeItem> = listOf(
-        HomeItem(if (Tracking.handsOn) "Hands: on" else "Hands: off", HomeItem.Kind.NAV, "sys:hands", if (Tracking.handsOn) 0xFF2E7D32.toInt() else 0xFF8D6E63.toInt()),
-        HomeItem("Recentre", HomeItem.Kind.NAV, "sys:recentre", 0xFF1E88E5.toInt()),
-        HomeItem("Gather windows", HomeItem.Kind.NAV, "sys:gather", 0xFF8E24AA.toInt()),
-        HomeItem("Close all", HomeItem.Kind.NAV, "sys:closeall", 0xFFE53935.toInt()),
-        HomeItem(if (dev.ultraxr.shell.AppShell.available) "Apps: ready" else "Apps: helper off", HomeItem.Kind.NAV, "sys:apps", if (dev.ultraxr.shell.AppShell.available) 0xFF2E7D32.toInt() else 0xFF8D6E63.toInt()),
-        HomeItem("Home", HomeItem.Kind.NAV, "nav:home", 0xFF607D8B.toInt()))
+    /** The system page: what otherwise needs the phone's screen. */
+    private fun systemPage(): List<HomeItem> = listOf(nav("Recentre", "sys:recentre"), nav("Gather windows", "sys:gather"), nav("Close all", "sys:closeall"),
+        nav(if (dev.ultraxr.shell.AppShell.available) "Apps: ready" else "Apps: helper off", "sys:apps"), nav("Home", "nav:home"))
     private fun system(what: String) {
         when (what) {
-            "sys:hands" -> Tracking.setHandTracking(!Tracking.handsOn)
             "sys:recentre" -> recenter()
             "sys:gather" -> gather()
             "sys:closeall" -> for (w in desktop.windows.toList()) close(w.id)
@@ -120,53 +121,58 @@ class DesktopSession(private val activity: Activity) {
 
     /** Page 0 is the first page; 1 and up are the phone's apps; -1 is the system page. */
     fun showHomePage(page: Int) {
-        val per = HomeGrid.MAX - 2
+        val per = APPS_A_PAGE
         val apps = installedApps ?: dev.ultraxr.shell.AppShell.installed(activity).also { installedApps = it }
         val pages = maxOf(1, (apps.size + per - 1) / per)
         homePage = page.coerceIn(0, pages)
-        val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
-        homeItems = if (page < 0) systemPage() else if (homePage == 0) firstPage else
-            apps.drop((homePage - 1) * per).take(per).mapIndexed { i, a -> HomeItem(a.label, HomeItem.Kind.APP, "app://" + a.component, tints[i % tints.size], icon = appIcon(a.pkg)) } +
-                HomeItem("Home", HomeItem.Kind.NAV, "nav:home", 0xFF607D8B.toInt()) +
-                (if (homePage < pages) listOf(HomeItem("More", HomeItem.Kind.NAV, "nav:next", 0xFF607D8B.toInt())) else emptyList())
-        homeDrawnHover = -2; changed()
+        val next = if (page < 0) systemPage() else if (homePage == 0) firstPage else
+            apps.drop((homePage - 1) * per).take(per).map { a -> HomeItem(a.label, HomeItem.Kind.APP, "app://" + a.component, appTint(a.pkg)) } +
+                nav("Home", "nav:home") + (if (homePage < pages) listOf(nav("More", "nav:next")) else emptyList())
+        // another page of marks begins at its first mark; the same page shown again (the system page after one of its marks was used) keeps its place
+        val another = next.size != homeItems.size || next.indices.any { next[it].url != homeItems[it].url }
+        homeItems = next
+        if (another && desktop.focus is Focus.Shelf) desktop.point(Focus.Shelf(0))
+        changed()
     }
-    @Volatile var homeHover = -1; private set
-    private var homeDrawnHover = -2
-    private var homeProgress = 0.0; private var homeDrawnStep = -1
-    private var homePinchWas = false
-    /** A game was chosen in the home view: the activity starts it in the XR browser. */
+    /** A game was chosen on the shelf: the activity starts it in the XR browser. */
     var onLaunchGame: ((HomeItem) -> Unit)? = null
     /** An installed immersive app (an OpenXR app, a converted Quest game) was chosen: the activity hands it the glasses. */
     var onLaunchNative: ((String) -> Unit)? = null
 
-    /** Opens what the icon stands for. */
+    /** Opens what the mark stands for. */
     fun activateHome(i: Int) {
         val item = homeItems.getOrNull(i) ?: return
-        if (item.kind == HomeItem.Kind.NAV) {
-            if (item.url.startsWith("sys:")) system(item.url)
-            else showHomePage(when (item.url) { "nav:apps" -> 1; "nav:next" -> homePage + 1; "nav:system" -> -1; else -> 0 })
-            onLookPress?.invoke(); return
-        }
-        if (item.kind == HomeItem.Kind.APP) {
-            // an immersive app is not opened in a window: it gets the glasses, as a game does
-            val pkg = item.url.removePrefix("app://").substringBefore('/')
-            if (dev.ultraxr.xr.XrRuntime.nativeApp(activity, pkg) != null && onLaunchNative != null) { onLaunchNative?.invoke(pkg); onLookPress?.invoke(); return }
-            if (dev.ultraxr.shell.AppShell.available) openApp(item.title, item.url.removePrefix("app://"))
-            else Tracking.log("apps: " + item.title + " not opened: the app helper is not running (tools/pixel/uxr_helper.sh)")
-            onLookPress?.invoke(); return
-        }
-        if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else (HomeApps.all.firstOrNull { it.url == item.url }?.let { open(it) } ?: open(item.title, item.url, item.webKind))
-        onLookPress?.invoke()
+        openingFrom = item.title
+        try {
+            if (item.kind == HomeItem.Kind.NAV) {
+                if (item.url.startsWith("sys:")) system(item.url)
+                else if (item.url == "nav:settings") openSettings()
+                else showHomePage(when (item.url) { "nav:apps" -> 1; "nav:next" -> homePage + 1; "nav:system" -> -1; else -> 0 })
+                onLookPress?.invoke(); return
+            }
+            if (item.kind == HomeItem.Kind.APP) {
+                // an immersive app is not opened in a window: it gets the glasses, as a game does
+                val pkg = item.url.removePrefix("app://").substringBefore('/')
+                if (dev.ultraxr.xr.XrRuntime.nativeApp(activity, pkg) != null && onLaunchNative != null) { onLaunchNative?.invoke(pkg); onLookPress?.invoke(); return }
+                if (dev.ultraxr.shell.AppShell.available) openApp(item.title, item.url.removePrefix("app://"))
+                else Tracking.log("apps: " + item.title + " not opened: the app helper is not running (tools/pixel/uxr_helper.sh)")
+                onLookPress?.invoke(); return
+            }
+            if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else (HomeApps.all.firstOrNull { it.url == item.url }?.let { open(it) } ?: open(item.title, item.url, item.webKind))
+            onLookPress?.invoke()
+        } finally { openingFrom = null }
     }
-    private var dockBitmap: Bitmap? = null
-    private var ringYaw = 0.0; private var ringPitch = 0.0; private var ringDistance = 2.0; private var ringProgress = 0.0
+    /** The name of the mark that is being opened: the window that comes of it grows from that mark. */
+    private var openingFrom: String? = null
+    private var ringYaw = 0.0; private var ringPitch = 0.0; private var ringDistance = 2.0; private var ringProgress = 0.0; private var ringSize = 0.0
     /** Called when something was pressed by looking, so the phone can give a haptic tick. */
     var onLookPress: (() -> Unit)? = null
 
     fun start() {
         try { prefs.getString("layout", null)?.let { desktop.load(JSONObject(it)) } } catch (e: Exception) { Tracking.log("desktop: saved layout ignored: $e") }
-        for (w in desktop.windows) ensureWeb(w)
+        for (w in desktop.windows) if (w.kind != SETTINGS) ensureWeb(w)
+        // Windows kept from before the shelf stood 8 degrees under the line of sight are lifted clear of it, once.
+        if (!prefs.getBoolean("clearOfShelf", false)) { settle(); prefs.edit().putBoolean("clearOfShelf", true).apply() }
         savedRevision = desktop.revision
         current = this
     }
@@ -199,6 +205,7 @@ class DesktopSession(private val activity: Activity) {
             val next = HashMap(surfaces)
             if (surface == null) { next.remove(id); web[id]?.detachSurface() } else { next[id] = surface; web[id]?.attach(surface) }
             surfaces = next
+            settingsDrawn = -1      // the settings draw themselves into their window's surface: a new one is empty
         }
     }
 
@@ -218,7 +225,23 @@ class DesktopSession(private val activity: Activity) {
     fun open(title: String, url: String, kind: String = "web"): Boolean {
         val w = desktop.add(title, url, kind, headYaw()) ?: return false
         if (w.follow) w.yaw = 0.0
-        ensureWeb(w); cursors[w.id] = doubleArrayOf(0.5, 0.5); changed(); return true
+        // A new window opens at the distance of the settings, as large to the eye at any distance, and as high as
+        // keeps all of it in view between the status line and the shelf.
+        val d = Tracking.settings.windowDistanceM.toDouble().coerceIn(DesktopWindow.MIN_DISTANCE, DesktopWindow.FAR_DISTANCE)
+        w.distance = d; w.width = (DesktopWindow.DEFAULT_WIDTH * d / DesktopWindow.DEFAULT_DISTANCE).coerceIn(DesktopWindow.MIN_WIDTH, DesktopWindow.MAX_WIDTH)
+        w.pitch = clearPitch(w)
+        fromMark[w.id] = openingFrom ?: title
+        if (kind != SETTINGS) ensureWeb(w)
+        // on the settings the cursor begins on the row in focus, so that the two are never apart
+        cursors[w.id] = if (kind == SETTINGS) doubleArrayOf(0.3, settings.rowCentre(settings.index).coerceIn(0.0, 1.0)) else doubleArrayOf(0.5, 0.5)
+        changed(); return true
+    }
+    /** As high as a window stands to be clear of the shelf, but no higher than is comfortable to look at. */
+    private fun clearPitch(w: DesktopWindow) = Shelf.clearPitch(w.shownBelow(), w.shownDistance()).coerceIn(0.0, Math.toRadians(8.0))
+    /** The settings, as a window like any other. One at most: asked for again, it is shown. */
+    fun openSettings(): Boolean {
+        desktop.windows.firstOrNull { it.kind == SETTINGS }?.let { w -> if (w.minimized) desktop.restore(w.id); desktop.focus(w.id); changed(); return true }
+        return open("Settings", "ultraxr://settings", SETTINGS)
     }
     /** The focused window stands up like a phone, or lies down again; it keeps its height. */
     fun toggleShape() {
@@ -228,15 +251,17 @@ class DesktopSession(private val activity: Activity) {
         w.width = (h * w.aspect).coerceIn(DesktopWindow.MIN_WIDTH, DesktopWindow.MAX_WIDTH)
         applyShape(w.id); cursors[w.id] = doubleArrayOf(0.5, 0.5); desktop.touch(); changed()
     }
-    fun close(id: Int) { web.remove(id)?.destroy(); bars.remove(id); handles.remove(id); cursors.remove(id); desktop.close(id); changed() }
+    fun close(id: Int) { web.remove(id)?.destroy(); cursors.remove(id); desktop.close(id); changed() }
     fun focus(id: Int) { desktop.focus(id); changed() }
     fun minimize(id: Int) { desktop.minimize(id); changed() }
     fun toggleMaximize(id: Int) { desktop.toggleMaximize(id); changed() }
     fun toggleFullscreen(id: Int) { desktop.toggleFullscreen(id); changed() }
     fun toggleFollow(id: Int) { desktop.toggleFollow(id); changed() }
-    fun recenter() { Tracking.recenter(); desktop.gather(0.0); changed() }
-    fun gather() { desktop.gather(headYaw()); changed() }
-    fun navigate(text: String) { val w = desktop.focused ?: return; val u = HomeApps.toUrl(text); w.url = u; web[w.id]?.load(u); changed() }
+    fun recenter() { Tracking.recenter(); desktop.gather(0.0); settle(); changed() }
+    fun gather() { desktop.gather(headYaw()); settle(); changed() }
+    /** Windows brought back in front of the wearer stand clear of the shelf, as new ones do. */
+    private fun settle() { for (w in desktop.windows) if (!w.follow && !w.maximized) w.pitch = clearPitch(w); desktop.touch() }
+    fun navigate(text: String) { val w = desktop.focused ?: return; if (w.kind == SETTINGS) return; val u = HomeApps.toUrl(text); w.url = u; web[w.id]?.load(u); changed() }
     fun back() { desktop.focused?.let { web[it.id]?.back() } }
     fun reload() { desktop.focused?.let { web[it.id]?.reload() } }
     fun type(text: String, enter: Boolean) { desktop.focused?.let { web[it.id]?.typeText(text, enter) } }
@@ -260,11 +285,12 @@ class DesktopSession(private val activity: Activity) {
     }
 
     // ---- the one focus (desktop.focus): keys from a d-pad, and what follows from a press
-    /** The shelf is, as things are drawn today, the home view's icons when no window shows and the dock's tiles when one does. */
-    private fun shelfCount() = if (desktop.visible.isEmpty()) homeItems.size else HomeApps.dock.size
-    private fun activateShelf(i: Int) { if (desktop.visible.isEmpty()) activateHome(i) else HomeApps.dock.getOrNull(i)?.let { open(it); onLookPress?.invoke() } }
+    /** The shelf is one row of marks, the same whether or not windows are open. */
+    private fun shelfCount() = homeItems.size
+    /** The first mark in view: the row slides when the focus passes its end ([Shelf.first]). */
+    private var shelfFirst = 0
     /** The page's picture is given the window's shape (after a free sizing, or standing a window up). */
-    private fun applyShape(id: Int) { val w = desktop.find(id) ?: return; val p = DesktopWindow.pixels(w.aspect); web[id]?.setPixels(p[0], p[1]) }
+    private fun applyShape(id: Int) { val w = desktop.find(id) ?: return; val p = DesktopWindow.pixels(w.aspect); web[id]?.setPixels(p[0], p[1]); settingsDrawn = -1 }
 
     /**
      * One press of a key of the focus: a direction, Select, Back, nearer or further. Everything a d-pad does goes
@@ -274,9 +300,9 @@ class DesktopSession(private val activity: Activity) {
         val was = desktop.focus
         val a = desktop.press(key, shelfCount(), headYaw())
         when (a) {
-            is FocusAction.OpenApp -> activateShelf(a.index)
+            is FocusAction.OpenApp -> activateHome(a.index)
             is FocusAction.CloseWindow -> close(a.id)
-            is FocusAction.PageKey -> FocusKeys.pageKey(a.key)?.let { web[a.id]?.key(it) }
+            is FocusAction.PageKey -> if (isSettings(a.id)) settingsKey(a.id, a.key) else FocusKeys.pageKey(a.key)?.let { web[a.id]?.key(it) }
             is FocusAction.PutDown -> applyShape(a.id)
             else -> {}
         }
@@ -317,7 +343,7 @@ class DesktopSession(private val activity: Activity) {
             return true
         }
         if (k == null) return false
-        // a page in use gets the arrows and Enter as real keys (a gamepad's A becomes Enter below)
+        // a page in use gets the arrows and Enter as real keys (a gamepad's A becomes Enter below); the settings take them as keys of the focus
         val page = if (f is Focus.Page) web[f.id] else null
         if (page != null && !page.isApp && k != FocusKey.BACK && e.keyCode != KeyEvent.KEYCODE_BUTTON_A) { page.forwardKey(e); return true }
         // a direction held down repeats (a window being moved keeps going); Select and Back act once
@@ -347,6 +373,65 @@ class DesktopSession(private val activity: Activity) {
      */
     val keysElsewhere: Boolean get() = resumed && !phoneFocus && !dialogOpen && desktop.visible.any { it.kind == "app" }
 
+    // ---- the settings, in their window (docs/INTERFACE.md, "Settings")
+    private fun isSettings(id: Int) = desktop.find(id)?.kind == SETTINGS
+    private val settings: SettingsList by lazy { buildSettings() }
+    private var settingsDrawn = -1L; private var settingsDrawnNs = 0L
+    /** Android's own "remove animations" (its animator duration scale is then 0). */
+    private fun systemStill(): Boolean = try { android.provider.Settings.Global.getFloat(activity.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f } catch (_: Exception) { false }
+    private fun setHands(on: Boolean) { Tracking.setHandTracking(on); if (on) handGestures = true }
+    private fun setLooking(on: Boolean) { lookToPress = on; gazeFocus = on }
+
+    private fun buildSettings(): SettingsList {
+        val s = Tracking.settings
+        fun onOff(on: Boolean) = if (on) "on" else "off"
+        val version = try { activity.packageManager.getPackageInfo(activity.packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
+        var armed = false; var forgotten = false
+        return SettingsList(listOf(
+            SettingRow("Eye distance", { "${Math.round(s.ipdMm)} mm" }, { "The distance between your eyes." }, step = { d -> s.ipdMm = (Math.round(s.ipdMm) + d).coerceIn(54, 74).toFloat() }),
+            SettingRow("World scale", { "${Math.round(s.fovScale * 100)} %" }, { "The size XR apps are drawn at." }, step = { d -> s.fovScale = (Math.round(s.fovScale * 20f) + d).coerceIn(16, 40) / 20f }),
+            SettingRow("Picture brightness", { "${Math.round(s.pictureBrightness * 100)} %" }, { "How bright the desktop is drawn." }, step = { d -> s.pictureBrightness = (Math.round(s.pictureBrightness * 10f) + d).coerceIn(3, 10) / 10f }),
+            SettingRow("Window distance", { String.format(Locale.US, "%.1f m", s.windowDistanceM) }, { "How far away a new window opens." }, step = { d -> s.windowDistanceM = (Math.round(s.windowDistanceM * 10f) + d).coerceIn(10, 40) / 10f }),
+            SettingRow("Hand tracking", { onOff(Tracking.handsOn && handGestures) }, { "Point with a hand, pinch to select." }, step = { d -> setHands(d > 0) }, select = { setHands(!(Tracking.handsOn && handGestures)) }),
+            SettingRow("Pointer by looking", { onOff(lookToPress) }, { "Look at a thing to select it." }, step = { d -> setLooking(d > 0) }, select = { setLooking(!lookToPress) }),
+            SettingRow("Reduce motion", { onOff(s.reduceMotion || systemStill()) }, { if (systemStill()) "On in Android's own settings." else "Windows open and close at once." },
+                step = { d -> s.reduceMotion = d > 0; stillCheckedNs = 0 }, select = { s.reduceMotion = !s.reduceMotion; stillCheckedNs = 0 }),
+            // marking is done with the phone in the hand, walking the room: there is nothing to do for it from here
+            SettingRow("Mark the room", { if (Tracking.roomPlanCorners > 0) "marked" else "" }, { "Started from the phone." }),
+            // forgetting cannot be undone, so it takes Select twice, and says so in the colour of deleting
+            SettingRow("Forget the room", { "" }, { when { forgotten -> "The room is forgotten."; armed -> "Select again to forget the room."; Tracking.roomPlanCorners == 0 -> "No room is marked."; else -> "Forgets the room you marked." } },
+                select = { if (Tracking.roomPlanCorners > 0) { if (!armed) armed = true else { Tracking.clearRoomPlan(); armed = false; forgotten = true } } },
+                warn = { armed }, leave = { armed = false; forgotten = false }),
+            SettingRow("About", { version }, { "Ultra XR, set in Atkinson Hyperlegible." })))
+    }
+
+    /** A key while the settings are in use. The cursor goes with the row in focus, so that the two are never apart. */
+    private fun settingsKey(id: Int, key: FocusKey) {
+        if (settings.key(key)) onLookPress?.invoke()
+        val c = cursors.getOrPut(id) { doubleArrayOf(0.5, 0.5) }; c[1] = settings.rowCentre(settings.index).coerceIn(0.0, 1.0)
+    }
+
+    /** A touch of a page at ([u], [v]): to the page or app in the window, or, on the settings, a press on a row when it is let go. */
+    private fun pageTouch(id: Int, action: Int, u: Double, v: Double) {
+        if (!isSettings(id)) { web[id]?.touch(action, u, v); return }
+        if (action == MotionEvent.ACTION_UP && settings.tap(u, v)) onLookPress?.invoke()
+    }
+    private fun pageTap(id: Int, u: Double, v: Double) { if (isSettings(id)) { if (settings.tap(u, v)) onLookPress?.invoke() } else web[id]?.tap(u, v) }
+
+    /** The settings draw themselves into their window's surface, as a page does: when something changed, and once a second for what changed elsewhere. */
+    private fun drawSettings(nowNs: Long) {
+        val w = desktop.visible.firstOrNull { it.kind == SETTINGS } ?: return
+        val surface = surfaces[w.id] ?: return
+        val inUse = desktop.focus == Focus.Page(w.id)
+        val state = settings.revision * 2 + (if (inUse) 1 else 0)
+        if (state == settingsDrawn && nowNs - settingsDrawnNs < 1_000_000_000L) return
+        try {
+            val c = surface.lockCanvas(null)
+            try { SettingsPage.draw(c, settings, inUse) } finally { surface.unlockCanvasAndPost(c) }
+            settingsDrawn = state; settingsDrawnNs = nowNs
+        } catch (e: Exception) { settingsDrawnNs = nowNs; Tracking.log("desktop: the settings could not be drawn: $e") }
+    }
+
     // ---- touchpad (phone) input. Distances are fractions of the pad's width.
     /** A window is being carried: the touchpad and the d-pad move it until it is put down. */
     val moving: Boolean get() = desktop.focus is Focus.Moving
@@ -363,20 +448,19 @@ class DesktopSession(private val activity: Activity) {
         // a corner is held (double-tap and hold on it): it follows the finger and the window's middle stays where it is
         padSizing?.let { s -> desktop.sizeTo(w.id, w.width * (1 + 2 * s[0] * dx * 0.9), w.height * (1 + 2 * s[1] * dy * 0.9 * w.aspect)); return }
         val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
-        // The cursor can leave the page upwards onto the window's title bar, where a tap presses the button under
-        // it (close, maximise, minimise, lock), and downwards onto the handle's words. A press that began in the
-        // page stays in the page.
+        // The cursor can leave the page downwards onto the handle's words, where a tap is Select on the word under
+        // it. A press that began in the page stays in the page.
         val held = pressed || desktop.fullscreenId == w.id
-        val top = if (held) 0.0 else -barSpan(w); val bottom = if (held) 1.0 else 1.0 + handleSpan(w)
-        c[0] = (c[0] + dx * 0.9).coerceIn(0.0, 1.0); c[1] = (c[1] + dy * 0.9 * w.aspect).coerceIn(top, bottom)
-        if (pressed) web[w.id]?.touch(MotionEvent.ACTION_MOVE, c[0], c[1])
-        // the focus is on what the cursor is over: the page, the window (its title bar), or a word of the handle
+        val bottom = if (held) 1.0 else 1.0 + handleSpan(w)
+        c[0] = (c[0] + dx * 0.9).coerceIn(0.0, 1.0); c[1] = (c[1] + dy * 0.9 * w.aspect).coerceIn(0.0, bottom)
+        if (pressed) pageTouch(w.id, MotionEvent.ACTION_MOVE, c[0], c[1])
+        // the focus is on what the cursor is over: the page, or a word of the handle
         else if (desktop.point(desktop.focusAt(w, c[0], c[1]))) changed()
+        // on the settings the row under the cursor is the one in focus
+        if (w.kind == SETTINGS && desktop.focus is Focus.Page) settings.point(c[1])
     }
-    /** The title bar's height as a fraction of the window's: the cursor's v runs from minus this to 1. */
-    private fun barSpan(w: DesktopWindow) = w.shownBarHeight() / w.shownHeight()
-    /** The handle's, with the space above it: the cursor's v runs on to 1 plus this. */
-    private fun handleSpan(w: DesktopWindow) = (HandleStrip.GAP + w.shownHandleHeight()) / w.shownHeight()
+    /** The handle's height, with the space above it, as a fraction of the window's: the cursor's v runs on to 1 plus this. */
+    private fun handleSpan(w: DesktopWindow) = (w.shownHandleGap() + w.shownHandleHeight()) / w.shownHeight()
     /** The corner of the page the cursor has hold of, as the signs of its x and y (right and down are 1), or null. */
     private fun cornerAt(w: DesktopWindow, c: DoubleArray): DoubleArray? {
         if (desktop.fullscreenId == w.id || w.maximized) return null
@@ -388,20 +472,15 @@ class DesktopSession(private val activity: Activity) {
     /** A tap is Select on the thing in focus. On a page in use it is a touch where the cursor is. */
     fun padTap() {
         padTouchNs = System.nanoTime()
-        // the cursor may have been left on the title bar or the handle while something else chose the page
-        desktop.focused?.let { fw -> val c = cursors.getOrPut(fw.id) { doubleArrayOf(0.5, 0.5) }; if (desktop.focus is Focus.Page && (c[1] < 0.0 || c[1] > 1.0)) desktop.point(desktop.focusAt(fw, c[0], c[1])) }
+        // the cursor may have been left on the handle while something else chose the page
+        desktop.focused?.let { fw -> val c = cursors.getOrPut(fw.id) { doubleArrayOf(0.5, 0.5) }; if (desktop.focus is Focus.Page && c[1] > 1.0) desktop.point(desktop.focusAt(fw, c[0], c[1])) }
         val f = desktop.focus
-        if (f !is Focus.Page && f !is Focus.Window) { press(FocusKey.SELECT); return }
-        val w = desktop.find(f.windowId ?: -1) ?: return; val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
-        if (f is Focus.Window) {
-            // with the cursor on a title-bar button the tap presses that button, as before; on the bare bar it does nothing
-            if (c[1] < 0.0) Desktop.barButtonAt(c[0])?.let { barAction(w.id, it); onLookPress?.invoke() } else press(FocusKey.SELECT)
-            return
-        }
-        web[w.id]?.tap(c[0], c[1])
+        if (f !is Focus.Page) { press(FocusKey.SELECT); return }
+        val w = desktop.find(f.id) ?: return; val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
+        pageTap(w.id, c[0], c[1])
     }
 
-    /** The main menu: every window is put away (not closed) and the home's icons show. */
+    /** Every window is put away (not closed): only the shelf is left. */
     fun showHome() { for (w in desktop.windows) if (!w.minimized) desktop.minimize(w.id); changed() }
 
     private var padSizing: DoubleArray? = null
@@ -410,10 +489,10 @@ class DesktopSession(private val activity: Activity) {
         if (!down && padSizing != null) { padSizing = null; desktop.endDrag(); applyShape(w.id); return }
         if (down == pressed) return
         if (down && (desktop.focus is Focus.Moving || desktop.focus is Focus.Sizing)) return
-        if (down && (c[1] < 0.0 || c[1] > 1.0)) return      // on the title bar or the handle: they answer to a tap
+        if (down && (c[1] < 0.0 || c[1] > 1.0)) return      // on the handle: it answers to a tap
         // double-tap and hold on a corner of the page takes hold of the corner: the slide that follows sizes the window
         if (down) cornerAt(w, c)?.let { padSizing = it; desktop.beginDrag(w.id); return }
-        pressed = down; web[w.id]?.touch(if (down) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_UP, c[0], c[1])
+        pressed = down; pageTouch(w.id, if (down) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_UP, c[0], c[1])
     }
     fun padScroll(dx: Double, dy: Double) {
         padTouchNs = System.nanoTime()
@@ -439,14 +518,21 @@ class DesktopSession(private val activity: Activity) {
         val origin = if (positionOk) head.pose.p else ZERO
         val anchor = ZERO
         desktop.followAnchor.update(Geometry.yawOf(forward), dt)
+        if (nowNs - stillCheckedNs > 1_000_000_000L) { stillCheckedNs = nowNs; still = Tracking.settings.reduceMotion || systemStill() }
 
         val full = desktop.fullscreenId >= 0
+        val shelfYaw = desktop.followAnchor.yaw
+        // the row slides only as far as it must for the mark the focus is on (or was last on) to be in view
+        shelfFirst = Shelf.first(desktop.shelfIndex.coerceIn(0, maxOf(0, homeItems.size - 1)), shelfFirst, homeItems.size)
         // a window being moved or sized keeps the focus until it is put down or back: looks and rays do not take it
         val adjusting = desktop.focus is Focus.Moving || desktop.focus is Focus.Sizing
+        val looking = !full && !adjusting && nowNs - padTouchNs > 700_000_000L && !handDown
+        // The marks stand nearer than the windows, so a look or a ray that is on a mark is on the shelf, whatever is behind it.
+        val markLooked = if (full) null else Shelf.hit(origin, forward, anchor, shelfYaw, shelfFirst, homeItems.size)
         // Gaze focus: the window a look comes to rest on gets the focus, unless the pad is in use. Once for each
         // arrival: while the look stays there the d-pad is free to take the focus elsewhere.
-        if (gazeFocus && !full && !adjusting && nowNs - padTouchNs > 700_000_000L && !handDown) {
-            val g = desktop.hit(origin, forward, anchor)
+        if (gazeFocus && looking) {
+            val g = if (markLooked != null) null else desktop.hit(origin, forward, anchor)
             val id = g?.window?.id ?: -1
             if (id != gazeCandidate) { gazeCandidate = id; gazeSinceNs = nowNs; gazeDone = false }
             else if (id >= 0 && !gazeDone && nowNs - gazeSinceNs > 450_000_000L) { gazeDone = true; if (desktop.look(id)) changed() }
@@ -454,54 +540,26 @@ class DesktopSession(private val activity: Activity) {
         if (handGestures && !full) hands(nowNs, head, origin, anchor, tracked) else if (handDown) releaseHand()
         if (backHold.due(nowNs)) leaveGame()
 
-        // The home view (shown when no window is open): the icon in focus is the one that a pinch, a tap on the
-        // phone, Select or a longer look opens. A look that arrives on an icon brings the focus to it.
-        val showHome = desktop.visible.isEmpty()
-        var looking = -1
-        if (showHome) {
-            val yaw = desktop.followAnchor.yaw
-            val h = Geometry.planeHit(origin, forward, Geometry.centre(anchor, yaw, 0.0, DesktopRenderer.HOME_DISTANCE), yaw, 0.0)
-            if (h != null) looking = HomeGrid.hit(h[0], h[1], homeItems.size) ?: -1
-        }
-        if (looking != gazeHover) { gazeHover = looking; if (looking >= 0 && desktop.point(Focus.Shelf(looking))) changed() }
-        val onShelf = desktop.focus as? Focus.Shelf
-        val hover = if (showHome && onShelf != null && homeItems.isNotEmpty()) onShelf.index.coerceIn(0, homeItems.size - 1) else -1
-        homeHover = hover
-        if (showHome && handGestures) {
-            val pinching = Tracking.hands.any { it.pinching }
-            if (pinching && !homePinchWas && hover >= 0) press(FocusKey.SELECT)
-            homePinchWas = pinching
-        } else homePinchWas = false
-
-        // Look-to-press: the home's icons, the dock's apps, the title-bar buttons and the handle's words.
+        // Look-to-press: the shelf's marks and the handle's words. A look that has rested on one for a moment brings
+        // the focus to it; kept up until the ring has closed, it is Select. A mark takes a longer look than a word,
+        // and opens by looking only when there is a head to look with (not in the phone's preview).
         var looked: String? = null; var lookedAt: Focus? = null
-        if (lookToPress && !full && !adjusting && nowNs - padTouchNs > 700_000_000L && !handDown) {
-            val tile = if (showHome) null else Rail.dockTile(origin, forward, anchor, desktop.followAnchor.yaw, HomeApps.dock.size)
-            // an icon opens by looking only when there is a head to look with (not in the phone preview) and it is the one in focus
-            if (showHome && looking >= 0 && looking == hover && tracked) { looked = "home:$looking"; ringDistance = DesktopRenderer.HOME_DISTANCE }
-            else if (showHome) { }
-            else if (tile != null) { looked = "dock:$tile"; lookedAt = Focus.Shelf(tile); ringDistance = Rail.DOCK_DISTANCE }
-            else {
-                val g = desktop.hit(origin, forward, anchor)
-                // only the focused window shows its buttons, so only those can be pressed
-                if (g != null && g.barButton != null && g.window.id == desktop.focusedId) { looked = "bar:${g.window.id}:${g.barButton.name}"; ringDistance = g.distance }
-                else if (g != null && g.handleWord != null) { looked = "handle:${g.window.id}:${g.handleWord.name}"; lookedAt = Focus.Handle(g.window.id, g.handleWord); ringDistance = g.distance }
-            }
+        if (lookToPress && looking) {
+            if (markLooked != null) { if (tracked) { looked = "shelf:$markLooked"; lookedAt = Focus.Shelf(markLooked) } }
+            else desktop.hit(origin, forward, anchor)?.let { g -> if (g.handleWord != null) { looked = "handle:${g.window.id}:${g.handleWord.name}"; lookedAt = Focus.Handle(g.window.id, g.handleWord); ringDistance = g.distance } }
         }
-        // An icon of the home opens on a pinch or a tap at once; by looking alone it takes two seconds, so that
-        // glancing across the home does not start things.
-        val onHome = looked?.startsWith("home:") == true
-        val fire = if (onHome) { dwell.update(nowNs, null); homeDwell.update(nowNs, looked) } else { homeDwell.update(nowNs, null); dwell.update(nowNs, looked) }
-        ringYaw = Geometry.yawOf(forward); ringPitch = Geometry.pitchOf(forward); ringProgress = if (looked == null || onHome) 0.0 else dwell.progress
-        homeProgress = if (onHome) homeDwell.progress else 0.0
-        // a look that has rested on a mark of the dock or a word of the handle long enough for the ring to start has the focus
-        if (lookedAt != null && dwell.progress > 0.0 && desktop.point(lookedAt)) changed()
-        if (fire != null) {
-            // the completed look is Select, and Select acts on the thing in focus: nothing happens if the focus has gone elsewhere meanwhile
-            if (fire.startsWith("bar:")) { val p = fire.split(":"); barAction(p[1].toInt(), BarButton.valueOf(p[2])); onLookPress?.invoke() }
-            else if (onHome) press(FocusKey.SELECT)      // the look was only counted while it was on the icon in focus
-            else if (lookedAt != null) { desktop.point(lookedAt); if (desktop.focus == lookedAt) press(FocusKey.SELECT) }
-        }
+        val onShelf = lookedAt is Focus.Shelf
+        val timer = if (onShelf) shelfDwell else dwell
+        (if (onShelf) dwell else shelfDwell).update(nowNs, null)
+        val fire = timer.update(nowNs, looked)
+        ringProgress = if (looked == null) 0.0 else timer.progress
+        if (onShelf && markLooked != null) {      // the ring closes round the mark itself
+            ringYaw = Geometry.wrap(shelfYaw + Shelf.yawOffset((markLooked - shelfFirst).toDouble(), Shelf.shown(homeItems.size))); ringPitch = Shelf.PITCH
+            ringDistance = Shelf.DISTANCE; ringSize = 2 * Shelf.MARK_RADIUS * Shelf.FOCUS_SCALE * 1.2
+        } else { ringYaw = Geometry.yawOf(forward); ringPitch = Geometry.pitchOf(forward); ringSize = 0.0 }
+        if (lookedAt != null && timer.progress > 0.0 && desktop.point(lookedAt)) changed()
+        // the completed look is Select, and Select acts on the thing in focus: nothing happens if the focus has gone elsewhere meanwhile
+        if (fire != null && lookedAt != null) { desktop.point(lookedAt); if (desktop.focus == lookedAt) press(FocusKey.SELECT) }
         if (desktop.focus != loggedFocus) { loggedFocus = desktop.focus; Tracking.log("desktop: focus on " + desktop.focus.describe()) }
 
         if (desktop.revision != savedRevision && !handDown && !pressed && padSizing == null && !adjusting) save()
@@ -510,6 +568,7 @@ class DesktopSession(private val activity: Activity) {
             renderers.firstOrNull()?.let { r -> if (r.frames > 0) Tracking.log(String.format(java.util.Locale.US, "desktop: %.0f fps, %.1f ms per frame on the CPU, %d late of %d frames, %d windows, %dx%d", r.fps, r.avgCpuMs, r.lateFrames, r.frames, desktop.visible.size, r.width, r.height)) }
         }
         if (desktop.revision != lastUiRevision) { lastUiRevision = desktop.revision; changed() }
+        drawSettings(nowNs)
         publish(nowNs, anchor, positionOk, head)
     }
     private var lastUiRevision = -1L
@@ -532,48 +591,48 @@ class DesktopSession(private val activity: Activity) {
             else if (!hand.pinching && handDown) releaseHand()
             return
         }
-        val hit = desktop.hit(o, hand.aimDir, anchor)
-        if (handDragWindow >= 0) {   // a window is being carried by its title bar
-            if (hand.pinching) { desktop.aim(handDragWindow, Geometry.yawOf(hand.aimDir), Geometry.pitchOf(hand.aimDir) - 0.0); handMoved = true } else releaseHand()
-            return
-        }
         if (handSizeWindow >= 0) {   // a corner is held: it follows the ray, and the window's middle stays where it is
             val w = desktop.find(handSizeWindow)
             if (hand.pinching && w != null) planePoint(w, o, hand.aimDir, anchor)?.let { desktop.sizeTo(w.id, 2 * Math.abs(it[0]), 2 * Math.abs(it[1])) }
             else releaseHand()
             return
         }
-        val tile = if (hit == null && desktop.visible.isNotEmpty()) Rail.dockTile(o, hand.aimDir, anchor, desktop.followAnchor.yaw, HomeApps.dock.size) ?: -1 else -1
+        // a ray that is on a mark is on the shelf, whatever is behind the mark
+        val tile = Shelf.hit(o, hand.aimDir, anchor, desktop.followAnchor.yaw, shelfFirst, homeItems.size) ?: -1
+        val hit = if (tile >= 0) null else desktop.hit(o, hand.aimDir, anchor)
         val target: Focus? = if (hit != null) desktop.focusAt(hit) else if (tile >= 0) Focus.Shelf(tile) else null
         // the ray moves the focus when it comes over something new, not while it rests there: the d-pad may have moved on since
         if (target != handTarget) { handTarget = target; if (target != null && !handDown && desktop.point(target)) changed() }
-        if (hit != null && hit.onPage) cursors[hit.window.id] = doubleArrayOf(hit.u, hit.v)
+        if (hit != null && hit.onPage) {
+            cursors[hit.window.id] = doubleArrayOf(hit.u, hit.v)
+            if (hit.window.kind == SETTINGS && !handDown && desktop.focus is Focus.Page) settings.point(hit.v)      // the row under the ray is the one in focus
+        }
         if (hand.pinching && !handDown) {
-            handDown = true; handDownHit = hit; handMoved = false; handTile = tile; handCorner = null
+            handDown = true; handDownHit = hit; handTile = tile; handCorner = null
             if (target != null && desktop.point(target)) changed()
             if (hit != null) {
-                if (hit.onBar && hit.barButton == null) handDragWindow = hit.window.id
                 // on a corner it is decided when the hand moves: a drag sizes the window, a pinch let go where it began is a touch
-                else if (hit.corner >= 0) handCorner = doubleArrayOf((hit.u - 0.5) * hit.window.shownWidth(), (0.5 - hit.v) * hit.window.shownHeight())
-                else if (hit.onPage) web[hit.window.id]?.touch(MotionEvent.ACTION_DOWN, hit.u, hit.v)
+                if (hit.corner >= 0) handCorner = doubleArrayOf((hit.u - 0.5) * hit.window.shownWidth(), (0.5 - hit.v) * hit.window.shownHeight())
+                else if (hit.onPage) pageTouch(hit.window.id, MotionEvent.ACTION_DOWN, hit.u, hit.v)
             }
         } else if (hand.pinching && handDown) {
             val d = handDownHit; val start = handCorner
             if (d != null && start != null) {
                 val p = planePoint(d.window, o, hand.aimDir, anchor)
                 if (p != null && Math.hypot(p[0] - start[0], p[1] - start[1]) > CORNER_DRAG_M) { handCorner = null; handSizeWindow = d.window.id; desktop.beginDrag(d.window.id) }
-            } else if (d != null && d.onPage && hit != null && hit.window.id == d.window.id) web[d.window.id]?.touch(MotionEvent.ACTION_MOVE, hit.u.coerceIn(0.0, 1.0), hit.v.coerceIn(0.0, 1.0))
+            } else if (d != null && d.onPage && hit != null && hit.window.id == d.window.id) pageTouch(d.window.id, MotionEvent.ACTION_MOVE, hit.u.coerceIn(0.0, 1.0), hit.v.coerceIn(0.0, 1.0))
         } else if (!hand.pinching && handDown) {
             val d = handDownHit
-            if (d != null && d.onBar && d.barButton != null && hit != null && hit.window.id == d.window.id && hit.barButton == d.barButton && d.window.id == desktop.focusedId) barAction(d.window.id, d.barButton)
-            else if (d != null && d.handleWord != null) {
+            if (d != null && d.handleWord != null) {
                 // a pinch on a word of the handle is Select on that word, if the hand is still on it when it lets go
                 val word = Focus.Handle(d.window.id, d.handleWord)
                 if (hit != null && hit.window.id == d.window.id && hit.handleWord == d.handleWord) { desktop.point(word); if (desktop.focus == word) { press(FocusKey.SELECT); moveByHand = desktop.focus is Focus.Moving } }
             }
-            else if (d != null && handCorner != null) { if (d.onPage) web[d.window.id]?.tap(d.u, d.v) }
-            else if (d != null && d.onPage) { val c = cursors[d.window.id] ?: doubleArrayOf(d.u, d.v); web[d.window.id]?.touch(MotionEvent.ACTION_UP, c[0], c[1]) }
+            else if (d != null && handCorner != null) { if (d.onPage) pageTap(d.window.id, d.u, d.v) }
+            else if (d != null && d.onPage) { val c = cursors[d.window.id] ?: doubleArrayOf(d.u, d.v); pageTouch(d.window.id, MotionEvent.ACTION_UP, c[0], c[1]); handDownHit = null }
             else if (d == null && handTile >= 0 && tile == handTile) { val mark = Focus.Shelf(tile); desktop.point(mark); if (desktop.focus == mark) press(FocusKey.SELECT) }
+            // with nothing open, a pinch at nothing is Select on the mark in focus: looked at, it opens without aiming the hand as well
+            else if (d == null && handTile < 0 && tile < 0 && hit == null && desktop.visible.isEmpty() && desktop.focus is Focus.Shelf) press(FocusKey.SELECT)
             releaseHand()
         }
     }
@@ -586,68 +645,95 @@ class DesktopSession(private val activity: Activity) {
 
     private fun releaseHand() {
         val d = handDownHit
-        if (handDown && d != null && d.onPage && handDragWindow < 0) web[d.window.id]?.touch(MotionEvent.ACTION_CANCEL, d.u, d.v)
+        if (handDown && d != null && d.onPage && handCorner == null && handSizeWindow < 0) pageTouch(d.window.id, MotionEvent.ACTION_CANCEL, d.u, d.v)
         if (handSizeWindow >= 0) { desktop.endDrag(); applyShape(handSizeWindow) }      // the window keeps the size the hand gave it
-        handDown = false; handDragWindow = -1; handDownHit = null; handTile = -1; handCorner = null; handSizeWindow = -1
+        handDown = false; handDownHit = null; handTile = -1; handCorner = null; handSizeWindow = -1
     }
 
-    fun barAction(id: Int, b: BarButton) {
-        when (b) { BarButton.FOLLOW -> toggleFollow(id); BarButton.MINIMIZE -> minimize(id); BarButton.MAXIMIZE -> toggleMaximize(id); BarButton.CLOSE -> close(id) }
+    // ---- what moves (docs/INTERFACE.md, "Opening and closing"; Motion says for how long)
+    /** Nothing moves by itself: the setting here, or Android's own. Looked up once a second. */
+    private var still = false; private var stillCheckedNs = 0L
+    /** The windows as they stood in the last frame, to see which have come and which have gone. */
+    private var shown: Map<Int, RenderWindow> = emptyMap()
+    private var lastFull = -1
+    /** When a window began to grow from its mark, and the windows that are shrinking back into theirs. */
+    private val born = HashMap<Int, Long>()
+    private class Leaving(val window: RenderWindow, val startNs: Long, val markYaw: Double)
+    private val leaving = HashMap<Int, Leaving>()
+    /** The name of the mark each window came from (and goes back into). */
+    private val fromMark = HashMap<Int, String>()
+    /** How far each window's brackets are lit, each mark is enlarged, and the row has slid: they follow the focus in [Motion.FOCUS_NS]. */
+    private val glows = HashMap<Int, Glide>(); private val swells = HashMap<Int, Glide>(); private val slide = Glide(0.0)
+    private var swellsFor: List<HomeItem>? = null
+
+    /** Which way the mark called [title] lies: its place in the row if it is in view, the nearer end of the row if it is not, the middle if there is none. */
+    private fun markYaw(title: String?): Double {
+        val n = Shelf.shown(homeItems.size); val i = homeItems.indexOfFirst { it.title == title }
+        val slot = if (i < 0 || n == 0) (n - 1) / 2.0 else (i - shelfFirst).coerceIn(0, n - 1).toDouble()
+        return Geometry.wrap(desktop.followAnchor.yaw + Shelf.yawOffset(slot, maxOf(n, 1)))
+    }
+
+    /** A window on its way between its mark ([e] 0) and its place ([e] 1): no brackets, no words, only the page (or its outline) growing. */
+    private fun between(r: RenderWindow, markYaw: Double, e: Double): RenderWindow {
+        val k = e.coerceIn(0.03, 1.0)
+        return RenderWindow(r.id, Geometry.wrap(markYaw + Geometry.wrap(r.yaw - markYaw) * e), Motion.mix(Shelf.PITCH, r.pitch, e), Motion.mix(Shelf.DISTANCE, r.distance, e), r.width * k, r.height * k,
+            r.focused, 0.5, 0.5, false, false, false, bracket = 0f, arm = r.arm, growing = true, pixelW = r.pixelW, pixelH = r.pixelH)
     }
 
     private fun publish(nowNs: Long, anchor: DoubleArray, positionOk: Boolean, head: HeadTracker.State) {
         val full = desktop.fullscreenId
         val list = ArrayList<RenderWindow>()
+        val resting = HashMap<Int, RenderWindow>()
         val fo = desktop.focus
+        // a window that fills the view hides the others and shows them again: that is not opening and closing
+        val moves = !still && full == lastFull; lastFull = full
         for (w in desktop.visible) {
             val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
             val focused = w.id == desktop.focusedId
-            val pw = web[w.id]?.pixelWidth ?: WebWindow.PIXEL_WIDTH; val ph = web[w.id]?.pixelHeight ?: WebWindow.PIXEL_HEIGHT
+            // the settings have no page of their own making the picture: its size follows the window's shape directly
+            val shape = if (w.kind == SETTINGS) DesktopWindow.pixels(w.aspect) else null
+            val pw = shape?.get(0) ?: web[w.id]?.pixelWidth ?: WebWindow.PIXEL_WIDTH; val ph = shape?.get(1) ?: web[w.id]?.pixelHeight ?: WebWindow.PIXEL_HEIGHT
             if (w.id == full) {
                 val tanH = Tracking.displayTanH; val tanV = Tracking.displayTanV
                 val d = 2.0; val width = minOf(2 * d * tanH, 2 * d * tanV * w.aspect) * 0.98
-                list += RenderWindow(w.id, 0.0, 0.0, d, width, width / w.aspect, 0.0, true, c[0], c[1], true, pressed, null, 0, true, outline = false, pixelW = pw, pixelH = ph)
-            } else {
-                // the strips are drawn for the window's shape, which a free sizing changes
-                val shape = (w.shownBarHeight() / w.shownWidth() * 2000).toInt()
-                val key = "${w.title}|${w.follow}|${w.maximized}|$focused|$shape"
-                val bar = bars[w.id]
-                if (bar == null || bar.second != key) { bars[w.id] = drawBar(w, focused) to key; barVersions[w.id] = (barVersions[w.id] ?: 0) + 1 }
-                // What shows the focus, until the look is redone: the line round the window when the focus is on the
-                // window itself (or it is being moved or sized), the cursor when its page is in use, the lit word when
-                // it is on the handle. The cursor also shows where the touchpad took it onto the title bar or the handle.
-                val inFocus = fo.windowId == w.id
-                val adjusting = fo is Focus.Moving || fo is Focus.Sizing
-                val outline = inFocus && (fo is Focus.Window || adjusting)
-                val showCursor = inFocus && !adjusting && (fo is Focus.Page || c[1] < 0.0 || c[1] > 1.0)
-                var handle: Bitmap? = null
-                if (inFocus) {
-                    val hk = "${fo.describe()}|${w.follow}|$shape"
-                    val h = handles[w.id]
-                    if (h == null || h.second != hk) { handles[w.id] = drawHandle(w, fo) to hk; handleVersions[w.id] = (handleVersions[w.id] ?: 0) + 1 }
-                    handle = handles[w.id]!!.first
-                }
-                list += RenderWindow(w.id, desktop.worldYaw(w), w.shownPitch(), w.shownDistance(), w.shownWidth(), w.shownHeight(), w.shownBarHeight(),
-                    focused, c[0], c[1], showCursor, pressed || handDown, bars[w.id]!!.first, barVersions[w.id]!!, false,
-                    outline, handle, handleVersions[w.id] ?: 0, w.shownHandleHeight(), pw, ph)
+                val r = RenderWindow(w.id, 0.0, 0.0, d, width, width / w.aspect, true, c[0], c[1], true, pressed, true, pixelW = pw, pixelH = ph)
+                resting[w.id] = r; list += r; born.remove(w.id); continue
             }
+            // What shows the focus: the brackets, lit, when it is on the window itself (or the window is being moved or
+            // sized); the cursor when its page is in use; the lit word when it is on the handle. The cursor also shows
+            // where the touchpad took it onto the handle.
+            val inFocus = fo.windowId == w.id
+            val adjusting = fo is Focus.Moving || fo is Focus.Sizing
+            val lit = inFocus && (fo is Focus.Window || adjusting)
+            val glow = glows.getOrPut(w.id) { Glide(if (lit) 1.0 else 0.0) }.toward(if (lit) 1.0 else 0.0, nowNs, Motion.FOCUS_NS, still).toFloat()
+            val showCursor = inFocus && !adjusting && (fo is Focus.Page || c[1] > 1.0)
+            val r = RenderWindow(w.id, desktop.worldYaw(w), w.shownPitch(), w.shownDistance(), w.shownWidth(), w.shownHeight(), focused, c[0], c[1], showCursor, pressed || handDown, false,
+                glow, inFocus, 1f, w.shownCornerReach(), if (inFocus) titlePicture(w) else null, if (inFocus) handlePicture(w, fo) else null, w.shownHandleWidth(), w.shownHandleHeight(), w.shownHandleGap(), false, pw, ph)
+            resting[w.id] = r; leaving.remove(w.id)
+            if (!fromMark.containsKey(w.id)) fromMark[w.id] = w.title
+            // a window that was not there in the last frame grows from its mark; when it has grown, its brackets draw themselves
+            if (moves && !shown.containsKey(w.id) && !born.containsKey(w.id)) born[w.id] = nowNs
+            val began = born[w.id]
+            if (began == null || still) { born.remove(w.id); list += r; continue }
+            val t = Motion.progress(began, nowNs, Motion.OPEN_NS, false)
+            val b = Motion.progress(began + Motion.OPEN_NS, nowNs, Motion.BRACKET_NS, false)
+            if (t < 1.0) list += between(r, markYaw(fromMark[w.id]), Motion.ease(t))
+            else if (b < 1.0) list += RenderWindow(r.id, r.yaw, r.pitch, r.distance, r.width, r.height, r.focused, r.cursorU, r.cursorV, r.showCursor, r.pressed, false,
+                r.glow, r.near, Motion.ease(b).toFloat(), r.arm, null, null, pixelW = r.pixelW, pixelH = r.pixelH)
+            else { born.remove(w.id); list += r }
         }
-        val showHome = desktop.visible.isEmpty()
-        if (showHome) {
-            val minute = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-            val step = (homeProgress * 16).toInt()
-            if (homeBitmap == null || minute != homeMinute || homeHover != homeDrawnHover || step != homeDrawnStep) {
-                homeBitmap = drawHome(minute, homeHover, step / 16f); homeMinute = minute; homeDrawnHover = homeHover; homeDrawnStep = step; homeVersion++
-            }
+        // a window that was there in the last frame and is not now (closed, or put away) shrinks back into its mark
+        if (moves) for ((id, r) in shown) if (!resting.containsKey(id) && !leaving.containsKey(id) && !r.headLocked) leaving[id] = Leaving(r, nowNs, markYaw(fromMark[id]))
+        val gone = leaving.entries.iterator()
+        while (gone.hasNext()) {
+            val g = gone.next().value; val t = Motion.progress(g.startNs, nowNs, Motion.CLOSE_NS, still || full >= 0)
+            if (t >= 1.0) { gone.remove(); if (desktop.find(g.window.id) == null) { fromMark.remove(g.window.id); glows.remove(g.window.id) } }
+            else list += between(g.window, g.markYaw, 1 - Motion.ease(t))
         }
-        // the dock's tile in focus is lit, as the home's icon is
-        val lit = if (!showHome && fo is Focus.Shelf) fo.index.coerceIn(0, HomeApps.dock.size - 1) else -1
-        if (dockBitmap == null || lit != dockLit) { dockBitmap = drawDock(lit); dockLit = lit; dockVersion++ }
-        val f = desktop.focused?.takeIf { !it.minimized && full < 0 }
-        val frame = RenderFrame(list, anchor, if (showHome) homeBitmap else null, homeVersion, desktop.followAnchor.yaw, positionOk, if (dimUnfocused) 0.55f else 1f,
-            dock = if (full < 0 && !showHome) dockBitmap else null, dockVersion = dockVersion, dockYaw = desktop.followAnchor.yaw,
-            railYaw = if (f != null) desktop.worldYaw(f) else Double.NaN, railHalf = if (f != null) Math.atan(f.shownWidth() / 2 / f.shownDistance()) else 0.0, showRail = full < 0 && !showHome,
-            dwellYaw = ringYaw, dwellPitch = ringPitch, dwellDistance = ringDistance, dwellProgress = ringProgress)
+        shown = resting
+
+        val frame = RenderFrame(list, anchor, if (full < 0) shelf(nowNs, fo, head) else null, positionOk, if (dimUnfocused) 0.55f else 1f, Tracking.settings.pictureBrightness,
+            dwellYaw = ringYaw, dwellPitch = ringPitch, dwellDistance = ringDistance, dwellProgress = ringProgress, dwellSize = ringSize)
         val sw = Tracking.link?.stereo
         val three = forceStereo || sw?.state == dev.ultraxr.glasses.StereoSwitch.State.ACTIVE
         val swap = swapEyes; val ipd = Tracking.settings.ipdMm / 1000.0
@@ -666,148 +752,112 @@ class DesktopSession(private val activity: Activity) {
         }) + stereoNote
     }
 
-    // ---- textures drawn with the 2D canvas. Everything is light on a transparent ground: on the
-    // glasses black is see-through, so there are no panels behind text.
-    private fun drawBar(w: DesktopWindow, focused: Boolean): Bitmap {
-        val bw = 1024; val bh = (bw * w.shownBarHeight() / w.shownWidth()).toInt().coerceIn(40, 120)
-        val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        val ink = if (focused) Ink.WHITE_INT else Ink.SLATE_INT
-        val slot = bw * Desktop.BUTTON_FRACTION.toFloat(); val cy = bh * 0.46f; val r = bh * 0.19f
-        p.color = ink; p.textSize = bh * 0.5f; p.typeface = if (focused) bold else regular
-        val maxText = bw - slot * 4.6f
-        val title = android.text.TextUtils.ellipsize(w.title.ifBlank { "Window" }, android.text.TextPaint(p), maxText, android.text.TextUtils.TruncateAt.END).toString()
-        c.drawText(title, bh * 0.12f, cy + p.textSize * 0.34f, p)
-        p.style = Paint.Style.STROKE; p.strokeWidth = bh * 0.055f; p.strokeCap = Paint.Cap.ROUND
-        fun cx(i: Int) = bw - slot * (i + 0.5f)
-        if (focused) {   // buttons only on the focused window: fewer marks, and nothing to press by accident
-            p.color = Ink.CORAL_INT; c.drawLine(cx(0) - r, cy - r, cx(0) + r, cy + r, p); c.drawLine(cx(0) - r, cy + r, cx(0) + r, cy - r, p)
-            p.color = ink
-            if (w.maximized) c.drawRect(cx(1) - r * 0.6f, cy - r * 0.6f, cx(1) + r * 0.6f, cy + r * 0.6f, p) else c.drawRect(cx(1) - r, cy - r, cx(1) + r, cy + r, p)
-            c.drawLine(cx(2) - r, cy + r, cx(2) + r, cy + r, p)
-            if (w.follow) { p.color = Ink.AMBER_INT; c.drawCircle(cx(3), cy, r, p); p.style = Paint.Style.FILL; c.drawCircle(cx(3), cy, r * 0.42f, p) }
-            else { c.drawCircle(cx(3), cy - r * 0.35f, r * 0.55f, p); c.drawLine(cx(3), cy + r * 0.2f, cx(3), cy + r * 1.1f, p) }
-        } else if (w.follow) { p.color = Ink.SLATE_INT; c.drawCircle(cx(0), cy, r * 0.7f, p) }
-        return b
+    /** The shelf for this frame: the marks in view, the one in focus a quarter larger with its name beneath, and the status line above. */
+    private fun shelf(nowNs: Long, fo: Focus, head: HeadTracker.State): RenderShelf {
+        val items = homeItems; val n = Shelf.shown(items.size); val yaw = desktop.followAnchor.yaw
+        if (swellsFor !== items) { swellsFor = items; swells.clear(); slide.value = shelfFirst.toDouble() }      // another page of marks: nothing of the old one is left to move
+        val first = slide.toward(shelfFirst.toDouble(), nowNs, Motion.FOCUS_NS, still)
+        val on = if (fo is Focus.Shelf && items.isNotEmpty()) fo.index.coerceIn(0, items.size - 1) else -1
+        val marks = ArrayList<RenderMark>(n + 1); var name: Sprite? = null; var nameYaw = 0.0
+        for ((i, item) in items.withIndex()) {
+            val slot = i - first
+            val swell = swells.getOrPut(i) { Glide(if (i == on) 1.0 else 0.0) }.toward(if (i == on) 1.0 else 0.0, nowNs, Motion.FOCUS_NS, still)
+            if (slot <= -1.0 || slot >= n) continue
+            // a mark sliding out of the row fades as it goes, and the one sliding in comes up
+            val alpha = (if (slot < 0) 1 + slot else if (slot > n - 1) n - slot else 1.0).toFloat()
+            val at = Geometry.wrap(yaw + Shelf.yawOffset(slot, n))
+            marks += RenderMark(at, 1 + (Shelf.FOCUS_SCALE - 1) * swell, markPicture(item, i == on), alpha)
+            if (i == on) { name = namePicture(item.title); nameYaw = at }
+        }
+        val more = n - 0.4      // a dot a little past the last mark where the row goes on
+        return RenderShelf(marks, name, nameYaw, statusPicture(nowNs, head), yaw,
+            if (shelfFirst > 0) Geometry.wrap(yaw + Shelf.yawOffset(-0.6, n)) else Double.NaN, if (shelfFirst + n < items.size) Geometry.wrap(yaw + Shelf.yawOffset(more, n)) else Double.NaN)
+    }
+
+    // ---- pictures drawn with the 2D canvas. Everything is light on a transparent ground: on the glasses black is
+    // see-through, so there is no panel behind anything. Text is sized by its x-height, as an angle (Sight).
+    /** A mark: a ring in the app's colour with its letter or sign, in a picture half as large again as the mark so that the halo of the one in focus has room. */
+    private fun markPicture(item: HomeItem, lit: Boolean): Sprite = picture("mark|${item.title}|${item.color}|${item.kind}|${item.verified}|$lit") {
+        val side = MARK_PX * 3; val b = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        val sign = if (item.kind == HomeItem.Kind.NAV) (when (item.url) { "nav:home" -> "⌂"; "nav:apps", "nav:next" -> "⋯"; "nav:settings" -> "≡"; else -> item.title.take(1) }) else item.title.take(1)
+        HomeIcon.draw(Canvas(b), Paint(Paint.ANTI_ALIAS_FLAG), side / 2f, side / 2f, MARK_PX.toFloat(), item.color, item.kind == HomeItem.Kind.GAME, sign, item.verified, lit)
+        b
+    }
+
+    /** The name under the mark in focus. The ring is what glows; its name is plain text. */
+    private fun namePicture(title: String): Sprite = picture("name|$title") { Type.label(title, NAME_PX, Ink.CHALK_INT, Type.bold, (NAME_PX * Shelf.NAME_WIDTH / Sight.NAME).toFloat()) }
+
+    /** The title above the top-left bracket of the window in focus, with a Tide pin before it when the window is pinned to the room. */
+    private fun titlePicture(w: DesktopWindow): Sprite {
+        // no wider than the window, in steps so that sizing a window does not draw a new picture for every frame
+        val room = Math.round(w.shownWidth() / Sight.metres(Sight.BODY, w.shownDistance()) * TEXT_PX / 48.0).toInt().coerceAtLeast(4) * 48
+        val text = w.title.ifBlank { "Window" }; val pinned = !w.follow
+        return picture("title|$text|$pinned|$room") {
+            Type.label(text, TEXT_PX, Ink.CHALK_INT, Type.regular, room.toFloat(), if (!pinned) null else { c, p, cx, cy ->
+                // a pin: a round head and its point, in line
+                val x = TEXT_PX; p.style = Paint.Style.STROKE; p.strokeCap = Paint.Cap.ROUND; p.strokeWidth = x * 0.16f; p.color = Ink.TIDE_INT
+                c.drawCircle(cx, cy - x * 0.2f, x * 0.36f, p); c.drawLine(cx, cy + x * 0.16f, cx, cy + x * 0.95f, p)
+            })
+        }
     }
 
     /**
-     * The handle under the window in focus: its four words, in the title bar's type. The word in focus is lit (the
-     * one for closing in the colour of closing), as is "move" or "size" while the window is being moved or sized.
-     * "pin" has a dot before it while the window is pinned to the room.
+     * The handle under the window in focus: its four words, each in the middle of a quarter of the strip
+     * ([HandleStrip]). The word in focus is Lamp ("close" is Ember), as is "move" or "size" while the window is being
+     * moved or sized; the others are Dusk. "pin" has a Tide dot before it while the window is pinned to the room.
      */
-    private fun drawHandle(w: DesktopWindow, f: Focus): Bitmap {
-        val bw = 1024; val bh = (bw * w.shownHandleHeight() / w.shownWidth()).toInt().coerceIn(40, 120)
-        val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER; p.textSize = bh * 0.5f
+    private fun handlePicture(w: DesktopWindow, f: Focus): Sprite {
         val lit = when (f) { is Focus.Handle -> f.word; is Focus.Moving -> HandleWord.MOVE; is Focus.Sizing -> HandleWord.SIZE; else -> null }
-        for (word in HandleWord.values()) {
-            val on = word == lit; val x = bw * HandleStrip.centre(word).toFloat(); val cy = bh * 0.46f
-            p.typeface = if (on) bold else regular
-            p.color = if (!on) Ink.WHITE_INT else if (word == HandleWord.CLOSE) Ink.CORAL_INT else Ink.AMBER_INT
-            c.drawText(word.label, x, cy + p.textSize * 0.34f, p)
-            if (word == HandleWord.PIN && !w.follow) c.drawCircle(x - p.measureText(word.label) / 2 - bh * 0.22f, cy, bh * 0.07f, p)
-        }
-        return b
-    }
-
-    /** The clock that stands on the rail when no window is open. */
-    /**
-     * The home view: round icons in staggered rows with their names, a small glass capsule above with the time and
-     * what the glasses are doing, and one below saying how to choose. Light on black: black is see-through.
-     */
-    private fun drawHome(minute: String, hover: Int, progress: Float): Bitmap {
-        val bw = HomeGrid.PX_W; val bh = HomeGrid.PX_H
-        val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        val medium = Typeface.create("sans-serif-medium", Typeface.NORMAL); val plain = Typeface.create("sans-serif", Typeface.NORMAL)
-
-        // A capsule of "glass": a faint milky fill, brighter towards the top, and a thin bright rim.
-        fun capsule(cx: Float, cy: Float, w: Float, h: Float) {
-            val r = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
-            p.style = Paint.Style.FILL
-            p.shader = android.graphics.LinearGradient(0f, r.top, 0f, r.bottom, 0x30FFFFFF, 0x14FFFFFF, android.graphics.Shader.TileMode.CLAMP)
-            c.drawRoundRect(r, h / 2, h / 2, p)
-            p.shader = android.graphics.LinearGradient(0f, r.top, 0f, r.bottom, 0x8CFFFFFF.toInt(), 0x24FFFFFF, android.graphics.Shader.TileMode.CLAMP)
-            p.style = Paint.Style.STROKE; p.strokeWidth = 2f
-            c.drawRoundRect(r, h / 2, h / 2, p)
-            p.shader = null; p.style = Paint.Style.FILL
-        }
-
-        // Above: the time, and in a quieter weight what the glasses are doing.
-        val mode = Tracking.head.predict(System.nanoTime()).mode
-        val state = when (mode) { HeadTracker.Mode.SIX_DOF -> "Room tracking on"; HeadTracker.Mode.ORIENTATION_ONLY -> "Turning only"; else -> "No tracking" }
-        p.typeface = medium; p.textSize = 34f; val tw = p.measureText(minute)
-        p.typeface = plain; p.textSize = 28f; val sw = p.measureText(state)
-        val capW = tw + sw + 96f
-        capsule(bw / 2f, 46f, capW, 60f)
-        p.textAlign = Paint.Align.LEFT
-        p.typeface = medium; p.textSize = 34f; p.color = 0xFFFFFFFF.toInt(); c.drawText(minute, bw / 2f - capW / 2 + 32f, 58f, p)
-        p.typeface = plain; p.textSize = 28f; p.color = 0xC8FFFFFF.toInt(); c.drawText(state, bw / 2f - capW / 2 + 32f + tw + 32f, 56f, p)
-
-        // The icons.
-        val centres = HomeGrid.centres(homeItems.size)
-        p.textAlign = Paint.Align.CENTER
-        for ((i, item) in homeItems.withIndex()) {
-            val cx = centres[i][0]; val cy = centres[i][1]; val on = i == hover
-            val r = HomeGrid.ICON_R * (if (on) 1.12f else 1f)
-            if (on) {      // the icon looked at lifts towards the viewer: larger, with a soft bright halo
-                p.shader = android.graphics.RadialGradient(cx, cy, r * 1.55f, intArrayOf(0x55FFFFFF, 0x22FFFFFF, 0x00FFFFFF), floatArrayOf(0.62f, 0.8f, 1f), android.graphics.Shader.TileMode.CLAMP)
-                c.drawCircle(cx, cy, r * 1.55f, p); p.shader = null
+        val bw = 1024; val bh = Math.round(bw * w.shownHandleHeight() / w.shownHandleWidth()).toInt().coerceIn(24, 512)
+        // the words' x-height as the angle body text has, unless the window is so narrow that they would touch: then as large as fits
+        val xh = Math.round(Sight.metres(Sight.BODY, w.shownDistance()) / w.shownHandleWidth() * bw).toInt()
+        return picture("handle|${lit?.name}|${w.follow}|$bh|$xh") {
+            val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
+            val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER
+            p.typeface = Type.bold; p.textSize = Type.sizeFor(Type.bold, xh.toFloat())
+            val quarter = bw / HandleWord.values().size.toFloat(); val widest = HandleWord.values().maxOf { p.measureText(it.label) } + xh * 1.6f
+            val fit = minOf(1f, quarter / widest)
+            for (word in HandleWord.values()) {
+                val on = word == lit; val x = bw * HandleStrip.centre(word).toFloat(); val base = bh / 2f + xh * fit / 2f
+                p.typeface = if (on) Type.bold else Type.regular; p.textSize = Type.sizeFor(p.typeface, xh * fit)
+                p.color = if (!on) Ink.DUSK_INT else if (word == HandleWord.CLOSE) Ink.EMBER_INT else Ink.LAMP_INT
+                c.drawText(word.label, x, base, p)
+                if (word == HandleWord.PIN && !w.follow) { p.color = Ink.TIDE_INT; c.drawCircle(x - p.measureText(word.label) / 2 - xh * fit * 0.55f, bh / 2f, xh * fit * 0.17f, p) }
             }
-            val ic = item.icon
-            if (ic != null) {      // an installed app: its own icon, cut round like the others
-                val save = c.save(); val clip = android.graphics.Path().apply { addCircle(cx, cy, r, android.graphics.Path.Direction.CW) }
-                c.clipPath(clip); p.isFilterBitmap = true; c.drawBitmap(ic, null, RectF(cx - r, cy - r, cx + r, cy + r), p); c.restoreToCount(save)
-            } else HomeIcon.draw(c, p, cx, cy, r, item.color, item.kind == HomeItem.Kind.GAME, if (item.kind == HomeItem.Kind.NAV) (when { item.url == "nav:home" -> "⌂"; item.url == "nav:apps" || item.url == "nav:next" -> "⋯"; item.url == "nav:system" -> "⚙"; else -> item.title.take(1) }) else item.title.take(1), item.verified, on)
-            p.textAlign = Paint.Align.CENTER
-            // looking alone: a thin arc closes around the icon, and it opens when the circle is whole
-            if (on && progress > 0f) {
-                p.style = Paint.Style.STROKE; p.strokeWidth = 5f; p.strokeCap = Paint.Cap.ROUND; p.color = 0xFFFFFFFF.toInt()
-                val rr = r + 13f
-                c.drawArc(RectF(cx - rr, cy - rr, cx + rr, cy + rr), -90f, 360f * progress, false, p)
-                p.style = Paint.Style.FILL; p.strokeCap = Paint.Cap.BUTT
-            }
-            // the name, shortened with an ellipsis if it would run into its neighbour
-            p.typeface = if (on) medium else plain; p.textSize = 31f; p.color = if (on) 0xFFFFFFFF.toInt() else 0xE0FFFFFF.toInt()
-            val name = android.text.TextUtils.ellipsize(item.title, android.text.TextPaint(p), HomeGrid.PITCH_X - 22f, android.text.TextUtils.TruncateAt.END).toString()
-            c.drawText(name, cx, cy + HomeGrid.ICON_R + 46f, p)
+            b
         }
-
-        // Below: how to choose.
-        val hint = if (hover >= 0) "Pinch, tap the phone, or keep looking to open " + homeItems[hover].title else "Look at an app, then pinch or tap the phone"
-        p.typeface = plain; p.textSize = 27f
-        capsule(bw / 2f, bh - 40f, p.measureText(hint) + 64f, 54f)
-        p.color = 0xD2FFFFFF.toInt(); p.textAlign = Paint.Align.CENTER; c.drawText(hint, bw / 2f, bh - 31f, p)
-        return b
     }
 
-    /** The dock under the rail: one outlined mark and a name per app. Looked at, or opened from the phone. */
-    private fun drawDock(lit: Int = -1): Bitmap {
-        val bw = 1100; val bh = 220
-        val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888); val c = Canvas(b)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG); p.textAlign = Paint.Align.CENTER
-        val apps = HomeApps.dock; val tile = bw / apps.size.toFloat()
-        // One glass bar with the same round icons as the home view. Where each app sits is unchanged (Rail.dockTile).
-        val bar = RectF(3f, 3f, bw - 3f, bh - 3f)
-        p.style = Paint.Style.FILL
-        p.shader = android.graphics.LinearGradient(0f, bar.top, 0f, bar.bottom, 0x2CFFFFFF, 0x12FFFFFF, android.graphics.Shader.TileMode.CLAMP)
-        c.drawRoundRect(bar, 70f, 70f, p)
-        p.shader = android.graphics.LinearGradient(0f, bar.top, 0f, bar.bottom, 0x8CFFFFFF.toInt(), 0x24FFFFFF, android.graphics.Shader.TileMode.CLAMP)
-        p.style = Paint.Style.STROKE; p.strokeWidth = 2.5f; c.drawRoundRect(bar, 70f, 70f, p); p.shader = null; p.style = Paint.Style.FILL
-        for ((i, a) in apps.withIndex()) {
-            val x = tile * (i + 0.5f)
-            HomeIcon.draw(c, p, x, 84f, 56f, a.color, false, if (a.kind == "nav") "⌂" else a.title.take(1), false, i == lit)
-            p.textAlign = Paint.Align.CENTER; p.typeface = if (i == lit) bold else regular; p.textSize = 34f; p.color = Ink.WHITE_INT
-            c.drawText(a.title, x, 190f, p)
+    /** The status line: the time, the phone's battery, and one word for tracking. Dusk; nothing to press. Its words are looked up once a second. */
+    private fun statusPicture(nowNs: Long, head: HeadTracker.State): Sprite {
+        if (statusText.isEmpty() || nowNs - statusNs > 1_000_000_000L) {
+            statusNs = nowNs
+            val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+            val battery = try { (activity.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager).getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) } catch (_: Exception) { -1 }
+            // position is what the room is found by. With a room marked, it is found when the marked walls are placed in
+            // the world; with none marked, when the cameras hold their position.
+            val tracking = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "finding the room" }
+            statusText = time + (if (battery in 0..100) "      $battery %" else "") + "      " + tracking
         }
-        return b
+        val text = statusText
+        return picture("status|$text") { Type.label(text, TEXT_PX, Ink.DUSK_INT, Type.regular) }
     }
+    private var statusText = ""; private var statusNs = 0L
 
     companion object {
         private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
         /** A pinch on a corner becomes a drag once the hand's ray has moved this far across the window, metres. */
         private const val CORNER_DRAG_M = 0.03
+        /** The kind of the window the settings are in. */
+        const val SETTINGS = "settings"
+        /** The phone's apps are offered this many to a page of the shelf. */
+        private const val APPS_A_PAGE = 11
+        /** The colours WebXR games are told apart by on their marks (they have none of their own). */
+        private val TINTS = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
+        // How large the pictures are drawn, in pixels: a little finer than the glasses show them (an x-height of 0.55 degrees is 23 of their pixels).
+        private const val TEXT_PX = 36f
+        private const val NAME_PX = 44f
+        private const val MARK_PX = 84
         /** The desktop that is running, for the pointer service to hand keys to (see [keysElsewhere]). */
         @Volatile var current: DesktopSession? = null; private set
     }

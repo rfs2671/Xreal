@@ -363,20 +363,29 @@ class FocusTest {
 
     @Test fun theHandleIsUnderTheWindowInFocusAndARayFindsItsWords() {
         val d = Desktop(); val w = d.add("A", "u")!!
-        fun ray(u: Double, below: Double) = doubleArrayOf((u - 0.5) * w.width, -w.height / 2 - below, -w.distance)
-        val mid = HandleStrip.GAP + w.shownHandleHeight() / 2
+        // the handle is in the middle under the page, as wide as its words need: u runs across the handle
+        val gap = w.shownHandleGap(); val wide = w.shownHandleWidth()
+        assertTrue("no wider than the window", wide <= w.width); assertTrue("each word has room", wide / 4 > 2.5 * w.shownHandleHeight())
+        fun ray(u: Double, below: Double) = doubleArrayOf((u - 0.5) * wide, -w.height / 2 - below, -w.distance)
+        val mid = gap + w.shownHandleHeight() / 2
         assertEquals(w.id, d.handleId)
         for (word in HandleWord.values()) {
             val h = d.hit(origin, ray(HandleStrip.centre(word), mid), origin)!!
             assertTrue(h.onHandle); assertFalse(h.onPage); assertEquals(word, h.handleWord); assertEquals(Focus.Handle(w.id, word), d.focusAt(h))
         }
-        assertNull("below the words there is nothing", d.hit(origin, ray(0.5, HandleStrip.GAP + w.shownHandleHeight() + 0.02), origin))
+        assertNull("below the words there is nothing", d.hit(origin, ray(0.5, gap + w.shownHandleHeight() + 0.02), origin))
+        val beside = d.hit(origin, doubleArrayOf(w.width / 2 - 0.01, -w.height / 2 - mid, -w.distance), origin)!!
+        assertTrue("under the page but beside the words: the handle, and no word", beside.onHandle); assertNull(beside.handleWord); assertEquals(Focus.Window(w.id), d.focusAt(beside))
+        val between = d.hit(origin, ray(0.5, gap / 2), origin)!!
+        assertTrue("between the page and the words: no word", between.onHandle); assertNull(between.handleWord)
         assertEquals("on the page", Focus.Page(w.id), d.focusAt(d.hit(origin, Geometry.direction(0.0, 0.0), origin)!!))
-        assertEquals("on the title bar", Focus.Window(w.id), d.focusAt(d.hit(origin, doubleArrayOf(0.0, w.height / 2 + w.barHeight / 2, -w.distance), origin)!!))
-        // the touchpad's cursor says the same: v below 0 is the title bar, above 1 the handle
-        assertEquals(Focus.Page(w.id), d.focusAt(w, 0.3, 0.7)); assertEquals(Focus.Window(w.id), d.focusAt(w, 0.3, -0.01))
-        assertEquals(Focus.Handle(w.id, HandleWord.CLOSE), d.focusAt(w, 0.9, 1.0 + mid / w.height))
-        assertEquals(Focus.Handle(w.id, HandleWord.MOVE), d.focusAt(w, 0.1, 1.0 + mid / w.height))
+        assertNull("there is no title bar: above the page is not the window", d.hit(origin, doubleArrayOf(0.0, w.height / 2 + 0.03, -w.distance), origin))
+        // the touchpad's cursor says the same: v above 1 is the handle. Its u runs across the window, the words stand across the handle.
+        fun across(word: HandleWord) = 0.5 + (HandleStrip.centre(word) - 0.5) * wide / w.width
+        assertEquals(Focus.Page(w.id), d.focusAt(w, 0.3, 0.7))
+        for (word in HandleWord.values()) assertEquals(Focus.Handle(w.id, word), d.focusAt(w, across(word), 1.0 + mid / w.height))
+        assertEquals("beside the words", Focus.Window(w.id), d.focusAt(w, 0.01, 1.0 + mid / w.height))
+        assertEquals("between the page and the words", Focus.Window(w.id), d.focusAt(w, 0.5, 1.0 + gap / 2 / w.height))
         // only the window in focus has a handle
         val other = d.add("B", "u")!!
         assertEquals(other.id, d.handleId)

@@ -11,12 +11,12 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import dev.ultraxr.core.HeadTracker
+import dev.ultraxr.desktop.HomeApps
 import dev.ultraxr.glasses.GlassesLink
 import dev.ultraxr.render.GlassesStage
 import dev.ultraxr.render.HomeScene
@@ -25,27 +25,28 @@ import dev.ultraxr.tracking.TrackingService
 import dev.ultraxr.ui.Ui.add
 import dev.ultraxr.xr.XrRuntime
 
-/** Home screen: status at a glance, one tap to play, everything else out of the way. */
+/**
+ * The main screen, before the glasses are on (docs/INTERFACE.md, "On the phone"): the state in one line of words, the
+ * shelf of marks upright, and one large action, "Open in the glasses". Under them, as plain lists, what was here
+ * before: the games, the other XR apps on the phone, how the hands are used. When something needs the owner, one line
+ * says what and offers the one step that puts it right. Also where tests and plugging the glasses in come in.
+ */
 class LauncherActivity : Activity(), Tracking.Observer {
     private val ui = Handler(Looper.getMainLooper())
-    private lateinit var glassesChip: TextView
-    private lateinit var trackingChip: TextView
+    private lateinit var stateLine: TextView
     private lateinit var banner: LinearLayout
     private lateinit var bannerText: TextView
     private lateinit var bannerButton: TextView
     private lateinit var webList: LinearLayout
-    private lateinit var pointerText: TextView
-    private lateinit var pointerButton: View
-    private lateinit var recentList: LinearLayout
-    private lateinit var favList: LinearLayout
-    private lateinit var recentTitle: TextView
-    private lateinit var favTitle: TextView
+    private lateinit var pointerRow: ListRow
     private lateinit var appsList: LinearLayout
-    private lateinit var bestText: TextView
+    private lateinit var lumenRow: ListRow
     private val home = HomeScene()
     private var stage: GlassesStage? = null
     private var bannerAction: (() -> Unit)? = null
     private var askedCamera = false
+    /** Started by a test (any of the switches below): the set-up is not put in its way. */
+    private var skipSetup = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +63,9 @@ class LauncherActivity : Activity(), Tracking.Observer {
 
     /** "am start ... --ez desktop true [--ez automation true]" opens the desktop directly (used by UI automation). */
     private fun openDesktopIfAsked(i: Intent?) {
+        // A start with any of this screen's own switches is a test or a tool, not the owner's first day: no set-up over it.
+        // ("--ez skip_setup true" by itself does the same.) Plugging the glasses in carries none of them.
+        if (i?.extras?.keySet()?.any { it in TEST_EXTRAS } == true) skipSetup = true
         // Test builds: treat the attached display as glasses in half-width 3D (used on an emulator).
         if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             if (i?.hasExtra("force_half_stereo") == true) Tracking.forceHalfStereo = i.getBooleanExtra("force_half_stereo", false)
@@ -104,14 +108,20 @@ class LauncherActivity : Activity(), Tracking.Observer {
         if (!dev.ultraxr.xr.XrHost.applicationConnected) { dev.ultraxr.xr.XrHost.closeShell(); if (!startingGame) Tracking.stereoWant("game", false) }
         Tracking.addObserver(this)
         val padOn = dev.ultraxr.xr.PointerService.enabled(this)
-        pointerText.text = if (padOn) "On. In a game the phone's screen is a touchpad: drag to move the pointer, tap to select, two fingers or volume-down to grab and carry, volume-up to recentre. It works whether or not your hands are tracked."
-            else "Off. Switched on, the phone's screen becomes a touchpad in games, so you can point, select and grab without hand tracking. Android asks you to allow it once under Accessibility, Ultra XR touchpad."
-        pointerButton.visibility = if (padOn) View.GONE else View.VISIBLE
+        pointerRow.onOff(padOn).set("Touchpad in games", pointerRow.value.text, if (padOn) "In a game the phone's screen is a touchpad: drag to move the pointer, tap to select, two fingers or volume-down to grab and carry, volume-up to recentre. It works whether or not your hands are tracked."
+            else "Switched on, the phone's screen becomes a touchpad in games, so you can point, select and grab without hand tracking. Tap, and switch on \"Ultra XR touchpad\" in Android's accessibility settings.")
         stage?.start()
         home.reanchor()
         refreshApps()
         ui.post(tick)
-        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED && !askedCamera) {
+        // The set-up, until it has been gone through once (docs/INTERFACE.md, "Set-up, once"). It is offered once in a
+        // run of the app: whoever backs out of it gets this screen, which says in one line that it is not finished.
+        // It is also put back when it was on its way and this screen came in front of it (Android starts this screen
+        // when the glasses are plugged in, which is the set-up's own second step).
+        if (SetupActivity.open || (!Tracking.settings.setupDone && !setupOffered && !skipSetup)) {
+            setupOffered = true
+            startActivity(Intent(this, SetupActivity::class.java))
+        } else if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED && !askedCamera) {
             askedCamera = true
             requestPermissions(if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.CAMERA, Manifest.permission.POST_NOTIFICATIONS) else arrayOf(Manifest.permission.CAMERA), 1)
         }
@@ -131,184 +141,173 @@ class LauncherActivity : Activity(), Tracking.Observer {
     private val tick = object : Runnable { override fun run() { update(); ui.postDelayed(this, 1000) } }
 
     private fun build() {
-        val root = Ui.column(this, 20)
-        root.setPadding(Ui.dp(this, 20), Ui.dp(this, 56), Ui.dp(this, 20), Ui.dp(this, 28))
-        root.add(Ui.text(this, "Ultra XR", 34f, bold = true))
-        val chips = Ui.row(this)
-        glassesChip = Ui.chip(this); trackingChip = Ui.chip(this)
-        chips.add(glassesChip, ViewGroup.LayoutParams.WRAP_CONTENT); chips.add(trackingChip, ViewGroup.LayoutParams.WRAP_CONTENT, startDp = 8)
-        root.add(chips, topDp = 14)
+        val root = Ui.column(this)
+        Ui.fitBars(root, 20, 16, 28)
+        root.add(Ui.text(this, "Ultra XR", 30f, bold = true))
+        // the state, in one line of words
+        stateLine = Ui.text(this, "", 15f, Ui.DUSK)
+        root.add(stateLine, topDp = 8)
 
-        banner = Ui.column(this, 16).apply { background = Ui.rounded(0xFF2A2110.toInt(), 20f, this@LauncherActivity, 0x55FFB84D); visibility = View.GONE }
-        bannerText = Ui.text(this, "", 14f, Ui.TEXT)
-        bannerButton = Ui.button(this, "", primary = false) { bannerAction?.invoke() }
+        // when something needs the owner: one line saying what, and the one step that puts it right
+        banner = Ui.column(this).apply { visibility = View.GONE }
+        bannerText = Ui.text(this, "", 16f, Ui.CHALK).apply { setLineSpacing(0f, 1.25f) }
+        bannerButton = Ui.button(this, "") { bannerAction?.invoke() }
         banner.add(bannerText); banner.add(bannerButton, topDp = 12)
         root.add(banner, topDp = 18)
 
-        // The home view in the glasses is the main way in; the phone's own list below does the same things.
-        root.add(Ui.button(this, "Open home in the glasses", primary = true) { startActivity(Intent(this, DesktopActivity::class.java)) }, topDp = 22)
+        // The shelf, upright: the marks the glasses show, drawn the same way. A mark opens its app in the glasses; the
+        // last one is the settings, as on the shelf there.
+        val shelf = Ui.row(this).apply { gravity = Gravity.TOP }
+        HomeApps.all.forEachIndexed { i, a ->
+            shelf.add(mark(a.title, MarkView(this, a.color, false, a.title.take(1)), "Open ${a.title} in the glasses") { startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_OPEN_SHELF, i)) }, 0, weight = 1f)
+        }
+        shelf.add(mark("Settings", MarkView(this, 0xFF607D8B.toInt(), false, "S"), "Settings") { startActivity(Intent(this, SettingsActivity::class.java)) }, 0, weight = 1f)
+        root.add(shelf, topDp = 30)
 
-        // Games come first: recently played, favourites, then everything.
-        recentTitle = Ui.text(this, "Recently played", 18f, bold = true); recentList = Ui.column(this)
-        root.add(recentTitle, topDp = 26); root.add(recentList, topDp = 10)
-        favTitle = Ui.text(this, "Favourites", 18f, bold = true); favList = Ui.column(this)
-        root.add(favTitle, topDp = 26); root.add(favList, topDp = 10)
-        root.add(Ui.text(this, "WebXR games", 18f, bold = true), topDp = 26)
+        // The one large action. The home view in the glasses is the main way in; the lists below do the same things.
+        root.add(Ui.action(this, "Open in the glasses") { startActivity(Intent(this, DesktopActivity::class.java)) }, topDp = 22)
+
+        // Games: favourites first, then what was played last, then the rest.
+        root.add(Ui.label(this, "Games"), topDp = 36)
         webList = Ui.column(this)
-        root.add(webList, topDp = 10)
+        root.add(webList, topDp = 2)
+
+        root.add(Ui.label(this, "Also on this phone"), topDp = 30)
+        appsList = Ui.column(this)
+        root.add(appsList, topDp = 2)
+        lumenRow = ListRow(this).set("Lumen", "", "The built-in game.").onTap { startActivity(Intent(this, PlayActivity::class.java)) }
+        root.add(lumenRow)
 
         // How to play with hands: the same in every game.
-        val hands = Ui.column(this, 18).apply { background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity) }
-        hands.add(Ui.text(this, "Playing with your hands", 16f, bold = true))
+        root.add(Ui.label(this, "Playing with your hands"), topDp = 30)
         for ((what, how) in listOf("Point" to "Hold a hand up in front of your face, not at chest height: the cameras do not see it lower down. A thin line runs out through it. Move the hand to aim; turning the wrist does little.",
             "Select" to "Touch thumb and index finger together, briefly.",
             "Grab" to "Pinch and hold, move your hand, let go.",
             "Recentre" to "Pinch with both hands and hold for a second and a half.",
-            "Leave a game" to "Press Back on the phone.")) {
-            val r = Ui.row(this)
-            r.add(Ui.text(this, what, 14f, Ui.ACCENT, bold = true), Ui.dp(this, 96))
-            r.add(Ui.text(this, how, 14f, 0xFFC9D6E6.toInt()).apply { setLineSpacing(0f, 1.2f) }, 0, weight = 1f)
-            hands.add(r, topDp = 10)
-        }
-        root.add(hands, topDp = 26)
+            "Leave a game" to "Press Back on the phone.")) root.add(ListRow(this).set(what, "", how))
 
         // Playing without hand tracking: the phone as a touchpad (an accessibility service the owner switches on once).
-        val padCard = Ui.column(this, 18).apply { background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity) }
-        padCard.add(Ui.text(this, "Phone as a touchpad", 16f, bold = true))
-        pointerText = Ui.text(this, "", 14f, 0xFFC9D6E6.toInt()).apply { setLineSpacing(0f, 1.2f) }
-        padCard.add(pointerText, topDp = 8)
-        pointerButton = Ui.button(this, "Switch it on in Android settings") { try { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {} }
-        padCard.add(pointerButton, topDp = 10)
-        root.add(padCard, topDp = 12)
-
-        root.add(Ui.text(this, "Also on this phone", 18f, bold = true), topDp = 28)
-        appsList = Ui.column(this)
-        root.add(appsList, topDp = 10)
-        bestText = Ui.text(this, "", 13f, Ui.MUTED)
-        val more = Ui.row(this)
-        more.add(Ui.button(this, "Lumen") { startActivity(Intent(this, PlayActivity::class.java)) }, 0, weight = 1f)
-        more.add(Ui.button(this, "Spatial desktop") { startActivity(Intent(this, DesktopActivity::class.java)) }, 0, weight = 1f, startDp = 10)
-        root.add(more, topDp = 10)
-
-        val actions = Ui.row(this)
-        actions.add(Ui.button(this, "Recentre") { Tracking.recenter(); home.reanchor() }, 0, weight = 1f)
-        actions.add(Ui.button(this, "Settings") { startActivity(Intent(this, SettingsActivity::class.java)) }, 0, weight = 1f, startDp = 10)
-        root.add(actions, topDp = 28)
+        root.add(Ui.label(this, "This phone"), topDp = 30)
+        pointerRow = ListRow(this).set("Touchpad in games", "", "").onTap { try { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {} }
+        root.add(pointerRow)
+        root.add(ListRow(this).set("Recentre", "", "Where you face now becomes straight ahead.").onTap { Tracking.recenter(); home.reanchor() })
+        root.add(ListRow(this).set("Settings", "", "Eye distance, the room, hand tracking and the rest.").onTap { startActivity(Intent(this, SettingsActivity::class.java)) })
         setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
+    }
+
+    /** One mark of the shelf with its name under it. The whole of it is pressed, and the mark glows while it is. */
+    private fun mark(name: String, icon: View, says: String, run: () -> Unit): View {
+        val col = Ui.column(this).apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(Ui.dp(this@LauncherActivity, 2), Ui.dp(this@LauncherActivity, 8), Ui.dp(this@LauncherActivity, 2), Ui.dp(this@LauncherActivity, 8)) }
+        col.addView(icon, LinearLayout.LayoutParams(Ui.dp(this, 58), Ui.dp(this, 58)))
+        col.add(Ui.text(this, name, 13f, Ui.DUSK).apply { gravity = Gravity.CENTER; maxLines = 2; setTextColor(Ui.pressedColors(Ui.DUSK)) }, topDp = 8)
+        col.isClickable = true; col.isFocusable = true; col.contentDescription = says
+        col.setOnClickListener { run() }
+        return col
     }
 
     private fun update() {
         val s = Tracking.snapshot()
         val st = stage
-        when (s.link) {
-            GlassesLink.State.STREAMING -> Ui.setChip(glassesChip, "Glasses connected", Ui.GOOD)
-            GlassesLink.State.CONNECTING -> Ui.setChip(glassesChip, "Connecting", Ui.WARN)
-            GlassesLink.State.NEED_PERMISSION -> Ui.setChip(glassesChip, "Allow USB access", Ui.WARN)
-            GlassesLink.State.FAILED -> Ui.setChip(glassesChip, "Connection problem", Ui.BAD)
-            GlassesLink.State.NO_GLASSES -> Ui.setChip(glassesChip, "Plug in your glasses", Ui.MUTED)
-        }
         val streaming = s.link == GlassesLink.State.STREAMING
-        when {
-            !streaming -> Ui.setChip(trackingChip, "Tracking off", Ui.MUTED)
-            s.head == HeadTracker.Mode.SIX_DOF -> Ui.setChip(trackingChip, if (s.handsVisible > 0) "6DoF + hands" else "6DoF", Ui.GOOD)
-            s.head == HeadTracker.Mode.ORIENTATION_ONLY -> Ui.setChip(trackingChip, "Rotation only", Ui.WARN)
-            else -> Ui.setChip(trackingChip, "Starting", Ui.WARN)
+        // The state in words, as the glasses' own status line has it: the glasses, then one word for tracking.
+        val glassesWords = when (s.link) {
+            GlassesLink.State.STREAMING -> "Glasses connected"
+            GlassesLink.State.CONNECTING -> "Connecting to the glasses"
+            GlassesLink.State.NEED_PERMISSION -> "The glasses are waiting for USB access"
+            GlassesLink.State.FAILED -> "The glasses could not start"
+            GlassesLink.State.NO_GLASSES -> "No glasses plugged in"
         }
+        val trackingWords = when {
+            !streaming -> ""
+            s.head == HeadTracker.Mode.SIX_DOF -> if (s.handsVisible > 0) "room found, hands seen" else "room found"
+            s.head == HeadTracker.Mode.ORIENTATION_ONLY -> "no position"
+            else -> "finding the room"
+        }
+        val words = glassesWords + (if (trackingWords.isEmpty()) "" else " · $trackingWords")
+        if (stateLine.text.toString() != words) stateLine.text = words
+        stateLine.setTextColor(if (s.link == GlassesLink.State.FAILED) Ui.EMBER else Ui.DUSK)
         home.subtitle = if (streaming && st != null && st.onGlasses && !st.isSideBySide) "Display is not in 3D mode" else "Pick a game on your phone"
-        bestText.text = if (Tracking.settings.bestScore > 0) "Best score ${Tracking.settings.bestScore}" else "90 seconds a round"
+        lumenRow.line.text = "The built-in game. " + (if (Tracking.settings.bestScore > 0) "Best score ${Tracking.settings.bestScore}." else "90 seconds a round.")
 
-        // One banner at a time, most blocking first.
+        // One line at a time, most blocking first.
         val cameraDenied = checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
         when {
-            startingGame || gameNote -> {}   // the game banner stays until it is answered
-            cameraDenied -> showBanner("Ultra XR needs the camera permission. Android requires it before an app may use the glasses' tracking cameras.", "Allow") { requestPermissions(arrayOf(Manifest.permission.CAMERA), 1) }
-            s.link == GlassesLink.State.NEED_PERMISSION && s.linkDetail.startsWith("USB") -> showBanner("Ultra XR needs USB access to the glasses to read their cameras and motion sensor.", "Allow") { Tracking.link?.retry() }
-            s.link == GlassesLink.State.STREAMING && s.linkDetail.isNotEmpty() -> showBanner("${s.linkDetail}. Games still work, without position tracking or hands. Run the check for details.", "Run check") { startActivity(Intent(this, CheckActivity::class.java)) }
+            startingGame || gameNote -> {}   // the game's line stays until it is answered
+            // the set-up was left before its end: it has the camera and the glasses among its steps, so it comes first
+            !Tracking.settings.setupDone && !skipSetup -> showBanner("The set-up is not finished.", "Finish the set-up") { startActivity(Intent(this, SetupActivity::class.java)) }
+            cameraDenied -> showBanner("Ultra XR needs the camera permission. Android requires it before an app may use the glasses' tracking cameras.", "Let Android ask") { requestPermissions(arrayOf(Manifest.permission.CAMERA), 1) }
+            s.link == GlassesLink.State.NEED_PERMISSION && s.linkDetail.startsWith("USB") -> showBanner("Android has not given Ultra XR access to the glasses, so their cameras and motion sensor cannot be read.", "Let Android ask again") { Tracking.link?.retry() }
+            s.link == GlassesLink.State.STREAMING && s.linkDetail.isNotEmpty() -> showBanner("${s.linkDetail}. Games still work, without position tracking or hands. Run the check for details.", "Run the check") { startActivity(Intent(this, CheckActivity::class.java)) }
             s.link == GlassesLink.State.FAILED -> showBanner("Could not start the glasses: ${s.linkDetail}. Unplug them, plug them back in, or run the check for details.", "Try again") { Tracking.link?.retry() }
-            streaming && st != null && !st.onGlasses -> showBanner("The glasses are connected over USB, but Android reports no external display. Check that the cable is plugged straight into the phone.", "Run check") { startActivity(Intent(this, CheckActivity::class.java)) }
-            streaming && !Tracking.settings.firstRunDone -> showBanner("First time with these glasses: run the one-minute check so tracking and 3D are confirmed on your hardware.", "Run check") { startActivity(Intent(this, CheckActivity::class.java)) }
+            streaming && st != null && !st.onGlasses -> showBanner("The glasses are connected over USB, but Android reports no external display. Check that the cable is plugged straight into the phone.", "Run the check") { startActivity(Intent(this, CheckActivity::class.java)) }
+            // a step of the set-up has been undone since: the one step that puts it right (Android's own screen; the owner switches it on)
+            Tracking.settings.setupDone && !SetupActivity.pointerOn(this) -> showBanner("The pointer is switched off, so the phone is not a touchpad in games.", "Switch it on in Android's settings") { try { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {} }
+            streaming && !Tracking.settings.firstRunDone -> showBanner("First time with these glasses: run the one-minute check so tracking and 3D are confirmed on your hardware.", "Run the check") { startActivity(Intent(this, CheckActivity::class.java)) }
             streaming && Tracking.vioError.isNotEmpty() -> showBanner("Position tracking could not start, so games run with rotation only. (${Tracking.vioError})", "Details") { startActivity(Intent(this, CheckActivity::class.java)) }
             else -> banner.visibility = View.GONE
         }
     }
 
     private fun showBanner(msg: String, action: String, run: () -> Unit) {
-        bannerText.text = msg; bannerButton.text = action; bannerAction = run; banner.visibility = View.VISIBLE
+        if (bannerText.text.toString() != msg) bannerText.text = msg
+        if (bannerButton.text.toString() != action) bannerButton.text = action
+        bannerAction = run; banner.visibility = View.VISIBLE
     }
 
     private val library by lazy { getSharedPreferences("library", MODE_PRIVATE) }
     private fun recent(): List<String> = (library.getString("recent", "") ?: "").split('\u0001').filter { it.isNotEmpty() }
     private fun favourites(): Set<String> = library.getStringSet("favourites", emptySet()) ?: emptySet()
 
-    /** The WebXR games, with recently played and favourites above them. Each card says what is actually known about it. */
+    private fun note(t: String): TextView = Ui.text(this, t, 15f, Ui.DUSK).apply { setLineSpacing(0f, 1.25f); setPadding(Ui.dp(this@LauncherActivity, 12), Ui.dp(this@LauncherActivity, 14), 0, Ui.dp(this@LauncherActivity, 6)) }
+
+    /** The WebXR games as a plain list, favourites and what was played last first. Each row says what is actually known about the game. */
     private fun refreshWeb() {
-        webList.removeAllViews(); recentList.removeAllViews(); favList.removeAllViews()
-        fun note(t: String) = Ui.text(this, t, 14f, Ui.MUTED).apply {
-            background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity); val p = Ui.dp(this@LauncherActivity, 18); setPadding(p, p, p, p); setLineSpacing(0f, 1.2f)
-        }
+        webList.removeAllViews()
         val browser = XrRuntime.browser(this)
         val games = try { dev.ultraxr.core.GameLibrary.parse(assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { emptyList() }
         val favs = favourites(); val rec = recent()
-        recentTitle.visibility = View.GONE; favTitle.visibility = View.GONE
         if (browser == null) { webList.add(note("The WebXR browser is not installed on this phone, so games cannot start.")); return }
 
-        // Games as the same round icons the glasses show, three to a row. Tap to play; press and hold to keep one first.
+        // Each game with the mark the glasses show for it. Tap to play; press and hold to keep one first.
         val tints = intArrayOf(0xFF5B8DEF.toInt(), 0xFF34C7A5.toInt(), 0xFFF2A65A.toInt(), 0xFFB57BEE.toInt(), 0xFFEF6F8E.toInt(), 0xFF5BC0EB.toInt())
         val runnable = games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }
-        fun tile(g: dev.ultraxr.core.WebGame): View {
+        fun row(g: dev.ultraxr.core.WebGame): View {
             val blocked = g.state == dev.ultraxr.core.WebGame.State.BLOCKED
             val tint = tints[(runnable.indexOf(g).takeIf { it >= 0 } ?: games.indexOf(g)) % tints.size]
-            val col = Ui.column(this).apply { gravity = Gravity.CENTER_HORIZONTAL }
-            val icon = dev.ultraxr.desktop.HomeIcon.IconView(this, tint, true, g.name.take(1), g.state == dev.ultraxr.core.WebGame.State.VERIFIED, blocked)
-            col.addView(icon, LinearLayout.LayoutParams(Ui.dp(this, 76), Ui.dp(this, 76)))
             val fav = g.url in favs
-            col.add(Ui.text(this, (if (fav) "\u2605 " else "") + g.name.substringBefore(" (").trim(), 14f, Ui.TEXT, bold = true).apply { gravity = Gravity.CENTER; maxLines = 2 }, topDp = 10)
             val caption = when (g.state) {
                 dev.ultraxr.core.WebGame.State.VERIFIED -> "Played on the glasses"
                 dev.ultraxr.core.WebGame.State.TESTED -> "Tested, not yet seen"
                 dev.ultraxr.core.WebGame.State.BLOCKED -> "Does not run yet"
                 else -> "Not tested"
             }
-            col.add(Ui.text(this, caption, 12f, Ui.MUTED).apply { gravity = Gravity.CENTER }, topDp = 4)
-            col.setPadding(Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14))
-            col.background = Ui.pressable(this, Ui.rounded(0x00000000, 22f, this))
-            col.isClickable = true
-            col.contentDescription = "Play ${g.name}"
-            col.setOnClickListener {
+            val r = ListRow(this).set((if (fav) "★ " else "") + g.name.substringBefore(" (").trim(), "", caption)
+            if (blocked) r.name.setTextColor(Ui.DUSK)
+            r.lead(MarkView(this, tint, true, g.name.take(1), g.state == dev.ultraxr.core.WebGame.State.VERIFIED, blocked), 44)
+            r.contentDescription = "Play ${g.name}. $caption" + (if (fav) ". Kept first" else "")
+            r.onTap {
                 library.edit().putString("recent", dev.ultraxr.core.GameLibrary.played(recent(), g.url).joinToString("\u0001")).apply()
                 play(g.name) { stereo ->
                     XrRuntime.launchUrl(this, browser, g.url, stereo)
                     if (Tracking.settings.autoEnter) dev.ultraxr.xr.XrHost.autoEnter(g.enter)
                 }
             }
-            col.setOnLongClickListener { library.edit().putStringSet("favourites", dev.ultraxr.core.GameLibrary.toggleFavourite(favourites(), g.url)).apply(); refreshWeb(); true }
-            return col
+            r.setOnLongClickListener { library.edit().putStringSet("favourites", dev.ultraxr.core.GameLibrary.toggleFavourite(favourites(), g.url)).apply(); refreshWeb(); true }
+            return r
         }
         // favourites first, then what was played last, then the rest; games that do not run yet stay last
         val order = dev.ultraxr.core.GameLibrary.ordered(games).sortedBy { g -> if (g.state == dev.ultraxr.core.WebGame.State.BLOCKED) 3 else if (g.url in favs) 0 else if (g.url in rec) 1 else 2 }
-        val panel = Ui.column(this, 8).apply { background = Ui.rounded(Ui.SURFACE, 28f, this@LauncherActivity) }
-        for (chunk in order.chunked(3)) {
-            val r = Ui.row(this).apply { gravity = Gravity.TOP }
-            for (g in chunk) r.add(tile(g), 0, weight = 1f)
-            repeat(3 - chunk.size) { r.add(View(this), 0, weight = 1f) }
-            panel.add(r)
-        }
-        webList.add(panel)
-        webList.add(Ui.text(this, "Tap to play. Press and hold to keep a game first.", 13f, Ui.MUTED).apply { gravity = Gravity.CENTER }, topDp = 10)
-        webList.add(Ui.button(this, "Browse the web in XR") { play(browser.loadLabel(packageManager).toString()) { stereo -> XrRuntime.launch(this, browser, stereo) } }, topDp = 14)
+        for (g in order) webList.add(row(g))
+        webList.add(ListRow(this).set("Browse the web in XR", "", "Opens the XR browser by itself.").onTap { play(browser.loadLabel(packageManager).toString()) { stereo -> XrRuntime.launch(this, browser, stereo) } })
+        webList.add(note("Tap to play. Press and hold to keep a game first."))
     }
 
     private fun refreshApps() {
         refreshWeb()
         appsList.removeAllViews()
         val apps = XrRuntime.installedApps(this).filter { !it.activityInfo.packageName.startsWith("com.igalia.wolvic") }   // the browser has its own section
-        if (apps.isEmpty()) {
-            appsList.add(Ui.text(this, "Other XR apps you install appear here.", 14f, Ui.MUTED).apply {
-                background = Ui.rounded(Ui.SURFACE, 20f, this@LauncherActivity); val p = Ui.dp(this@LauncherActivity, 18); setPadding(p, p, p, p); setLineSpacing(0f, 1.2f)
-            })
-            return
-        }
-        for (app in apps) appsList.add(appCard(app), topDp = 8)
+        if (apps.isEmpty()) { appsList.add(note("Other XR apps you install appear here.")); return }
+        for (app in apps) appsList.add(appCard(app))
     }
 
     /** Test builds: lists the display's EGL configurations in the log (what a browser or game can choose from). */
@@ -370,19 +369,18 @@ class LauncherActivity : Activity(), Tracking.Observer {
         ui.post(wait)
     }
 
+    /** One of the other XR apps on this phone, as a row: its own icon, its name, what kind it is. */
     private fun appCard(info: ResolveInfo): View {
-        val row = Ui.row(this)
-        row.background = Ui.pressable(this, Ui.rounded(Ui.SURFACE, 20f, this))
-        val p = Ui.dp(this, 14); row.setPadding(p, p, p, p)
-        row.add(ImageView(this).apply { setImageDrawable(info.loadIcon(packageManager)) }, Ui.dp(this, 44), Ui.dp(this, 44))
-        val col = Ui.column(this)
-        col.add(Ui.text(this, info.loadLabel(packageManager), 16f, bold = true))
         val quest = try { packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(XrRuntime.CATEGORY_QUEST).setPackage(info.activityInfo.packageName), 0).isNotEmpty() } catch (_: Exception) { false }
-        col.add(Ui.text(this, if (quest) "Quest game (converted)" else "OpenXR", 12f, Ui.MUTED), topDp = 4)
-        row.add(col, 0, weight = 1f, startDp = 14)
-        row.add(Ui.text(this, "Play", 14f, Ui.ACCENT, bold = true).apply { gravity = Gravity.END }, ViewGroup.LayoutParams.WRAP_CONTENT)
-        row.isClickable = true
-        row.setOnClickListener { play(info) }
-        return row
+        return ListRow(this).set(info.loadLabel(packageManager), "", if (quest) "Quest game (converted)" else "OpenXR")
+            .lead(ImageView(this).apply { setImageDrawable(info.loadIcon(packageManager)) }, 44).onTap { play(info) }
+    }
+
+    companion object {
+        /** The set-up has been offered in this run of the app. */
+        private var setupOffered = false
+        /** This screen's own switches for tests and tools (see [openDesktopIfAsked]). */
+        private val TEST_EXTRAS = setOf("skip_setup", "desktop", DesktopActivity.EXTRA_AUTOMATION, DesktopActivity.EXTRA_STEREO_PREVIEW, "open_app", "home_page", "force_half_stereo", "sim_wearer", "dump_egl", "test_site",
+            "diag3d", "pace_by_display", "auto_enter", "replay", "replay_tag", "record_seconds")
     }
 }

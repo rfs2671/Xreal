@@ -1,15 +1,17 @@
 package dev.ultraxr.ui
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.app.Presentation
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.TypedValue
 import android.view.Choreographer
 import android.view.Display
 import android.view.Gravity
@@ -21,11 +23,10 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import dev.ultraxr.desktop.DesktopRenderer
 import dev.ultraxr.desktop.DesktopSession
@@ -38,21 +39,25 @@ import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
- * The spatial desktop's phone side: the glasses show the windows; this screen is the remote.
- * A touchpad moves the pointer in the focused window (tap to click, two fingers to scroll,
- * double-tap and hold to drag), and buttons open sites and arrange windows. Without glasses the
- * same scene is shown in a preview at the top, which can be dragged to look around.
+ * The spatial desktop's phone side: the glasses show the windows; this screen is the controller, made to be used
+ * without looking at it (docs/INTERFACE.md, "On the phone"). One line of state at the top. The upper two thirds are
+ * a touchpad that moves the pointer in the focused window (tap to select, two fingers to scroll, double-tap and hold
+ * to drag). The lower third is a d-pad with Select in its middle, "back" and "home" above it either side and "keys"
+ * and "more" below. Everything else (opening apps, the address, sizes, pocket mode, how the desktop behaves) is a
+ * plain list behind "more". Without glasses the same scene is shown in a preview above the touchpad, which can be
+ * dragged to look around.
  */
 class DesktopActivity : Activity() {
     private lateinit var session: DesktopSession
     private val ui = Handler(Looper.getMainLooper())
     private lateinit var displays: DisplayManager
     private lateinit var previewHost: FrameLayout
-    private lateinit var chips: LinearLayout
     private lateinit var status: TextView
     private lateinit var urlBox: EditText
-    private lateinit var moveButton: TextView
-    private lateinit var followButton: TextView
+    private lateinit var keysBox: EditText
+    private lateinit var keysBar: LinearLayout
+    private lateinit var sheet: ScrollView
+    private lateinit var sheetList: LinearLayout
     private lateinit var previewHint: TextView
     private var preview: GLSurfaceView? = null
     private var previewRenderer: DesktopRenderer? = null
@@ -63,12 +68,20 @@ class DesktopActivity : Activity() {
     private var backPressedAt = 0L
     private var active = false
     private var lastChips = ""
+    /** When a key of the phone's own d-pad last went down: it ticks by itself, so the session's tick for the same press is not given twice. */
+    private var padKeyAt = 0L
+    /** One of this screen's own text boxes is being typed into: keys are its own, not the focused window's. */
+    private val typing: Boolean get() = urlBox.hasFocus() || keysBox.hasFocus()
+    private val sheetOpen: Boolean get() = sheet.visibility == View.VISIBLE
+    private val keysOpen: Boolean get() = keysBar.visibility == View.VISIBLE
 
     private val frame = object : Choreographer.FrameCallback {
         override fun doFrame(t: Long) {
             if (!active) return
             session.tick(System.nanoTime())
-            if (status.text != session.statusLine) status.text = session.statusLine
+            // the state in words: what the session says of tracking, and what the keys do at this moment
+            val words = session.statusLine + (if (session.moving) " · moving a window" else if (session.pageInUse) " · keys go to the page" else "")
+            if (status.text.toString() != words) status.text = words
             // Machine-readable state for UI automation and accessibility tools.
             val d = session.debugState(); if (status.contentDescription != d) status.contentDescription = d
             Choreographer.getInstance().postFrameCallback(this)
@@ -91,7 +104,7 @@ class DesktopActivity : Activity() {
         Tracking.acquire(this)
         session = DesktopSession(this)
         session.onChanged = { refreshChips() }
-        session.onLookPress = { tick(heavy = false) }
+        session.onLookPress = { if (android.os.SystemClock.uptimeMillis() - padKeyAt > 150) tick(heavy = false) }
         // A game chosen in the home view starts in the XR browser, as it does from the launcher.
         session.onLaunchGame = { item ->
             runOnUiThread {
@@ -132,6 +145,9 @@ class DesktopActivity : Activity() {
         intent.getStringExtra("open_app")?.let { pkg -> window.decorView.postDelayed({ dev.ultraxr.shell.AppShell.componentOf(this, pkg)?.let { session.openApp(pkg.substringAfterLast('.'), it) } ?: Tracking.log("apps: $pkg is not installed") }, 4000) }
         // The home view opens on its main menu; windows from last time are put away, not closed (the phone lists them).
         session.showHome()
+        // A mark of the shelf on the main screen was tapped: that app opens as soon as this screen is up. (A moment
+        // later, so that the helper that runs Android apps in windows has had time to answer.)
+        HomeApps.all.getOrNull(intent.getIntExtra(EXTRA_OPEN_SHELF, -1))?.let { a -> window.decorView.postDelayed({ if (!isFinishing && !isDestroyed) session.open(a) }, 800) }
         refreshChips()
     }
 
@@ -178,7 +194,6 @@ class DesktopActivity : Activity() {
                 r.periodNs = (1e9 / d.refreshRate.coerceAtLeast(30f)).toLong()
                 val p = StagePresentation(this, d, r); p.show(); glasses = p
                 session.renderers = listOf(r)
-                previewHint.text = "Showing on the glasses"; previewHint.visibility = View.VISIBLE
                 Tracking.noteGraphics("desktop shown on glasses display ${d.displayId}")
                 stageTries = 0
             } catch (e: Exception) {
@@ -190,6 +205,7 @@ class DesktopActivity : Activity() {
     }
 
     private fun showPreview() {
+        previewHost.visibility = View.VISIBLE
         if (preview != null) { preview?.onResume(); return }
         val r = DesktopRenderer(true) { id, s -> session.onSurface(id, s) }
         val v = GLSurfaceView(this).apply { setEGLContextClientVersion(3); setRenderer(r); renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY }
@@ -206,7 +222,8 @@ class DesktopActivity : Activity() {
         previewHint.text = "Preview (no glasses). Drag to look around."; previewHint.visibility = View.VISIBLE
     }
 
-    private fun removePreview() { val v = preview ?: return; v.onPause(); previewHost.removeView(v); preview = null; previewRenderer = null }
+    /** With the glasses on, the preview and its place on the screen are gone: the touchpad has the whole upper two thirds. */
+    private fun removePreview() { previewHost.visibility = View.GONE; val v = preview ?: return; v.onPause(); previewHost.removeView(v); preview = null; previewRenderer = null }
     private fun dismissGlasses() { try { glasses?.dismiss() } catch (_: Exception) {}; glasses = null }
 
     private class StagePresentation(c: Context, d: Display, private val r: DesktopRenderer) : Presentation(c, d) {
@@ -222,128 +239,197 @@ class DesktopActivity : Activity() {
 
     // ---- phone interface
     private fun build() {
+        val all = FrameLayout(this)
         val root = Ui.column(this)
-        root.setPadding(Ui.dp(this, 16), Ui.dp(this, 44), Ui.dp(this, 16), Ui.dp(this, 16))
-        // Something other than the address box can hold focus, so keys go to the focused window.
+        Ui.fitBars(root, 16, 10, 10)
+        // Something other than a text box can hold focus, so keys go to the focused window.
         root.isFocusable = true; root.isFocusableInTouchMode = true; rootView = root
+
+        // one line: the name, and the state in words
         val head = Ui.row(this)
-        head.add(Ui.text(this, "Spatial desktop", 24f, bold = true), 0, weight = 1f)
-        status = Ui.chip(this); head.add(status, ViewGroup.LayoutParams.WRAP_CONTENT)
+        head.add(Ui.text(this, "Ultra XR", 17f, bold = true), ViewGroup.LayoutParams.WRAP_CONTENT)
+        status = Ui.text(this, "", 14f, Ui.DUSK).apply { gravity = Gravity.END; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+        head.add(status, 0, weight = 1f, startDp = 12)
         root.add(head)
 
-        previewHost = FrameLayout(this).apply { background = Ui.rounded(0xFF05080B.toInt(), 22f, this@DesktopActivity); clipToOutline = true }
-        previewHint = Ui.text(this, "", 12f, 0xFF8FA3B8.toInt()).apply { setPadding(Ui.dp(this@DesktopActivity, 12), Ui.dp(this@DesktopActivity, 8), 0, 0) }
+        // "keys": a line to type into, at the top so that Android's keyboard never covers it. Hidden until asked for.
+        keysBar = Ui.row(this).apply { visibility = View.GONE }
+        keysBox = field("Text for the page in focus", "Text to type", EditorInfo.IME_ACTION_SEND) { typeKeys() }
+        keysBar.add(keysBox, 0, weight = 1f)
+        keysBar.add(Ui.word(this, "type") { typeKeys() }.apply { contentDescription = "Type" }, ViewGroup.LayoutParams.WRAP_CONTENT, startDp = 6)
+        root.add(keysBar, topDp = 6)
+
+        // the preview: only while there are no glasses to show the scene
+        previewHost = FrameLayout(this).apply { visibility = View.GONE }
+        previewHint = Ui.text(this, "", 13f, Ui.DUSK).apply { setPadding(Ui.dp(this@DesktopActivity, 10), Ui.dp(this@DesktopActivity, 8), 0, 0) }
         previewHost.addView(previewHint, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        root.add(previewHost, h = Ui.dp(this, 170), topDp = 12)
+        root.add(previewHost, h = Ui.dp(this, 170), topDp = 10)
 
-        // open apps
-        val apps = Ui.row(this)
-        HomeApps.all.forEachIndexed { i, a ->
-            apps.add(small(a.title) { if (!session.open(a)) toast("Six windows is the limit: close one first") }, 0, weight = 1f, startDp = if (i == 0) 0 else 6)
-        }
-        root.add(apps, topDp = 10)
-
-        // open windows
-        chips = Ui.row(this)
-        root.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }, topDp = 10)
-
-        // address / text
-        val bar = Ui.row(this)
-        urlBox = EditText(this).apply {
-            hint = "Search, address, or text to type"; setSingleLine(); textSize = 15f; setTextColor(Ui.TEXT); setHintTextColor(0xFF6F8296.toInt())
-            background = Ui.rounded(Ui.SURFACE_HI, 16f, this@DesktopActivity); setPadding(Ui.dp(this@DesktopActivity, 14), 0, Ui.dp(this@DesktopActivity, 14), 0)
-            imeOptions = EditorInfo.IME_ACTION_GO; contentDescription = "Address"
-            setOnEditorActionListener { _, _, _ -> go(); true }
-        }
-        bar.add(urlBox, 0, Ui.dp(this, 46), weight = 1f)
-        bar.add(small("Go") { go() }, ViewGroup.LayoutParams.WRAP_CONTENT, startDp = 6)
-        bar.add(small("Type") { session.type(urlBox.text.toString(), true); urlBox.setText(""); hideKeyboard() }, ViewGroup.LayoutParams.WRAP_CONTENT, startDp = 6)
-        root.add(bar, topDp = 10)
-
-        // window controls
-        val c1 = Ui.row(this)
-        c1.add(small("Back") { session.back() }, 0, weight = 1f)
-        c1.add(small("Reload") { session.reload() }, 0, weight = 1f, startDp = 6)
-        followButton = small("Lock") { session.desktop.focused?.let { session.toggleFollow(it.id) } }
-        c1.add(followButton, 0, weight = 1.3f, startDp = 6)
-        c1.add(small("Min") { session.desktop.focused?.let { session.minimize(it.id) } }, 0, weight = 1f, startDp = 6)
-        c1.add(small("Max") { session.desktop.focused?.let { session.toggleMaximize(it.id) } }, 0, weight = 1f, startDp = 6)
-        root.add(c1, topDp = 10)
-        val c2 = Ui.row(this)
-        c2.add(small("Full") { session.desktop.focused?.let { session.toggleFullscreen(it.id) } }, 0, weight = 1f)
-        c2.add(small("Close") { session.desktop.focused?.let { session.close(it.id) } }, 0, weight = 1f, startDp = 6)
-        moveButton = small("Move") { session.toggleMove(); refreshChips() }
-        c2.add(moveButton, 0, weight = 1f, startDp = 6)
-        c2.add(small("Gather") { session.gather() }, 0, weight = 1f, startDp = 6)
-        c2.add(small("Tall") { session.toggleShape() }.apply { contentDescription = "Tall or wide" }, 0, weight = 1f, startDp = 6)
-        c2.add(small("More") { settings() }, 0, weight = 1f, startDp = 6)
-        root.add(c2, topDp = 6)
-        // one row for both, so the preview below keeps its place
-        val c3 = Ui.row(this)
-        c3.add(small("Main menu") { session.showHome() }.apply { contentDescription = "Main menu" }, 0, weight = 1f)
-        c3.add(small("Pocket mode") { enterPocket() }.apply { contentDescription = "Pocket mode" }, 0, weight = 1f, startDp = 6)
-        root.add(c3, topDp = 6)
-
-        // touchpad
-        val pad = TextView(this).apply {
-            background = Ui.rounded(Ui.SURFACE, 26f, this@DesktopActivity, 0x22FFFFFF)
-            gravity = Gravity.CENTER; setTextColor(0xFF52667A.toInt()); textSize = 13f; contentDescription = "Touchpad"
-            text = "Touchpad\nTap to click  ·  two fingers to scroll\nDouble-tap and hold to drag"
+        // the touchpad: the upper two thirds. Four corner brackets, as round a window in the glasses; Lamp under a finger.
+        val pad = Ui.text(this, "Slide to point  ·  tap to select\nTwo fingers to scroll\nDouble-tap and hold to drag", 14f, Ui.SLATE).apply {
+            background = Brackets(this@DesktopActivity, Ui.SLATE, armDp = 20f, closeOnPress = false)
+            gravity = Gravity.CENTER; contentDescription = "Touchpad"; setLineSpacing(0f, 1.4f)
         }
         pad.setOnTouchListener(Pad())
-        root.add(pad, h = 0, weight = 1f, topDp = 10)
-        setContentView(root)
+        root.add(pad, h = 0, weight = 2f, topDp = 10)
+
+        // the lower third: the d-pad, with "back" and "home" above it either side and "keys" and "more" below
+        val low = Ui.row(this)
+        val dpad = DpadView(this)
+        dpad.onKey = { key, down -> if (down) padKeyAt = android.os.SystemClock.uptimeMillis(); session.dpad(key, down) }
+        val left = Ui.column(this); val right = Ui.column(this)
+        // Back goes down and comes up, as a key does: held for a second it leaves a game's page (DesktopSession.dpad).
+        val back = side("back", "Back") { session.dpad(FocusKey.BACK, true); session.dpad(FocusKey.BACK, false) }
+        back.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { v.isPressed = true; padKeyAt = android.os.SystemClock.uptimeMillis(); tick(heavy = false); session.dpad(FocusKey.BACK, true) }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { v.isPressed = false; session.dpad(FocusKey.BACK, false) }
+            }
+            true
+        }
+        left.add(back, h = 0, weight = 1f)
+        left.add(side("keys", "Keys: type into the page in focus") { tick(heavy = false); if (keysOpen) closeKeys() else openKeys() }, h = 0, weight = 1f)
+        right.add(side("home", "Home: put the windows away and show the shelf") { tick(heavy = false); session.showHome() }, h = 0, weight = 1f)
+        right.add(side("more", "More: everything else, as a list") { tick(heavy = false); openSheet() }, h = 0, weight = 1f)
+        low.add(left, Ui.dp(this, 76), ViewGroup.LayoutParams.MATCH_PARENT)
+        low.add(dpad, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
+        low.add(right, Ui.dp(this, 76), ViewGroup.LayoutParams.MATCH_PARENT)
+        root.add(low, h = 0, weight = 1f, topDp = 8)
+        all.addView(root, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // "more": a second screen over this one, a plain list. Its ground is the screen's own, so nothing shows through.
+        val col = Ui.column(this)
+        Ui.fitBars(col, 16, 10, 28)
+        val top = Ui.row(this)
+        top.add(Ui.text(this, "More", 28f, bold = true), 0, weight = 1f)
+        top.add(Ui.word(this, "close") { closeSheet() }.apply { contentDescription = "Close the list" }, ViewGroup.LayoutParams.WRAP_CONTENT)
+        col.add(top)
+        val bar = Ui.row(this)
+        urlBox = field("Search or address", "Address", EditorInfo.IME_ACTION_GO) { go() }
+        bar.add(urlBox, 0, weight = 1f)
+        bar.add(Ui.word(this, "go") { go() }.apply { contentDescription = "Go" }, ViewGroup.LayoutParams.WRAP_CONTENT, startDp = 6)
+        col.add(bar, topDp = 8)
+        sheetList = Ui.column(this)
+        col.add(sheetList)
+        sheet = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(Ui.GROUND); isClickable = true; visibility = View.GONE; addView(col) }
+        all.addView(sheet, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        setContentView(all)
     }
 
-    private fun small(label: String, onClick: () -> Unit): TextView = Ui.button(this, label) { onClick() }.apply {
-        textSize = 13f; minHeight = Ui.dp(this@DesktopActivity, 42); setPadding(Ui.dp(this@DesktopActivity, 8), 0, Ui.dp(this@DesktopActivity, 8), 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+    /** One of the four words beside the d-pad. It fills its quarter of the side, so the thumb finds it without a look; its letters shrink before they would be cut. */
+    private fun side(label: String, says: String, onClick: () -> Unit): TextView = Ui.word(this, label, onClick).apply {
+        contentDescription = says; maxLines = 1; setPadding(0, 0, 0, 0)
+        background = WordLine(this@DesktopActivity, belowCentreDp = 15f * resources.configuration.fontScale.coerceAtMost(1.3f))
+        setAutoSizeTextTypeUniformWithConfiguration(11, 17, 1, TypedValue.COMPLEX_UNIT_SP)
     }
 
-    private fun go() { val t = urlBox.text.toString(); if (t.isBlank()) return; if (session.desktop.focused == null) session.open("Browser", HomeApps.toUrl(t)) else session.navigate(t); urlBox.setText(""); hideKeyboard() }
-    private fun hideKeyboard() { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(urlBox.windowToken, 0); urlBox.clearFocus(); rootView?.requestFocus() }
+    /** A line to type on: no box, a rule under it that turns to Lamp while it is typed into. */
+    private fun field(hint: String, says: String, action: Int, done: () -> Unit): EditText = EditText(this).apply {
+        this.hint = hint; setSingleLine(); textSize = 16f; typeface = Ui.face(this@DesktopActivity); setTextColor(Ui.CHALK); setHintTextColor(Ui.DUSK)
+        background = FieldLine(this@DesktopActivity); minHeight = Ui.dp(this@DesktopActivity, 48)
+        setPadding(Ui.dp(this@DesktopActivity, 2), Ui.dp(this@DesktopActivity, 8), Ui.dp(this@DesktopActivity, 2), Ui.dp(this@DesktopActivity, 10))
+        imeOptions = action; contentDescription = says
+        highlightColor = (Ui.LAMP and 0x00FFFFFF) or 0x55000000
+        textCursorDrawable = GradientDrawable().apply { setColor(Ui.LAMP); setSize(Ui.dp(this@DesktopActivity, 2), 0) }
+        setOnEditorActionListener { _, _, _ -> done(); true }
+    }
+
+    private fun go() { val t = urlBox.text.toString(); if (t.isBlank()) return; if (session.desktop.focused == null) session.open("Browser", HomeApps.toUrl(t)) else session.navigate(t); urlBox.setText(""); closeSheet() }
+    private fun hideKeyboard() {
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(urlBox.windowToken, 0); urlBox.clearFocus(); keysBox.clearFocus(); rootView?.requestFocus()
+    }
     private fun toast(s: String) = android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show()
 
+    // ---- "keys": Android's keyboard for the page in focus
+    private fun openKeys() {
+        if (session.desktop.focused == null) { toast("No window is in focus: open one first"); return }
+        keysBar.visibility = View.VISIBLE; keysBox.requestFocus()
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(keysBox, 0)
+    }
+    private fun closeKeys() { hideKeyboard(); keysBar.visibility = View.GONE }
+    /** What was typed goes to the page in focus, followed by Enter (an empty line is Enter alone). */
+    private fun typeKeys() { session.type(keysBox.text.toString(), true); keysBox.setText(""); closeKeys() }
+
+    // ---- "more": the list
+    private fun openSheet() { if (keysOpen) closeKeys(); fillSheet(); sheet.scrollTo(0, 0); sheet.visibility = View.VISIBLE }
+    private fun closeSheet() { hideKeyboard(); sheet.visibility = View.GONE }
+
+    /** Called whenever the windows change. The list behind "more" shows them, so it is written again if it is open. */
     private fun refreshChips() {
         val d = session.desktop
         val key = d.windows.joinToString("|") { "${it.id}:${it.title}:${it.minimized}:${it.id == d.focusedId}:${it.follow}:${it.maximized}" } + "/$moveMode/${d.fullscreenId}"
         if (key == lastChips) return
         lastChips = key
-        chips.removeAllViews()
-        if (d.windows.isEmpty()) chips.add(Ui.text(this, "No windows open. Pick an app above.", 13f, 0xFF8FA3B8.toInt()), ViewGroup.LayoutParams.WRAP_CONTENT)
-        d.windows.forEachIndexed { i, w ->
-            val focused = w.id == d.focusedId
-            val t = Ui.text(this, (if (w.minimized) "▁ " else "") + w.title.ifBlank { "Window" }.take(18), 13f, if (w.minimized) 0xFF7A8C9E.toInt() else Ui.TEXT, bold = focused).apply {
-                background = Ui.pressable(this@DesktopActivity, Ui.rounded(if (focused) 0xFF1F3B52.toInt() else Ui.SURFACE_HI, 18f, this@DesktopActivity, if (focused) 0xFF7BE6FF.toInt() else 0))
-                setPadding(Ui.dp(this@DesktopActivity, 14), Ui.dp(this@DesktopActivity, 9), Ui.dp(this@DesktopActivity, 14), Ui.dp(this@DesktopActivity, 9))
-                contentDescription = "Window ${w.id}"
-                setOnClickListener { if (w.minimized) session.desktop.restore(w.id) else session.focus(w.id); refreshChips() }
-            }
-            chips.add(t, ViewGroup.LayoutParams.WRAP_CONTENT, startDp = if (i == 0) 0 else 8)
-        }
+        if (sheetOpen) fillSheet()
         val f = d.focused
-        followButton.text = if (f?.follow == true) "Following" else "Locked"
-        moveButton.text = if (moveMode) "Moving ✓" else "Move"
-        if (f != null && !urlBox.hasFocus()) urlBox.hint = f.url.removePrefix("https://").removePrefix("www.").take(40).ifBlank { "Search or address" }
+        if (!urlBox.hasFocus()) urlBox.hint = f?.url?.removePrefix("https://")?.removePrefix("www.")?.take(40)?.ifBlank { null } ?: "Search or address"
     }
 
-    private fun settings() {
-        val col = Ui.column(this, 18)
-        fun box(label: String, value: Boolean, set: (Boolean) -> Unit) = CheckBox(this).apply { text = label; isChecked = value; setTextColor(Ui.TEXT); textSize = 15f; setOnCheckedChangeListener { _, b -> set(b) } }.also { col.add(it, topDp = 4) }
-        box("Focus the window I look at", session.gazeFocus) { session.gazeFocus = it }
-        box("Look to press: rest your gaze on an app or a title-bar button", session.lookToPress) { session.lookToPress = it }
-        box("Hand gestures (pinch to click, pinch a title bar to move)", session.handGestures) { session.handGestures = it }
-        box("Dim windows that are not focused", session.dimUnfocused) { session.dimUnfocused = it }
-        box("Dark pages (easier on see-through glasses; applies to new windows)", session.darkPages) { session.darkPages = it }
-        box("Use position tracking (experimental; off = rotation only)", session.usePosition) { session.usePosition = it }
-        box("Hand tracking (pinch to select, grab to move windows; off = touchpad and looking only)", Tracking.settings.handTracking) { Tracking.setHandTracking(it) }
-        box("3D depth (each eye gets half the sharpness across; returns to 2D by itself if the link fails)", session.depth3d) {
+    /**
+     * Everything that is not the touchpad or the d-pad, as one plain list: the open windows, the apps, what can be
+     * done with the window in focus and with all of them, pocket mode, how the desktop behaves, and the settings.
+     * A row that does something closes the list, so the touchpad is under the thumb again; a row that is on or off
+     * stays.
+     */
+    private fun fillSheet() {
+        val l = sheetList; l.removeAllViews()
+        val d = session.desktop; val f = d.focused
+        fun group(s: String) { l.add(Ui.label(this, s), topDp = 28) }
+        fun act(name: String, line: String, value: String = "", colour: Int = Ui.CHALK, run: () -> Unit): ListRow {
+            val r = ListRow(this).set(name, value, line); r.name.setTextColor(colour); r.onTap { run(); closeSheet() }; l.add(r); return r
+        }
+        fun onOff(name: String, line: String, get: () -> Boolean, set: (Boolean) -> Unit) {
+            val r = ListRow(this).set(name, "", line).onOff(get()); r.onTap { val n = !get(); set(n); r.onOff(n) }; l.add(r)
+        }
+
+        group("Windows")
+        if (d.windows.isEmpty()) l.add(Ui.text(this, "No windows are open. Open one below.", 15f, Ui.DUSK), topDp = 12)
+        for (w in d.windows) {
+            val focused = w.id == d.focusedId
+            val r = act(w.title.ifBlank { "Window" }.take(40), "", if (w.minimized) "put away" else if (focused) "in focus" else "") { if (w.minimized) session.desktop.restore(w.id) else session.focus(w.id); refreshChips() }
+            if (w.minimized) r.value.setTextColor(Ui.DUSK)
+            r.contentDescription = "Window ${w.id}, ${w.title.ifBlank { "untitled" }}" + (if (w.minimized) ", put away" else if (focused) ", in focus" else "")
+        }
+
+        group("Open")
+        for (a in HomeApps.all) act(a.title, "") { if (!session.open(a)) toast("Six windows is the limit: close one first") }.lead(MarkView(this, a.color, false, a.title.take(1)), 40)
+
+        group("The window in focus")
+        if (f == null) l.add(Ui.text(this, "No window is in focus, so these do nothing yet.", 15f, Ui.DUSK), topDp = 12)
+        act("Move", "Carry it with the touchpad or the d-pad. Select puts it down.", if (moveMode) "moving" else "") { session.toggleMove(); refreshChips() }
+        act("Min", "Puts it away. It stays in the list above.") { session.desktop.focused?.let { session.minimize(it.id) } }
+        act("Max", "As large as the view allows, and back again.", if (f?.maximized == true) "on" else "") { session.desktop.focused?.let { session.toggleMaximize(it.id) } }
+        act("Full", "Only this window, filling the view, and back again.", if (f != null && d.fullscreenId == f.id) "on" else "") { session.desktop.focused?.let { session.toggleFullscreen(it.id) } }
+        act("Pin", "A pinned window stays where it is in the room. Otherwise it follows your head.", if (f == null) "" else if (f.follow) "follows your head" else "pinned to the room") { session.desktop.focused?.let { session.toggleFollow(it.id) } }
+            .also { if (f?.follow == false) it.value.setTextColor(Ui.TIDE) }      // Tide: pinned to the room, as its pin is in the glasses
+        act("Tall or wide", "Stands the window up, or lays it down again.") { session.toggleShape() }
+        act("Page back", "The page before this one.") { session.back() }
+        act("Reload", "Loads the page again.") { session.reload() }
+        act("Close", "Closes this window.", colour = Ui.EMBER) { session.desktop.focused?.let { session.close(it.id) } }
+
+        group("All windows")
+        act("Gather", "Brings every window in front of you.") { session.gather() }
+        act("Main menu", "Puts the windows away and shows the shelf. The same as \"home\".") { session.showHome() }
+        act("Recentre", "Where you face now becomes straight ahead.") { session.recenter() }
+        act("Close all windows", "Every window is closed, not put away.", colour = Ui.EMBER) { session.resetLayout() }
+
+        group("This phone")
+        act("Pocket mode", "The whole screen becomes a black touchpad that works by feel. Back, twice, leaves it.") { enterPocket() }
+        act("Settings", "Eye distance, the room, hand tracking and the rest.") { startActivity(Intent(this, SettingsActivity::class.java)) }
+
+        group("How the desktop behaves")
+        onOff("Focus the window I look at", "Looking at a window is enough to bring the focus to it.", { session.gazeFocus }) { session.gazeFocus = it }
+        onOff("Pointer by looking", "Resting your gaze on a mark or a word presses it: no phone and no hands needed.", { session.lookToPress }) { session.lookToPress = it }
+        onOff("Hand gestures", "Pinch to select; pinch \"move\" to carry a window.", { session.handGestures }) { session.handGestures = it }
+        onOff("Dim other windows", "Windows that are not in focus are drawn fainter.", { session.dimUnfocused }) { session.dimUnfocused = it }
+        onOff("Dark pages", "Easier on see-through glasses. Applies to windows opened from now on.", { session.darkPages }) { session.darkPages = it }
+        onOff("Position tracking", "Experimental. Off: the windows follow turning only.", { session.usePosition }) { session.usePosition = it }
+        onOff("Hand tracking", "Off: the touchpad, the d-pad and looking only.", { Tracking.settings.handTracking }) { Tracking.setHandTracking(it) }
+        onOff("3D depth", "Each eye gets half the sharpness across. Goes back to 2D by itself if the link fails.", { session.depth3d }) {
             session.depth3d = it; Tracking.link?.stereo?.reset(); Tracking.stereoWant("desktop", it)
         }
-        box("Swap left and right eye (if depth looks inside out)", session.swapEyes) { session.swapEyes = it }
-        col.add(small("Recenter view") { session.recenter() }, topDp = 12)
-        col.add(small("Close all windows") { session.resetLayout() }, topDp = 6)
-        session.dialogOpen = true      // its keys are its own
-        AlertDialog.Builder(this).setTitle("Desktop settings").setView(col).setPositiveButton("Done", null).setOnDismissListener { session.dialogOpen = false }.show()
+        onOff("Swap left and right eye", "If depth looks inside out.", { session.swapEyes }) { session.swapEyes = it }
     }
 
     // ---- pocket mode: the whole screen is a black touchpad that works by feel
@@ -381,6 +467,9 @@ class DesktopActivity : Activity() {
             if (now - backPressedAt < 1500) exitPocket() else { backPressedAt = now; tick(heavy = false) }
             return
         }
+        // The list, then the line to type on, are what Back leaves first.
+        if (sheetOpen) { closeSheet(); return }
+        if (keysOpen) { closeKeys(); return }
         // Back as Android reports it when it does not send the key (a swipe from the edge on newer versions): the same
         // Back of the one focus. Only from the shelf, where Back does nothing, does it leave this screen.
         if (session.desktop.focus !is Focus.Shelf) { session.press(FocusKey.BACK); return }
@@ -399,16 +488,17 @@ class DesktopActivity : Activity() {
      * into the focused window, the volume keys scroll it. Menu shows the main menu.
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (!urlBox.hasFocus()) {
+        if (!typing) {
             if (event.keyCode == KeyEvent.KEYCODE_MENU && pocket == null) { if (event.action == KeyEvent.ACTION_UP) session.showHome(); return true }
-            // The phone's own Back key still leaves pocket mode (pressed twice) and, with the focus on the shelf, where
-            // Back does nothing, this screen. A gamepad's B and a keyboard's Escape never leave the screen.
+            // The phone's own Back key still leaves pocket mode (pressed twice), the list behind "more" and the line to
+            // type on, and, with the focus on the shelf, where Back does nothing, this screen. A gamepad's B and a
+            // keyboard's Escape never leave the screen.
             val fromPad = event.source and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD || event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
             val phoneBack = event.keyCode == KeyEvent.KEYCODE_BACK && !fromPad
-            if (!(phoneBack && (pocket != null || session.desktop.focus is Focus.Shelf)) && session.key(event)) return true
+            if (!(phoneBack && (pocket != null || sheetOpen || keysOpen || session.desktop.focus is Focus.Shelf)) && session.key(event)) return true
         }
-        // A hardware keyboard types into the focused window, unless the address box is being used.
-        if (!urlBox.hasFocus() && event.keyCode != KeyEvent.KEYCODE_BACK && !KeyEvent.isGamepadButton(event.keyCode)
+        // A hardware keyboard types into the focused window, unless one of this screen's text boxes is being used.
+        if (!typing && event.keyCode != KeyEvent.KEYCODE_BACK && !KeyEvent.isGamepadButton(event.keyCode)
             && event.keyCode != KeyEvent.KEYCODE_VOLUME_DOWN && event.keyCode != KeyEvent.KEYCODE_VOLUME_UP && (event.source == 0 || event.source and InputDevice.SOURCE_KEYBOARD == InputDevice.SOURCE_KEYBOARD)
             && session.focusedWeb()?.forwardKey(event) == true) return true
         // The volume keys scroll the focused window, so it can be done by feel with the glasses on.
@@ -456,6 +546,8 @@ class DesktopActivity : Activity() {
         private var span = 0f
         override fun onTouch(v: View, e: MotionEvent): Boolean {
             val w = v.width.coerceAtLeast(1).toFloat(); val slop = Ui.dp(this@DesktopActivity, 10)
+            // the pad's brackets show the finger on it (nothing else here depends on this)
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) v.isPressed = true else if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) v.isPressed = false
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     lx = e.x; ly = e.y; sx = e.x; sy = e.y; downAt = e.eventTime; moved = false; multi = false; maxPointers = 1
@@ -496,5 +588,5 @@ class DesktopActivity : Activity() {
         private fun span(e: MotionEvent) = hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
     }
 
-    companion object { const val EXTRA_AUTOMATION = "automation"; const val EXTRA_STEREO_PREVIEW = "stereo_preview" }
+    companion object { const val EXTRA_AUTOMATION = "automation"; const val EXTRA_STEREO_PREVIEW = "stereo_preview"; const val EXTRA_OPEN_SHELF = "open_shelf" }
 }

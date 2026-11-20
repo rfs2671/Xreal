@@ -3,7 +3,6 @@ package dev.ultraxr.render
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.Typeface
 import android.opengl.GLES30
 import android.opengl.GLUtils
 import android.opengl.Matrix
@@ -229,7 +228,7 @@ class Draw {
     }
 
     private fun makeText(s: String): IntArray {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 72f; color = -1; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 72f; color = -1; typeface = dev.ultraxr.desktop.Type.bold }      // the one family everything in the glasses is set in
         val w = (paint.measureText(s) + 16).toInt().coerceAtLeast(8); val h = 96
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         Canvas(bmp).drawText(s, 8f, 70f, paint)

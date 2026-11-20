@@ -20,6 +20,12 @@ class Settings(context: Context) {
     var ipdMm: Float get() = p.getFloat("ipd", 64f); set(v) = p.edit().putFloat("ipd", v).apply()
     /** Multiplies the display field of view; tune until virtual objects stay fixed against the room. */
     var fovScale: Float get() = p.getFloat("fovScale", 1f); set(v) = p.edit().putFloat("fovScale", v).apply()
+    /** How bright the desktop draws in the glasses, 0.3 to 1: everything it draws there is multiplied by this (the glasses' own brightness keys are apart from it). */
+    var pictureBrightness: Float get() = p.getFloat("picture_brightness", 1f).coerceIn(0.3f, 1f); set(v) = p.edit().putFloat("picture_brightness", v.coerceIn(0.3f, 1f)).apply()
+    /** How far away the desktop opens a new window, metres. Its size follows, so that it looks as large at any distance. */
+    var windowDistanceM: Float get() = p.getFloat("window_distance", 2f).coerceIn(1f, 4f); set(v) = p.edit().putFloat("window_distance", v.coerceIn(1f, 4f)).apply()
+    /** Nothing in the glasses moves by itself, as with Android's own "remove animations", which is honoured as well. */
+    var reduceMotion: Boolean get() = p.getBoolean("reduce_motion", false); set(v) = p.edit().putBoolean("reduce_motion", v).apply()
     var standingHeightM: Float get() = p.getFloat("height", 1.6f); set(v) = p.edit().putFloat("height", v).apply()
     /** Find the floor, table tops and walls with the tracking cameras. */
     var roomScan: Boolean get() = p.getBoolean("room_scan", true); set(v) = p.edit().putBoolean("room_scan", v).apply()
@@ -55,6 +61,8 @@ class Settings(context: Context) {
     var xrInput: String get() = p.getString("xrInput", "auto") ?: "auto"; set(v) = p.edit().putString("xrInput", v).apply()
     var batterySaver: Boolean get() = p.getBoolean("saver", false); set(v) = p.edit().putBoolean("saver", v).apply()
     var firstRunDone: Boolean get() = p.getBoolean("firstRun", false); set(v) = p.edit().putBoolean("firstRun", v).apply()
+    /** The set-up on the phone (ui/SetupActivity) has been gone through to its end once. It never shows by itself again. */
+    var setupDone: Boolean get() = p.getBoolean("setupDone", false); set(v) = p.edit().putBoolean("setupDone", v).apply()
     var bestScore: Int get() = p.getInt("best", 0); set(v) = p.edit().putInt("best", v).apply()
     var lastCheckSummary: String get() = p.getString("lastCheck", "") ?: ""; set(v) = p.edit().putString("lastCheck", v).apply()
 }

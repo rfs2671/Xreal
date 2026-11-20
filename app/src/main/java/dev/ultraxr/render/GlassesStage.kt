@@ -49,6 +49,7 @@ class GlassesStage(private val activity: Activity, private val previewHost: View
     fun start() {
         if (active) return
         active = true
+        dev.ultraxr.desktop.Type.load(activity)      // the type the scenes' text is set in
         displays.registerDisplayListener(listener, ui)
         refresh()
     }

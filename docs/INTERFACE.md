@@ -144,3 +144,27 @@ Android's questions for the owner.
 (Kept up to date as the work goes.)
 
 - 19 November 2026: the marks are drawn in line (`desktop/HomeIcon.kt`), seen on the phone's screen only.
+- 19 November 2026, night: all of the above is built.
+  - Behaviour: `desktop/Focus.kt` (the table as a pure model), free sizing, moving, pin and close from the handle,
+    d-pad and gamepad keys, keys into a page in use.
+  - In the glasses: `desktop/Shelf.kt`, `Type.kt`, `SettingsPage.kt`, and `DesktopRenderer`/`DesktopSession`
+    redrawn: shelf, status line, corner brackets, title and pin, handle words, opening and closing motion,
+    settings as a window.
+  - On the phone: `ui/Widgets.kt`, the controller (`DesktopActivity`), the main screen, settings, and
+    `SetupActivity`.
+  - Unit tests: 192, none failing (focus table, shelf layout, settings list among them).
+  - Seen on the phone (S21 Ultra, no glasses): the main screen, the controller with its d-pad, and the shelf with
+    its status line in the phone's small preview, drawn at 120 pictures a second with no drawing error; the focus
+    walks along the shelf on d-pad keys and Select starts a game.
+  - **Not yet seen:** anything in the glasses; a window open with its brackets, title and handle; sizing and
+    moving; the settings window; the set-up sequence; the motion.
+  - Where it differs from the design above: a new window is 0.84 m wide at 2 m (24 degrees) so that status line,
+    title, window, handle and shelf all fit in 27 degrees; the status line stands in the room above the shelf, not
+    fixed to the head; the handle is about 16 degrees wide whatever the window's width; settings show four rows at
+    a time; "mark the room" in the glasses only says that it is started from the phone; minimise and maximise are
+    on the phone only; a "System" mark is kept beside Settings; other apps' own icons are not shown (a ring in
+    the icon's colour and a letter); the status line does not yet report an undone set-up step.
+  - Known to be broken by this: `tools/ui-automation/desktop_test.py` (it taps buttons that are now behind "more").
+  - The app's own helper for other apps' windows asks Android for USB debugging ("Allow USB debugging?"); that
+    question came up on the phone during this check. It is the owner's to answer, and it is one of the questions
+    the set-up must bring down to once.

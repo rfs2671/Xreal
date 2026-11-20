@@ -32,11 +32,10 @@ class DesktopWindow(
     var follow: Boolean = false,
     var minimized: Boolean = false,
     var maximized: Boolean = false,
-    /** A window kind decides defaults such as the user agent: "web", "youtube", "xbox". */
+    /** A window kind decides defaults such as the user agent: "web", "youtube", "xbox"; "app" is another app, "settings" the settings drawn by the desktop itself. */
     val kind: String = "web",
 ) {
     val height: Double get() = width / aspect
-    val barHeight: Double get() = (width * BAR_FRACTION).coerceIn(0.05, 0.11)
 
     /** Size and placement actually shown: a maximized window is large, centred and close. */
     fun shownWidth(): Double = if (maximized) MAXIMIZED_WIDTH else width
@@ -44,10 +43,15 @@ class DesktopWindow(
     fun shownDistance(): Double = if (maximized) MAX_DISTANCE else distance
     fun shownYaw(): Double = if (maximized) 0.0 else yaw
     fun shownPitch(): Double = if (maximized) 0.0 else pitch
-    fun shownBarHeight(): Double = (shownWidth() * BAR_FRACTION).coerceIn(0.05, 0.11)
-    /** The handle's words under the window stand as high as the title bar. */
-    fun shownHandleHeight(): Double = shownBarHeight()
-    /** How far from a corner of the page, inwards and sideways, a pointer still has hold of that corner. */
+    /** The strip the handle's words stand on, under the window: their x-height looks the same at any distance ([Sight.BODY]). */
+    fun shownHandleHeight(): Double = Sight.metres(Sight.BODY, shownDistance()) * 2.6
+    /** The handle is as wide as its four words need and no wider than the window, in the middle under it. */
+    fun shownHandleWidth(): Double = minOf(shownWidth(), shownHandleHeight() * 11.0)
+    /** The space between the page's lower edge and the handle: the lower brackets are drawn in it. */
+    fun shownHandleGap(): Double = Sight.metres(Math.toRadians(0.5), shownDistance())
+    /** From the window's middle down to the handle's lower edge. */
+    fun shownBelow(): Double = shownHeight() / 2 + shownHandleGap() + shownHandleHeight()
+    /** How far from a corner of the page, inwards and sideways, a pointer still has hold of that corner. A corner's bracket has arms of this length. */
     fun shownCornerReach(): Double = (shownWidth() * 0.06).coerceIn(0.04, 0.09)
     /** A game's page takes every key of a gamepad while it is in use (see [FocusModel]). */
     val isGame: Boolean get() = kind == "xbox"
@@ -57,12 +61,12 @@ class DesktopWindow(
         .put("maximized", maximized).put("kind", kind)
 
     companion object {
-        const val BAR_FRACTION = 0.05
         const val MIN_WIDTH = 0.4
         const val MAX_WIDTH = 3.2
-        // The glasses show about 43 x 25 degrees. A new window takes roughly three quarters of that
-        // width; a maximized one fills it, leaving a margin for its title bar.
-        const val DEFAULT_WIDTH = 1.15
+        // The glasses show about 46 x 27 degrees. A new window is 24 degrees wide and 13.5 high: with its title above
+        // and its handle below it then stands between the status line and the shelf, all of it in view at once
+        // (see Shelf.clearPitch; ShelfTest checks it). A maximized one fills the view.
+        const val DEFAULT_WIDTH = 0.84
         const val DEFAULT_DISTANCE = 2.0
         const val MAXIMIZED_WIDTH = 1.55
         const val MAX_DISTANCE = 2.2
@@ -91,16 +95,14 @@ class DesktopWindow(
 }
 
 /** Where a ray meets a window. [u], [v] run 0..1 across the content, left to right and top to bottom. */
-class WindowHit(val window: DesktopWindow, val u: Double, val v: Double, val onBar: Boolean, val barButton: BarButton?, val distance: Double,
-    /** Below the page, where the handle's words are (only the window in focus has them); [handleWord] is the word, null between them and the page. */
+class WindowHit(val window: DesktopWindow, val u: Double, val v: Double, val distance: Double,
+    /** Below the page, where the handle's words are (only the window in focus has them); [handleWord] is the word, null between and beside them. */
     val onHandle: Boolean = false, val handleWord: HandleWord? = null,
     /** The corner of the page the ray has hold of, for sizing by dragging: 0 top left, 1 top right, 2 bottom left, 3 bottom right, -1 none. */
     val corner: Int = -1) {
     /** On the page itself, where a press is a touch. */
-    val onPage: Boolean get() = !onBar && !onHandle && u in 0.0..1.0
+    val onPage: Boolean get() = !onHandle && u in 0.0..1.0
 }
-
-enum class BarButton { FOLLOW, MINIMIZE, MAXIMIZE, CLOSE }
 
 /**
  * The heading that "Follow head" windows are placed against. It does not copy the head: it stays
@@ -263,12 +265,14 @@ class Desktop {
     /** A look rested on window [id]: the focus goes to that window, unless it is on it already. */
     fun look(id: Int): Boolean = if (focus.windowId == id) false else point(Focus.Window(id))
 
-    /** What a pointer at ([u], [v]) of window [w] is over; v is below 0 on the title bar and above 1 on the handle. */
+    /** What a pointer at ([u], [v]) of window [w] is over; v is above 1 under the page, where the handle is. */
     fun focusAt(w: DesktopWindow, u: Double, v: Double): Focus = when {
         v < 0.0 -> Focus.Window(w.id)
-        v > 1.0 -> (if ((v - 1.0) * w.shownHeight() >= HandleStrip.GAP) HandleStrip.wordAt(u) else null)?.let { Focus.Handle(w.id, it) } ?: Focus.Window(w.id)
+        v > 1.0 -> (if ((v - 1.0) * w.shownHeight() >= w.shownHandleGap()) HandleStrip.wordAt(handleU(w, (u - 0.5) * w.shownWidth())) else null)?.let { Focus.Handle(w.id, it) } ?: Focus.Window(w.id)
         else -> Focus.Page(w.id)
     }
+    /** Where [x] metres to the right of the window's middle is across its handle, 0..1 (outside that: beside the words). */
+    private fun handleU(w: DesktopWindow, x: Double) = x / w.shownHandleWidth() + 0.5
     fun focusAt(h: WindowHit): Focus = when {
         h.handleWord != null -> Focus.Handle(h.window.id, h.handleWord)
         h.onPage -> Focus.Page(h.window.id)
@@ -383,25 +387,25 @@ class Desktop {
     fun find(id: Int) = windows.firstOrNull { it.id == id }
     fun worldYaw(w: DesktopWindow) = if (w.follow) Geometry.wrap(w.shownYaw() + followAnchor.yaw) else w.shownYaw()
 
-    /** The nearest visible window the ray hits (content or title bar), or null. */
+    /** The nearest visible window the ray hits (its page, a corner's bracket, or the handle under the one in focus), or null. */
     fun hit(origin: DoubleArray, dir: DoubleArray, anchor: DoubleArray): WindowHit? {
         var best: WindowHit? = null
         for (w in visible) {
             val yaw = worldYaw(w); val pitch = w.shownPitch()
             val c = Geometry.centre(anchor, yaw, pitch, w.shownDistance())
             val h = Geometry.planeHit(origin, dir, c, yaw, pitch) ?: continue
-            val ww = w.shownWidth(); val wh = w.shownHeight(); val bar = w.shownBarHeight()
+            val ww = w.shownWidth(); val wh = w.shownHeight(); val gap = w.shownHandleGap()
             val x = h[0]; val y = h[1]
             // only the window in focus has its handle under it; a corner can be taken hold of a little beside the page too
-            val handle = if (w.id == handleId) HandleStrip.GAP + w.shownHandleHeight() else 0.0
+            val handle = if (w.id == handleId) gap + w.shownHandleHeight() else 0.0
             val reach = if (w.id == fullscreenId) 0.0 else w.shownCornerReach()
-            if (abs(x) > ww / 2 + reach || y < -wh / 2 - handle || y > wh / 2 + bar) continue
-            val onBar = y > wh / 2; val onHandle = y < -wh / 2
-            val byCorner = !onBar && !onHandle && reach > 0 && abs(x) >= ww / 2 - reach && abs(y) >= wh / 2 - reach
+            if (abs(x) > ww / 2 + reach || y < -wh / 2 - handle || y > wh / 2) continue
+            val onHandle = y < -wh / 2
+            val byCorner = !onHandle && reach > 0 && abs(x) >= ww / 2 - reach && abs(y) >= wh / 2 - reach
             if (abs(x) > ww / 2 && !byCorner) continue
             val u = x / ww + 0.5; val v = 0.5 - y / wh
-            val hitNow = WindowHit(w, u, v, onBar, if (onBar) barButtonAt(u) else null, h[2], onHandle,
-                if (onHandle && y <= -wh / 2 - HandleStrip.GAP) HandleStrip.wordAt(u) else null, if (byCorner) (if (y > 0) 0 else 2) + (if (x > 0) 1 else 0) else -1)
+            val hitNow = WindowHit(w, u, v, h[2], onHandle,
+                if (onHandle && y <= -wh / 2 - gap) HandleStrip.wordAt(handleU(w, x)) else null, if (byCorner) (if (y > 0) 0 else 2) + (if (x > 0) 1 else 0) else -1)
             if (best == null || hitNow.distance < best.distance) best = hitNow
         }
         return best
@@ -429,24 +433,10 @@ class Desktop {
         const val SIZE_STEP = 1.04
         /** Yaw offsets in degrees for the first, second, ... open window. */
         val SLOTS = doubleArrayOf(0.0, -40.0, 40.0, -80.0, 80.0, 0.0)
-        /** Title-bar buttons occupy the right end of the bar; fractions of the bar's width. */
-        const val BUTTON_FRACTION = 0.07
-        fun barButtonAt(u: Double): BarButton? {
-            val fromRight = ((1.0 - u) / BUTTON_FRACTION).toInt()
-            return when {
-                u < 0 || u > 1 -> null
-                fromRight == 0 -> BarButton.CLOSE
-                fromRight == 1 -> BarButton.MAXIMIZE
-                fromRight == 2 -> BarButton.MINIMIZE
-                fromRight == 3 -> BarButton.FOLLOW
-                else -> null
-            }
-        }
     }
 }
 
-/** Sites offered on the home screen. */
-/** A tile of the dock and the home view: a site, and the installed app ([pkg]) that is shown instead when it can be. */
+/** A site offered on the shelf, and the installed app ([pkg]) that is shown instead when it can be. */
 class HomeApp(val title: String, val url: String, val kind: String, val color: Int, val pkg: String = "")
 
 object HomeApps {
@@ -456,9 +446,6 @@ object HomeApps {
         HomeApp("Browser", "https://www.google.com/", "web", 0xFF1E88E5.toInt()),
         HomeApp("3D web", "https://threejs.org/examples/#webgl_animation_keyframes", "web", 0xFF8E24AA.toInt()),
     )
-
-    /** The dock under the windows: the same apps, and a way back to the main menu without the phone. */
-    val dock = all + HomeApp("Menu", "nav:home", "nav", 0xFF607D8B.toInt())
 
     /** Turns what the user typed into a URL: a full URL, a bare host, or a web search. */
     fun toUrl(input: String): String {
@@ -495,12 +482,6 @@ class Dwell(private val holdNs: Long = 900_000_000L, private val armNs: Long = 2
 }
 
 /**
- * The rail: one thin line around the user just below eye level. Windows sit above it; the dock
- * (the apps that can be opened) hangs below it and comes into view when the head tips down.
- * All of it stays inside the central part of the glasses' 43 x 25 degree view when looked at,
- * because the edges of the optics are the least sharp.
- */
-/**
  * Two-eye geometry for the glasses' 3D mode. Each eye sits half the eye distance to the side of the
  * head's centre. The glasses' optics show both panels converged at [CONVERGENCE_M] (where a flat 2D
  * picture appears), so each eye's view is turned towards the nose by [shift]: something at that
@@ -518,26 +499,4 @@ object Stereo {
 
     /** Where a point [x] to the right and [depth] ahead of the head's centre lands in that eye's picture, -1..1. */
     fun pictureX(x: Double, depth: Double, eyeOffset: Double, tanH: Double): Double = ((x - eyeOffset) / depth - shift(eyeOffset)) / tanH
-}
-
-object Rail {
-    val PITCH = Math.toRadians(-11.0)
-    const val RADIUS = 2.0
-    const val SEGMENTS = 48
-    const val THICKNESS = 0.0035
-    val DOCK_PITCH = Math.toRadians(-17.5)
-    const val DOCK_DISTANCE = 2.0
-    const val DOCK_WIDTH = 1.1
-    const val DOCK_HEIGHT = 0.22
-
-    /** Which dock tile a horizontal position [u] (0..1 across the dock) falls on, of [count] equal tiles. */
-    fun tileAt(u: Double, count: Int): Int? = if (count <= 0 || u < 0.0 || u >= 1.0) null else (u * count).toInt().coerceIn(0, count - 1)
-
-    /** The dock tile a ray looks at, or null. The dock faces the user at heading [dockYaw]. */
-    fun dockTile(origin: DoubleArray, dir: DoubleArray, anchor: DoubleArray, dockYaw: Double, count: Int): Int? {
-        val c = Geometry.centre(anchor, dockYaw, DOCK_PITCH, DOCK_DISTANCE)
-        val h = Geometry.planeHit(origin, dir, c, dockYaw, DOCK_PITCH) ?: return null
-        if (kotlin.math.abs(h[1]) > DOCK_HEIGHT / 2) return null
-        return tileAt(h[0] / DOCK_WIDTH + 0.5, count)
-    }
 }

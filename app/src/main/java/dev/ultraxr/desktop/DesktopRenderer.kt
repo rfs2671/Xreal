@@ -15,46 +15,71 @@ import java.nio.ByteOrder
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
+/** A picture drawn once with the 2D canvas (a mark, a piece of text) and shown as it is. [key] names what it shows: the same key is the same picture. */
+class Sprite(val key: String, val bitmap: Bitmap)
+
 /** What the renderer needs to know about one window for one frame. Immutable. */
 class RenderWindow(
-    val id: Int, val yaw: Double, val pitch: Double, val distance: Double, val width: Double, val height: Double, val barHeight: Double,
-    val focused: Boolean, val cursorU: Double, val cursorV: Double, val showCursor: Boolean, val pressed: Boolean,
-    val bar: Bitmap?, val barVersion: Long, val headLocked: Boolean,
-    /** The line round the window is lit: the focus is on the window itself (not on its page or its handle). */
-    val outline: Boolean = focused,
-    /** The handle's words under the window in focus, [handleHeight] metres high; null for the others. */
-    val handle: Bitmap? = null, val handleVersion: Long = 0, val handleHeight: Double = 0.0,
+    val id: Int, val yaw: Double, val pitch: Double, val distance: Double, val width: Double, val height: Double,
+    val focused: Boolean, val cursorU: Double, val cursorV: Double, val showCursor: Boolean, val pressed: Boolean, val headLocked: Boolean,
+    /** How far the brackets are lit, 0..1: 1 when the focus is on the window itself (not on its page or its handle). It rises and falls as the focus moves. */
+    val glow: Float = 0f,
+    /** The focus is somewhere on this window: its brackets are Chalk, not Slate. */
+    val near: Boolean = false,
+    /** How much of the brackets is drawn, 0..1 (they draw themselves last when a window opens), and how long their arms are, metres. */
+    val bracket: Float = 1f, val arm: Double = 0.05,
+    /** The title above the top-left bracket and the handle's words under the window, for the window in focus; null for the others. */
+    val title: Sprite? = null, val handle: Sprite? = null, val handleWidth: Double = 0.0, val handleHeight: Double = 0.0, val handleGap: Double = 0.0,
+    /** The window is on its way out of its mark or back into it. */
+    val growing: Boolean = false,
     /** The size of the page's picture, which follows the window's shape. */
     val pixelW: Int = WebWindow.PIXEL_WIDTH, val pixelH: Int = WebWindow.PIXEL_HEIGHT,
 )
 
-class RenderFrame(val windows: List<RenderWindow>, val anchor: DoubleArray, val home: Bitmap?, val homeVersion: Long, val homeYaw: Double,
-    val usePosition: Boolean, val dim: Float,
-    /** The dock under the rail (always shown unless a window is fullscreen), facing [dockYaw]. */
-    val dock: Bitmap? = null, val dockVersion: Long = 0, val dockYaw: Double = 0.0,
-    /** The stretch of rail under the focused window is lit: centre heading and half-width, radians. NaN for none. */
-    val railYaw: Double = Double.NaN, val railHalf: Double = 0.0, val showRail: Boolean = true,
-    /** Look-to-press progress ring: world direction, distance, and 0..1 (0 hides it). */
-    val dwellYaw: Double = 0.0, val dwellPitch: Double = 0.0, val dwellDistance: Double = 2.0, val dwellProgress: Double = 0.0)
+/** One mark of the shelf: which way it lies from the wearer, how large (1 at rest, [Shelf.FOCUS_SCALE] in focus), and how strongly it is drawn. */
+class RenderMark(val yaw: Double, val scale: Double, val sprite: Sprite, val alpha: Float = 1f)
 
-/** The interface is drawn with light on nothing: black is see-through on the glasses. */
+/**
+ * The shelf and the status line, on their arc ([Shelf]). [yaw] is the heading the shelf faces; [name] stands under the
+ * mark at [nameYaw]; [moreLeft] and [moreRight] are where a small dot says that the row goes on (NaN for none).
+ */
+class RenderShelf(val marks: List<RenderMark>, val name: Sprite?, val nameYaw: Double, val status: Sprite?, val yaw: Double,
+    val moreLeft: Double = Double.NaN, val moreRight: Double = Double.NaN)
+
+class RenderFrame(val windows: List<RenderWindow>, val anchor: DoubleArray, val shelf: RenderShelf?, val usePosition: Boolean, val dim: Float,
+    /** Everything the glasses are shown is multiplied by this (the picture brightness of the settings). */
+    val brightness: Float = 1f,
+    /** Look-to-press progress ring: world direction, distance, 0..1 (0 hides it), and how large it is, metres (0: as large as suits the distance). */
+    val dwellYaw: Double = 0.0, val dwellPitch: Double = 0.0, val dwellDistance: Double = 2.0, val dwellProgress: Double = 0.0, val dwellSize: Double = 0.0)
+
+/**
+ * The interface is drawn with light on nothing: black is see-through on the glasses. These six are all its colours
+ * (docs/INTERFACE.md, "Colour"); the only other colour is an app's own, on the ring of its mark.
+ */
 object Ink {
-    val AMBER = floatArrayOf(1.0f, 0.706f, 0.329f)     // #FFB454 focus
-    val WHITE = floatArrayOf(0.949f, 0.957f, 0.941f)   // #F2F4F0 text
-    val SLATE = floatArrayOf(0.361f, 0.400f, 0.439f)   // #5C6670 idle lines
-    const val AMBER_INT = 0xFFFFB454.toInt(); const val WHITE_INT = 0xFFF2F4F0.toInt(); const val SLATE_INT = 0xFF8A949E.toInt(); const val CORAL_INT = 0xFFFF6B5E.toInt()
+    val WHITE = floatArrayOf(0.949f, 0.957f, 0.941f)   // Chalk #F2F4F0: text, resting lines
+    val AMBER = floatArrayOf(1.0f, 0.706f, 0.329f)     // Lamp #FFB454: the one thing in focus
+    val TIDE = floatArrayOf(0.435f, 0.839f, 0.816f)    // Tide #6FD6D0: pinned to the room; things that are set and steady
+    val CORAL = floatArrayOf(1.0f, 0.420f, 0.369f)     // Ember #FF6B5E: close, delete, something wrong
+    val DUSK = floatArrayOf(0.541f, 0.580f, 0.620f)    // Dusk #8A949E: labels of things not in focus, hints
+    val SLATE = floatArrayOf(0.361f, 0.400f, 0.439f)   // Slate #5C6670: idle lines far from focus
+    const val CHALK_INT = 0xFFF2F4F0.toInt(); const val LAMP_INT = 0xFFFFB454.toInt(); const val TIDE_INT = 0xFF6FD6D0.toInt()
+    const val EMBER_INT = 0xFFFF6B5E.toInt(); const val DUSK_INT = 0xFF8A949E.toInt(); const val SLATE_INT = 0xFF5C6670.toInt()
+    // the names the colours had before they were given their own
+    const val WHITE_INT = CHALK_INT; const val AMBER_INT = LAMP_INT; const val CORAL_INT = EMBER_INT
 }
 
 /**
- * Draws the spatial desktop: each window is a rounded rectangle textured with its page, with a
- * title bar above it, placed in the world and seen from the head pose. Black is transparent on the
+ * Draws the spatial desktop: each window is its page on a rectangle, with a bracket at each corner and
+ * no frame, placed in the world and seen from the head pose; the shelf and the status line stand on
+ * their arc round the wearer. Black is transparent on the
  * glasses. In 2D one view fills the picture (both eyes see the same). With [stereo] the scene is
  * drawn twice, from each eye, into the left and right halves of the picture: the glasses' half-width
  * 3D mode stretches each half over one eye, so each half is rendered with that eye's full field of
  * view and the squeeze is undone by the glasses.
  */
 class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: Int, surface: Surface?) -> Unit) : GLSurfaceView.Renderer {
-    @Volatile var frame = RenderFrame(emptyList(), doubleArrayOf(0.0, 0.0, 0.0), null, 0, 0.0, false, 1f)
+    @Volatile var frame = RenderFrame(emptyList(), doubleArrayOf(0.0, 0.0, 0.0), null, false, 1f)
     @Volatile var width = 0; private set
     @Volatile var height = 0; private set
     @Volatile var frames = 0L; private set
@@ -73,12 +98,13 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     /** Distance between the wearer's eyes, metres. */
     @Volatile var ipdM = 0.064
 
-    private class Tex(val oes: Int, val st: SurfaceTexture, val surface: Surface) { @Volatile var dirty = false; val m = FloatArray(16).also { Matrix.setIdentityM(it, 0) }; var bar = 0; var barVersion = -1L; var handle = 0; var handleVersion = -1L; var hasFrame = false; var pw = 0; var ph = 0 }
+    private class Tex(val oes: Int, val st: SurfaceTexture, val surface: Surface) { @Volatile var dirty = false; val m = FloatArray(16).also { Matrix.setIdentityM(it, 0) }; var hasFrame = false; var pw = 0; var ph = 0 }
     private val tex = HashMap<Int, Tex>()
     private var progOes = 0; private var prog2d = 0; private var progFlat = 0
     private var vao = 0
-    private var homeTex = 0; private var homeVersion = -1L
-    private var dockTex = 0; private var dockVersion = -1L
+    /** The textures of the sprites last drawn, by key; the ones not drawn for longest are dropped. */
+    private val sprites = LinkedHashMap<String, Int>(64, 0.75f, true)
+    private var bright = 1f
     private val uniforms = HashMap<Int, IntArray>(); private var boundProgram = 0
     private val proj = FloatArray(16); private val view = FloatArray(16); private val vp = FloatArray(16); private val model = FloatArray(16); private val mvp = FloatArray(16)
     private val headM = FloatArray(16); private val ident = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
@@ -90,17 +116,21 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         // A new GL context: every texture and surface from the old one is gone.
         val old = tex.toMap(); tex.clear()
         for ((id, t) in old) { onSurface(id, null); try { t.surface.release(); t.st.release() } catch (_: Exception) {} }
-        homeTex = 0; homeVersion = -1; dockTex = 0; dockVersion = -1; uniforms.clear(); boundProgram = 0
+        sprites.clear(); uniforms.clear(); boundProgram = 0
         try {
             val vs = """#version 300 es
                 layout(location=0) in vec2 aPos; uniform mat4 uMvp; uniform mat4 uTex; out vec2 vUv; out vec2 vLocal;
                 void main(){ vLocal = aPos; vUv = (uTex * vec4(aPos.x + 0.5, aPos.y + 0.5, 0.0, 1.0)).xy; gl_Position = uMvp * vec4(aPos, 0.0, 1.0); }"""
+            // sdf: how far a place of the quad is outside the rounded rectangle it stands for (negative inside), metres
             val shape = """
-                uniform vec2 uSize; uniform float uRadius; uniform float uAlpha; uniform vec4 uTint;
-                float mask(vec2 l){ vec2 p = abs(l) * uSize - (uSize * 0.5 - vec2(uRadius)); float d = length(max(p, 0.0)) + min(max(p.x, p.y), 0.0) - uRadius; float w = fwidth(d) + 1e-5; return 1.0 - smoothstep(-w, w, d); }"""
-            progOes = program(vs, "#version 300 es\n#extension GL_OES_EGL_image_external_essl3 : require\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform samplerExternalOES uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vUv); o = vec4(c.rgb * uTint.rgb, 1.0) * mask(vLocal) * uAlpha; }")
-            prog2d = program(vs, "#version 300 es\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform sampler2D uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vec2(vUv.x, 1.0 - vUv.y)); o = vec4(c.rgb * uTint.rgb, c.a) * mask(vLocal) * uAlpha; }")
-            progFlat = program(vs, "#version 300 es\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o;$shape\nuniform float uRing;\nvoid main(){ float m = mask(vLocal); if (uRing > 0.0) { float r = length(vLocal) * 2.0; m = smoothstep(uRing - 0.12, uRing, r) * (1.0 - smoothstep(0.88, 1.0, r)); } o = uTint * m * uAlpha; }")
+                uniform vec2 uSize; uniform float uRadius; uniform vec4 uTint;
+                float sdf(vec2 l){ vec2 p = abs(l) * uSize - (uSize * 0.5 - vec2(uRadius)); return length(max(p, 0.0)) + min(max(p.x, p.y), 0.0) - uRadius; }
+                float mask(vec2 l){ float d = sdf(l); float w = fwidth(d) + 1e-5; return 1.0 - smoothstep(-w, w, d); }"""
+            progOes = program(vs, "#version 300 es\n#extension GL_OES_EGL_image_external_essl3 : require\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform samplerExternalOES uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vUv); o = vec4(c.rgb * uTint.rgb, uTint.a) * mask(vLocal); }")
+            prog2d = program(vs, "#version 300 es\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform sampler2D uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vec2(vUv.x, 1.0 - vUv.y)); o = vec4(c.rgb * uTint.rgb, c.a * uTint.a) * mask(vLocal); }")
+            // uRing: a ring instead of the shape (the cursor, the look-to-press ring). uGlow: a halo instead of the shape, nothing
+            // at the quad's edge and full that far inside it: the light a lit line spills.
+            progFlat = program(vs, "#version 300 es\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o;$shape\nuniform float uRing; uniform float uGlow;\nvoid main(){ float m = mask(vLocal); if (uGlow > 0.0) { float g = clamp(-sdf(vLocal) / uGlow, 0.0, 1.0); m = g * g; } if (uRing > 0.0) { float r = length(vLocal) * 2.0; m = smoothstep(uRing - 0.12, uRing, r) * (1.0 - smoothstep(0.88, 1.0, r)); } o = uTint * m; }")
             val ids = IntArray(1); GLES30.glGenVertexArrays(1, ids, 0); vao = ids[0]; GLES30.glBindVertexArray(vao)
             GLES30.glGenBuffers(1, ids, 0); GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, ids[0])
             val q = floatArrayOf(-0.5f, -0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f)
@@ -173,73 +203,124 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
 
     /** Everything in the scene, once, with the current [vp] (world) and [projHead] (head-fixed) matrices. */
     private fun drawScene(f: RenderFrame, q: DoubleArray) {
-        if (f.showRail) {
-            // The rail: short straight pieces around the user. The piece(s) under the focused window are lit.
-            val seg = 2 * Math.PI / Rail.SEGMENTS; val len = 2 * Rail.RADIUS * Math.tan(seg / 2) * 0.92
-            val lookYaw = Geometry.yawOf(Q.rotate(q, doubleArrayOf(0.0, 0.0, -1.0)))
-            for (i in 0 until Rail.SEGMENTS) {
-                val yaw = Geometry.wrap(i * seg)
-                if (Math.abs(Geometry.wrap(yaw - lookYaw)) > RAIL_VISIBLE) continue      // behind or beside the view
-                val lit = !f.railYaw.isNaN() && Math.abs(Geometry.wrap(yaw - f.railYaw)) <= f.railHalf
-                val col = if (lit) Ink.AMBER else Ink.SLATE
-                Geometry.modelMatrix(Geometry.centre(f.anchor, yaw, Rail.PITCH, Rail.RADIUS), yaw, 0.0, len, Rail.THICKNESS, model)
-                draw(progFlat, 0, 0, vp, ident, len, Rail.THICKNESS, Rail.THICKNESS / 2, col[0], col[1], col[2], if (lit) 0.9f else 0.6f, 1f)
-            }
-        }
-        if (f.dock != null) {
-            if (dockTex == 0) dockTex = newTexture2d()
-            if (dockVersion != f.dockVersion) { upload(dockTex, f.dock); dockVersion = f.dockVersion }
-            Geometry.modelMatrix(Geometry.centre(f.anchor, f.dockYaw, Rail.DOCK_PITCH, Rail.DOCK_DISTANCE), f.dockYaw, Rail.DOCK_PITCH, Rail.DOCK_WIDTH, Rail.DOCK_HEIGHT, model)
-            draw(prog2d, GLES30.GL_TEXTURE_2D, dockTex, vp, ident, Rail.DOCK_WIDTH, Rail.DOCK_HEIGHT, 0.0, 1f, 1f, 1f, 1f, 1f)
-        }
-        if (f.home != null) {
-            if (homeTex == 0) homeTex = newTexture2d()
-            if (homeVersion != f.homeVersion) { upload(homeTex, f.home); homeVersion = f.homeVersion }
-            val hh = HOME_WIDTH * f.home.height / f.home.width
-            Geometry.modelMatrix(Geometry.centre(f.anchor, f.homeYaw, 0.0, HOME_DISTANCE), f.homeYaw, 0.0, HOME_WIDTH, hh, model)
-            draw(prog2d, GLES30.GL_TEXTURE_2D, homeTex, vp, ident, HOME_WIDTH, hh, 0.0, 1f, 1f, 1f, 1f, 1f)
-        }
-        // Far windows first, so nearer ones cover them; the focused window last among equals.
+        bright = if (preview) 1f else f.brightness
+        // Far things first, so nearer ones cover them; the focused window last among equals. The shelf has its place
+        // in that order: it is nearer than a window at the usual distance.
+        var shelfDrawn = f.shelf == null
         for (w in f.windows.sortedWith(compareByDescending<RenderWindow> { it.distance }.thenBy { it.focused })) {
-            val t = tex[w.id] ?: continue
-            val matrix = if (w.headLocked) projHead else vp
-            val c = if (w.headLocked) doubleArrayOf(0.0, 0.0, -w.distance) else Geometry.centre(f.anchor, w.yaw, w.pitch, w.distance)
-            val yaw = if (w.headLocked) 0.0 else w.yaw; val pitch = if (w.headLocked) 0.0 else w.pitch
-            val shade = if (w.focused) 1f else f.dim
-            if (w.outline && !w.headLocked) {   // a hairline of amber around the window in focus
-                Geometry.modelMatrix(c, yaw, pitch, w.width + 0.005, w.height + 0.005, model)
-                draw(progFlat, 0, 0, matrix, ident, w.width + 0.005, w.height + 0.005, 0.0325, Ink.AMBER[0], Ink.AMBER[1], Ink.AMBER[2], 0.85f, 1f)
-            }
-            Geometry.modelMatrix(c, yaw, pitch, w.width, w.height, model)
-            if (t.hasFrame) draw(progOes, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.oes, matrix, t.m, w.width, w.height, 0.03, shade, shade, shade, 1f, 1f)
-            else draw(progFlat, 0, 0, matrix, ident, w.width, w.height, 0.03, 0.07f, 0.09f, 0.11f, 1f, 1f)
-            if (!w.headLocked && w.bar != null) {
-                if (t.bar == 0) t.bar = newTexture2d()
-                if (t.barVersion != w.barVersion) { upload(t.bar, w.bar); t.barVersion = w.barVersion }
-                val up = w.height / 2 + w.barHeight / 2 + 0.012
-                val bc = offset(c, yaw, pitch, 0.0, up)
-                Geometry.modelMatrix(bc, yaw, pitch, w.width, w.barHeight, model)
-                draw(prog2d, GLES30.GL_TEXTURE_2D, t.bar, matrix, ident, w.width, w.barHeight, 0.0, 1f, 1f, 1f, 1f, 1f)
-            }
-            if (!w.headLocked && w.handle != null) {   // the handle: move, size, pin, close, under the window in focus
-                if (t.handle == 0) t.handle = newTexture2d()
-                if (t.handleVersion != w.handleVersion) { upload(t.handle, w.handle); t.handleVersion = w.handleVersion }
-                val hc = offset(c, yaw, pitch, 0.0, -(w.height / 2 + HandleStrip.GAP + w.handleHeight / 2))
-                Geometry.modelMatrix(hc, yaw, pitch, w.width, w.handleHeight, model)
-                draw(prog2d, GLES30.GL_TEXTURE_2D, t.handle, matrix, ident, w.width, w.handleHeight, 0.0, 1f, 1f, 1f, 1f, 1f)
-            }
-            if (w.showCursor) {
-                val size = (w.distance * 0.018).coerceAtLeast(0.012)
-                val cc = offset(c, yaw, pitch, (w.cursorU - 0.5) * w.width, (0.5 - w.cursorV) * w.height)
-                Geometry.modelMatrix(cc, yaw, pitch, size, size, model)
-                draw(progFlat, 0, 0, matrix, ident, size, size, size / 2, Ink.AMBER[0], Ink.AMBER[1], Ink.AMBER[2], 1f, if (w.pressed) 0.01f else 0.6f)
-            }
+            if (!shelfDrawn && !w.headLocked && w.distance < Shelf.DISTANCE) { drawShelf(f); shelfDrawn = true }
+            drawWindow(f, w)
         }
+        if (!shelfDrawn) drawShelf(f)
         if (f.dwellProgress > 0.0) {   // look-to-press: a ring that closes as the hold completes
-            val size = f.dwellDistance * 0.05
+            val size = if (f.dwellSize > 0.0) f.dwellSize else f.dwellDistance * 0.05
             Geometry.modelMatrix(Geometry.centre(f.anchor, f.dwellYaw, f.dwellPitch, f.dwellDistance * 0.985), f.dwellYaw, f.dwellPitch, size, size, model)
-            draw(progFlat, 0, 0, vp, ident, size, size, size / 2, Ink.AMBER[0], Ink.AMBER[1], Ink.AMBER[2], 1f, (0.92 - 0.9 * f.dwellProgress).toFloat().coerceIn(0.02f, 0.92f))
+            draw(progFlat, 0, 0, vp, ident, size, size, size / 2, Ink.AMBER, 1f, ring = (0.92 - 0.9 * f.dwellProgress).toFloat().coerceIn(0.02f, 0.92f))
         }
+    }
+
+    /** The status line at the top of the view, the row of marks, and the name under the one in focus: each faces the wearer from its place on the arc. */
+    private fun drawShelf(f: RenderFrame) {
+        val s = f.shelf ?: return
+        s.status?.let { sprite(it, Geometry.centre(f.anchor, s.yaw, Shelf.STATUS_PITCH, Shelf.DISTANCE), s.yaw, Shelf.STATUS_PITCH, Sight.STRIP * Sight.metres(Sight.BODY, Shelf.DISTANCE), 1f, 0, vp) }
+        for (m in s.marks) {
+            // a mark's picture has room round the mark for its halo: it is half as large again as the mark
+            sprite(m.sprite, Geometry.centre(f.anchor, m.yaw, Shelf.PITCH, Shelf.DISTANCE), m.yaw, Shelf.PITCH, 3 * Shelf.MARK_RADIUS * m.scale, m.alpha, 0, vp)
+        }
+        s.name?.let { sprite(it, Geometry.centre(f.anchor, s.nameYaw, Shelf.NAME_PITCH, Shelf.DISTANCE), s.nameYaw, Shelf.NAME_PITCH, Sight.STRIP * Sight.metres(Sight.NAME, Shelf.DISTANCE), 1f, 0, vp) }
+        val dot = Sight.metres(Math.toRadians(0.3), Shelf.DISTANCE)
+        for (yaw in doubleArrayOf(s.moreLeft, s.moreRight)) if (!yaw.isNaN()) {      // the row goes on this way
+            Geometry.modelMatrix(Geometry.centre(f.anchor, yaw, Shelf.PITCH, Shelf.DISTANCE), yaw, Shelf.PITCH, dot, dot, model)
+            draw(progFlat, 0, 0, vp, ident, dot, dot, dot / 2, Ink.SLATE, 1f)
+        }
+    }
+
+    /**
+     * A sprite [height] metres high (as wide as its picture makes it) in a window-like plane at [c]. [align] says what
+     * of it is at [c]: 0 its middle, -1 the middle of its left edge.
+     */
+    private fun sprite(s: Sprite, c: DoubleArray, yaw: Double, pitch: Double, height: Double, alpha: Float, align: Int, matrix: FloatArray) {
+        if (s.bitmap.isRecycled || alpha <= 0f) return
+        val w = height * s.bitmap.width / s.bitmap.height
+        Geometry.modelMatrix(if (align < 0) offset(c, yaw, pitch, w / 2, 0.0) else c, yaw, pitch, w, height, model)
+        draw(prog2d, GLES30.GL_TEXTURE_2D, texture(s), matrix, ident, w, height, 0.0, WHITE, alpha)
+    }
+
+    /** The texture a sprite's picture is in: made when the sprite is first drawn, kept while it goes on being drawn. */
+    private fun texture(s: Sprite): Int {
+        sprites[s.key]?.let { return it }
+        val t = newTexture2d(); upload(t, s.bitmap); sprites[s.key] = t
+        if (sprites.size > MAX_SPRITES) { val e = sprites.entries.iterator(); val old = e.next(); e.remove(); GLES30.glDeleteTextures(1, intArrayOf(old.value), 0) }
+        return t
+    }
+
+    private fun drawWindow(f: RenderFrame, w: RenderWindow) {
+        val t = tex[w.id] ?: return
+        val matrix = if (w.headLocked) projHead else vp
+        val c = if (w.headLocked) doubleArrayOf(0.0, 0.0, -w.distance) else Geometry.centre(f.anchor, w.yaw, w.pitch, w.distance)
+        val yaw = if (w.headLocked) 0.0 else w.yaw; val pitch = if (w.headLocked) 0.0 else w.pitch
+        val shade = if (w.focused) 1f else f.dim
+        val hair = Sight.metres(Sight.LINE, w.distance)
+        // The page is the only filled thing. Before it has drawn itself there is nothing there, only its brackets; on
+        // its way out of its mark it is a hairline that grows, so that there is something to see growing.
+        if (t.hasFrame) { Geometry.modelMatrix(c, yaw, pitch, w.width, w.height, model); shadeRgb[0] = shade; shadeRgb[1] = shade; shadeRgb[2] = shade; draw(progOes, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.oes, matrix, t.m, w.width, w.height, 0.0, shadeRgb, 1f) }
+        else if (w.growing) for (side in 0 until 4) {
+            val across = side < 2; val sign = if (side % 2 == 0) 1.0 else -1.0
+            line(c, yaw, pitch, if (across) 0.0 else sign * w.width / 2, if (across) sign * w.height / 2 else 0.0, if (across) w.width else hair, if (across) hair else w.height, Ink.SLATE, 1f, 0.0, matrix)
+        }
+        if (w.headLocked) { cursor(w, c, yaw, pitch, matrix); return }
+        if (w.bracket > 0f) brackets(w, c, yaw, pitch, matrix)
+        val gap = Sight.metres(Sight.BRACKET_GAP, w.distance); val lit = Sight.metres(Sight.LINE_LIT, w.distance)
+        w.title?.let {      // above the top-left bracket, beginning where the bracket begins
+            val h = Sight.STRIP * Sight.metres(Sight.BODY, w.distance)
+            sprite(it, offset(c, yaw, pitch, -(w.width / 2 + gap + lit), w.height / 2 + gap + lit + h * Sight.TITLE_RISE), yaw, pitch, h, 1f, -1, matrix)
+        }
+        w.handle?.let {      // the handle: move, size, pin, close, under the window in focus
+            Geometry.modelMatrix(offset(c, yaw, pitch, 0.0, -(w.height / 2 + w.handleGap + w.handleHeight / 2)), yaw, pitch, w.handleWidth, w.handleHeight, model)
+            draw(prog2d, GLES30.GL_TEXTURE_2D, texture(it), matrix, ident, w.handleWidth, w.handleHeight, 0.0, WHITE, 1f)
+        }
+        cursor(w, c, yaw, pitch, matrix)
+    }
+
+    private fun cursor(w: RenderWindow, c: DoubleArray, yaw: Double, pitch: Double, matrix: FloatArray) {
+        if (!w.showCursor) return
+        val size = (w.distance * 0.018).coerceAtLeast(0.012)
+        Geometry.modelMatrix(offset(c, yaw, pitch, (w.cursorU - 0.5) * w.width, (0.5 - w.cursorV) * w.height), yaw, pitch, size, size, model)
+        draw(progFlat, 0, 0, matrix, ident, size, size, size / 2, Ink.AMBER, 1f, ring = if (w.pressed) 0.01f else 0.6f)
+    }
+
+    /**
+     * A window has no frame: a bracket at each corner, just outside the page. Slate at rest, Chalk while the focus is
+     * somewhere on the window, and when it is on the window itself Lamp, thicker, with a soft halo: the one thing
+     * that glows. The arms grow out of the corner as the brackets draw themselves.
+     */
+    private fun brackets(w: RenderWindow, c: DoubleArray, yaw: Double, pitch: Double, matrix: FloatArray) {
+        val g = w.glow.coerceIn(0f, 1f)
+        val t = Sight.metres(Sight.LINE + (Sight.LINE_LIT - Sight.LINE) * g, w.distance)
+        val gap = Sight.metres(Sight.BRACKET_GAP, w.distance)
+        val base = if (w.near) Ink.WHITE else Ink.SLATE
+        for (i in 0 until 3) lineRgb[i] = base[i] + (Ink.AMBER[i] - base[i]) * g
+        val len = (w.arm * w.bracket).coerceAtLeast(t)
+        val ex = w.width / 2 + gap + t; val ey = w.height / 2 + gap + t      // the bracket's outer corner
+        val halo = t * 2.5
+        for (pass in 0 until 2) {
+            if (pass == 0 && g < 0.02f) continue
+            for (sx in SIGNS) for (sy in SIGNS) {
+                if (pass == 0) {
+                    line(c, yaw, pitch, sx * (ex - len / 2), sy * (ey - t / 2), len + 2 * halo, t + 2 * halo, Ink.AMBER, 0.4f * g, halo, matrix)
+                    line(c, yaw, pitch, sx * (ex - t / 2), sy * (ey - len / 2), t + 2 * halo, len + 2 * halo, Ink.AMBER, 0.4f * g, halo, matrix)
+                } else {
+                    line(c, yaw, pitch, sx * (ex - len / 2), sy * (ey - t / 2), len, t, lineRgb, 1f, 0.0, matrix)
+                    line(c, yaw, pitch, sx * (ex - t / 2), sy * (ey - len / 2), t, len, lineRgb, 1f, 0.0, matrix)
+                }
+            }
+        }
+    }
+
+    /** A line with round ends, [lw] by [lh] metres, its middle [x] to the right of and [y] above [c] in the window's plane. With [glow] it is a halo that fades over that width. */
+    private fun line(c: DoubleArray, yaw: Double, pitch: Double, x: Double, y: Double, lw: Double, lh: Double, rgb: FloatArray, a: Float, glow: Double, matrix: FloatArray) {
+        Geometry.modelMatrix(offset(c, yaw, pitch, x, y), yaw, pitch, lw, lh, model)
+        draw(progFlat, 0, 0, matrix, ident, lw, lh, minOf(lw, lh) / 2, rgb, a, glow = glow.toFloat())
     }
 
     /** [c] moved by [x] to the window's right and [y] up, in the window's own plane. */
@@ -248,7 +329,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         return doubleArrayOf(c[0] + cy * x + sy * sp * y, c[1] + cp * y, c[2] - sy * x + cy * sp * y)
     }
 
-    private fun draw(prog: Int, target: Int, texture: Int, viewProj: FloatArray, texM: FloatArray, w: Double, h: Double, radius: Double, r: Float, g: Float, b: Float, a: Float, ringOrAlpha: Float) {
+    private fun draw(prog: Int, target: Int, texture: Int, viewProj: FloatArray, texM: FloatArray, w: Double, h: Double, radius: Double, rgb: FloatArray, a: Float, ring: Float = 0f, glow: Float = 0f) {
         // uniform locations are looked up once per program, not on every draw
         val u = uniforms.getOrPut(prog) { IntArray(UNIFORM_NAMES.size) { GLES30.glGetUniformLocation(prog, UNIFORM_NAMES[it]) } }
         if (boundProgram != prog) { GLES30.glUseProgram(prog); boundProgram = prog }
@@ -257,9 +338,10 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         GLES30.glUniformMatrix4fv(u[1], 1, false, texM, 0)
         GLES30.glUniform2f(u[2], w.toFloat(), h.toFloat())
         GLES30.glUniform1f(u[3], radius.coerceAtMost(minOf(w, h) / 2).toFloat())
-        GLES30.glUniform4f(u[4], r * a, g * a, b * a, a)
-        GLES30.glUniform1f(u[5], 1f)
-        if (prog == progFlat) GLES30.glUniform1f(u[6], if (ringOrAlpha < 1f) ringOrAlpha else 0f)
+        // light is what is drawn, so the picture's brightness scales the colour and leaves alone how much it covers
+        val k = a * bright
+        GLES30.glUniform4f(u[4], rgb[0] * k, rgb[1] * k, rgb[2] * k, a)
+        if (prog == progFlat) { GLES30.glUniform1f(u[5], ring); GLES30.glUniform1f(u[6], glow) }
         if (texture != 0) { GLES30.glActiveTexture(GLES30.GL_TEXTURE0); GLES30.glBindTexture(target, texture); GLES30.glUniform1i(u[7], 0) }
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
     }
@@ -267,7 +349,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     private fun syncTextures(f: RenderFrame) {
         val wanted = f.windows.map { it.id }.toSet()
         val gone = tex.keys.filter { it !in wanted }
-        for (id in gone) { val t = tex.remove(id) ?: continue; onSurface(id, null); t.surface.release(); t.st.release(); GLES30.glDeleteTextures(3, intArrayOf(t.oes, t.bar, t.handle), 0) }
+        for (id in gone) { val t = tex.remove(id) ?: continue; onSurface(id, null); t.surface.release(); t.st.release(); GLES30.glDeleteTextures(1, intArrayOf(t.oes), 0) }
         for (w in f.windows) {
             var t = tex[w.id]
             if (t == null) {
@@ -298,11 +380,13 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
 
     private fun upload(texture: Int, b: Bitmap) { if (b.isRecycled) return; GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture); GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, b, 0) }
 
+    private val shadeRgb = FloatArray(3); private val lineRgb = FloatArray(3)
+
     companion object {
         private const val NEAR = 0.08
-        private val RAIL_VISIBLE = Math.toRadians(62.0)
-        private val UNIFORM_NAMES = arrayOf("uMvp", "uTex", "uSize", "uRadius", "uTint", "uAlpha", "uRing", "uSampler")
-        const val HOME_DISTANCE = 2.0
-        const val HOME_WIDTH = HomeGrid.WIDTH_M
+        private val UNIFORM_NAMES = arrayOf("uMvp", "uTex", "uSize", "uRadius", "uTint", "uRing", "uGlow", "uSampler")
+        private val WHITE = floatArrayOf(1f, 1f, 1f)
+        private val SIGNS = doubleArrayOf(-1.0, 1.0)
+        private const val MAX_SPRITES = 96
     }
 }
