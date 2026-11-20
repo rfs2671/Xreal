@@ -191,7 +191,7 @@ class DesktopSession(private val activity: Activity) {
         }
     }
     private fun trackingWord(head: HeadTracker.State) = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"
-        Tracking.mapMode == "finding" && Tracking.appFromMap() != null -> "room recognised"; Tracking.mapMode == "making" && Tracking.mapPlaces > 0 -> "learning the room"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "position tracked" }
+        (Tracking.mapMode == "finding" || Tracking.mapMode == "growing") && Tracking.appFromMap() != null -> "room recognised"; Tracking.mapMode == "making" && Tracking.mapPlaces > 0 -> "learning the room"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "position tracked" }
 
     /** Select on a tile of the panel. */
     private fun activateTile(i: Int) {
@@ -537,8 +537,8 @@ class DesktopSession(private val activity: Activity) {
                 select = { if (Tracking.roomPlanCorners > 0) { if (!armed) armed = true else { Tracking.clearRoomPlan(); armed = false; forgotten = true } } },
                 warn = { armed }, leave = { armed = false; forgotten = false }),
             // the saved map of the room (native/slam): what it is doing, and Select twice to forget it and learn the room anew
-            SettingRow("Room memory", { when (Tracking.mapMode) { "making" -> "learning, " + Tracking.mapPlaces + " places"; "finding" -> if (Tracking.appFromMap() != null) "recognised" else "looking"; else -> "off" } },
-                { when { mapArmed -> "Select again to forget this room and learn it anew."; Tracking.mapMode == "making" -> "Look around the room. It is saved when you leave."; Tracking.mapMode == "finding" -> "Windows go back where they stood."; else -> "Needs the room scan." } },
+            SettingRow("Room memory", { when (Tracking.mapMode) { "making" -> "learning, " + Tracking.mapPlaces + " places"; "finding", "growing" -> if (Tracking.appFromMap() != null) "recognised, " + Tracking.mapPlaces + " places" else "looking"; else -> "off" } },
+                { when { mapArmed -> "Select again to forget this room and learn it anew."; Tracking.mapMode == "making" -> "Look around the room. It is saved when you leave."; Tracking.mapMode == "finding" || Tracking.mapMode == "growing" -> "Windows go back where they stood. New rooms are added as you walk into them."; else -> "Needs the room scan." } },
                 select = { if (!mapArmed) mapArmed = true else { Tracking.newRoomMap(); mapArmed = false } }, warn = { mapArmed }, leave = { mapArmed = false }),
             SettingRow("About", { version }, { "Ultra XR, set in Atkinson Hyperlegible." })))
     }

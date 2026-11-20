@@ -78,7 +78,24 @@ RUNS = {
     "g_now": ("", "", ""), "g_nowb": ("", "", ""),
     # the saved map of the room: a run that makes one afresh (written when the replay ends), runs that look for the
     # head in the map that is there, and a run without any
-    "m_new": ("room_map=new" + chr(10), "", ""), "m_find": ("", "", ""), "m_findb": ("", "", ""), "m_off": ("room_map=off" + chr(10), "", ""),
+    # what the map costs the estimator, finding in the map that is there: the worker kept to the small cores, OpenCV
+    # with one thread, fewer corners, and all three
+    "p_def": ("", "", ""), "p_defb": ("", "", ""),
+    "p_little": ("slam.Ultra/Cores=little" + chr(10), "", ""),
+    "p_cv1": ("slam.Ultra/CvThreads=1" + chr(10), "", ""),
+    "p_little1": ("slam.Ultra/Cores=little" + chr(10) + "slam.Ultra/CvThreads=1" + chr(10), "", ""), "p_little1b": ("slam.Ultra/Cores=little" + chr(10) + "slam.Ultra/CvThreads=1" + chr(10), "", ""),
+    "p_feat": ("slam.Kp/MaxFeatures=400" + chr(10) + "slam.Vis/MaxFeatures=600" + chr(10), "", ""),
+    "p_all": ("slam.Ultra/Cores=little" + chr(10) + "slam.Ultra/CvThreads=1" + chr(10) + "slam.Kp/MaxFeatures=400" + chr(10) + "slam.Vis/MaxFeatures=600" + chr(10), "", ""),
+    "m_offb": ("room_map=off" + chr(10), "", ""), "m_offc": ("room_map=off" + chr(10), "", ""),
+    # the correction against the saved map, forced: at second 30 the app's world is pushed aside (metres along x and
+    # z, degrees), as a wrong join after a loss would push it; small pushes must come back without a jump
+    "s_8": ("room_map=find" + chr(10) + "map_test_slip=30,0.06,-0.05,0" + chr(10), "", ""), "s_8t": ("room_map=find" + chr(10) + "map_test_slip=30,0.06,-0.05,2" + chr(10), "", ""),
+    "s_20": ("room_map=find" + chr(10) + "map_test_slip=30,0.15,0.13,3" + chr(10), "", ""), "s_100": ("room_map=find" + chr(10) + "map_test_slip=30,0.8,-0.6,25" + chr(10), "", ""),
+    # the map added to with RTAB-Map merging a new place into the old one it was recognised as (Mem/ReduceGraph)
+    "r_new": ("room_map=new" + chr(10) + "slam.Mem/ReduceGraph=true" + chr(10), "", ""), "r_grow": ("slam.Mem/ReduceGraph=true" + chr(10), "", ""), "r_growb": ("slam.Mem/ReduceGraph=true" + chr(10), "", ""),
+    "m_new": ("room_map=new" + chr(10), "", ""), "m_find": ("room_map=find" + chr(10), "", ""), "m_findb": ("room_map=find" + chr(10), "", ""),
+    "m_grow": ("", "", ""), "m_growb": ("", "", ""),      # the map is added to (the app's own way from 20 November, late)
+    "m_off": ("room_map=off" + chr(10), "", ""),
 }
 
 def run(args, timeout=120):

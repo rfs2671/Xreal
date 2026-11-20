@@ -8,8 +8,9 @@ package dev.ultraxr.core
  * app's world: fix * Z_TO_Y * corr^-1. The first time that is known in a session it is taken as it is ([appFromMap]):
  * things saved in map coordinates can be put back where they were. After that the map should stay where it is in the
  * app's world; when it is seen somewhere else, the estimator has drifted or position was lost and joined on wrongly,
- * and the app's world is moved by the difference: a small one in small steps, so that nothing is seen to jump, a large
- * one at once, because what is shown is then plainly in the wrong place anyway.
+ * and the app's world is moved by the difference: a small one in steps (a quarter of what is left, between 1.5 and
+ * 4 cm, each spread over a third of a second by the caller), so that nothing is seen to jump, a large one at once,
+ * because what is shown is then plainly in the wrong place anyway.
  *
  * Both worlds have the same "up", so a move is a turn about the vertical and a shift; whatever tilt the difference
  * holds is noise and is dropped.
@@ -68,7 +69,10 @@ class MapAlign(private val zToY: DoubleArray) {
         steps++
         if (off > AT_ONCE_M || turn > AT_ONCE_RAD) { version++; return whole }
         // a part of it: the same turn and shift scaled down, about the nearby point, so that it moves by no more than a step
-        val f = minOf(1.0, STEP_M / maxOf(off, 1e-9), STEP_RAD / maxOf(turn, 1e-9))
+        // a quarter of what is left at a time, but never less than the smallest step nor more than the largest: a few
+        // centimetres are gone in a few readings, and the caller spreads each step over a third of a second
+        val stepM = (off * STEP_SHARE).coerceIn(STEP_M, STEP_MAX_M); val stepRad = (turn * STEP_SHARE).coerceIn(STEP_RAD, STEP_MAX_RAD)
+        val f = minOf(1.0, stepM / maxOf(off, 1e-9), stepRad / maxOf(turn, 1e-9))
         val q = Q.axisAngle(0.0, 1.0, 0.0, Q.yawY(whole.q) * f)
         val target = doubleArrayOf(near[0] + (there[0] - near[0]) * f, near[1] + (there[1] - near[1]) * f, near[2] + (there[2] - near[2]) * f)
         val r = Q.rotate(q, near)
@@ -99,8 +103,22 @@ class MapAlign(private val zToY: DoubleArray) {
         const val AGREE_OTHERS = 2
         const val AGREE_M = 0.12
         val AGREE_RAD = Math.toRadians(3.0)
+        const val STEP_SHARE = 0.25
+        const val STEP_MAX_M = 0.04
+        val STEP_MAX_RAD = Math.toRadians(1.0)
         const val AT_ONCE_M = 0.30
         val AT_ONCE_RAD = Math.toRadians(6.0)
+
+        /**
+         * The fraction [f] of a move, as seen from [near]: the same turn scaled down, and the point [near] carried the
+         * same fraction of the way. A step is made in many such parts, a frame or two apart, so that no single frame
+         * shows it.
+         */
+        fun part(move: Pose, near: DoubleArray, f: Double): Pose {
+            val there = move.apply(near); val q = Q.axisAngle(0.0, 1.0, 0.0, Q.yawY(move.q) * f)
+            val r = Q.rotate(q, near)
+            return Pose(doubleArrayOf(near[0] + (there[0] - near[0]) * f - r[0], near[1] + (there[1] - near[1]) * f - r[1], near[2] + (there[2] - near[2]) * f - r[2]), q)
+        }
 
         /** A place and heading in the app's world as map coordinates (x, y, z, yaw), and back. */
         fun toMap(appFromMap: Pose, p: DoubleArray, yaw: Double): DoubleArray {

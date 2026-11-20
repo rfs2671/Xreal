@@ -16,6 +16,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <android/log.h>
+#include <sched.h>
 #include <sys/resource.h>
 #include <unistd.h>
 
@@ -25,8 +26,10 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -68,13 +71,16 @@ double now_ms() {
 
 struct uslam {
 	int mode = USLAM_MAP;
-	std::string db;
+	std::string db, saved; // saved: the map file a copy of which (db) is being added to
 	ParametersMap params;
 	int W = 0, H = 0;
+	std::string cores;
+	int cv_threads = -1;
 	double c[2][15];
 	cv::Mat mapx[2], mapy[2];
 	std::unique_ptr<StereoCameraModel> model;
 	std::unique_ptr<Rtabmap> rt;
+	int root = 0; // the map's first place
 
 	std::mutex mtx;
 	std::condition_variable cv, idle;
@@ -121,9 +127,9 @@ struct uslam {
 
 	void open() {
 		ParametersMap p = params;
-		p[Parameters::kMemIncrementalMemory()] = mode == USLAM_MAP ? "true" : "false";
+		p[Parameters::kMemIncrementalMemory()] = mode == USLAM_FIND ? "false" : "true";
+		if (mode != USLAM_MAP) p[Parameters::kMemInitWMWithAllNodes()] = "true";
 		if (mode == USLAM_FIND) {
-			p[Parameters::kMemInitWMWithAllNodes()] = "true";
 			p[Parameters::kRGBDLinearUpdate()] = "0";
 			p[Parameters::kRGBDAngularUpdate()] = "0";
 		}
@@ -131,7 +137,14 @@ struct uslam {
 		const double t0 = now_ms();
 		rt->init(p, db);
 		const int places = rt->getWMSize() + rt->getSTMSize();
-		LOGI("%s %s: opened in %.0f ms, %d places", mode == USLAM_MAP ? "map" : "find", db.c_str(), now_ms() - t0, places);
+		// The map's frame is that of its first place. A later piece (another session, or what follows a restart of the
+		// estimator) has a frame of its own until it is tied to that one.
+		root = 0;
+		if (rt->getMemory()) {
+			const std::set<int> ids = rt->getMemory()->getAllSignatureIds();
+			if (!ids.empty()) root = *ids.begin();
+		}
+		LOGI("%s %s: opened in %.0f ms, %d places, first place %d", mode == USLAM_MAP ? "map" : mode == USLAM_FIND ? "find" : "extend", db.c_str(), now_ms() - t0, places, root);
 		std::lock_guard<std::mutex> lock(mtx);
 		st.places = places;
 	}
@@ -140,6 +153,16 @@ struct uslam {
 		// The map can wait; the head, the hands and the picture cannot. Measured in the app at the default priority
 		// the estimator's time for a frame went from 35 to 52 ms while a map was made or read (docs/SPATIAL.md).
 		setpriority(PRIO_PROCESS, (id_t)gettid(), 15);
+		// "Ultra/Cores=little": the worker keeps to the four small cores (0 to 3 on the phones this runs on), leaving
+		// the large ones to the estimator and the hands. "Ultra/CvThreads=n": OpenCV's own worker threads, for the
+		// whole process (it is one library for everybody in it).
+		if (cores == "little") {
+			cpu_set_t set;
+			CPU_ZERO(&set);
+			for (int i = 0; i < 4; i++) CPU_SET(i, &set);
+			if (sched_setaffinity(gettid(), sizeof set, &set) != 0) LOGW("the worker could not be kept to the small cores");
+		}
+		if (cv_threads >= 0) cv::setNumThreads(cv_threads);
 		std::vector<uint8_t> l, r;
 		for (;;) {
 			int64_t t;
@@ -157,8 +180,9 @@ struct uslam {
 				if (epoch) {
 					const int e = st.epoch + 1, places = st.places;
 					const int64_t dropped = st.dropped;
+					const int linked = st.linked;
 					st = uslam_state{};
-					st.epoch = e, st.mode = mode, st.places = places, st.dropped = dropped;
+					st.epoch = e, st.mode = mode, st.places = places, st.dropped = dropped, st.linked = linked;
 				}
 				if (!pending) {
 					if (!epoch) continue;
@@ -177,7 +201,7 @@ struct uslam {
 					open();
 				}
 				// Making a map: what follows is a piece of its own until a place of the earlier piece is seen again.
-				if (epoch && mode == USLAM_MAP) rt->triggerNewMap();
+				if (epoch && mode != USLAM_FIND) rt->triggerNewMap();
 				if (l.empty()) continue;
 				if (!model) rectifier(W, H);
 				cv::Mat lr, rr;
@@ -192,6 +216,16 @@ struct uslam {
 				const int loop = rt->getLoopClosureId(), prox = s.proximityDetectionId();
 				const int hit = loop > 0 ? loop : prox > 0 ? prox : 0;
 				const Transform corr = rt->getMapCorrection();
+				if (root == 0) root = rt->getLastLocationId();
+				// Does the place this pair belongs to hang together with the map's first place? By the graph's links, not
+				// by the poses RTAB-Map holds: those of a map read from the file are all there whether or not anything
+				// newer is linked to them.
+				bool tied = false;
+				{
+					const int from = mode == USLAM_FIND ? hit : rt->getLastLocationId();
+					if (root != 0 && from == root) tied = true;
+					else if (root != 0 && from > 0 && rt->getMemory()) tied = rt->getMemory()->getNeighborsId(from, 0).count(root) > 0;
+				}
 				int inl = 0;
 				const auto it = s.data().find(Statistics::kLoopVisual_inliers());
 				if (it != s.data().end()) inl = (int)it->second;
@@ -210,7 +244,9 @@ struct uslam {
 					st.found_t_ns = t;
 					st.inliers = inl;
 				}
-				if (!corr.isNull() && ((mode == USLAM_MAP && st.epoch == 0) || st.found > 0)) {
+				st.has_corr = 0;
+				if (mode == USLAM_EXTEND && tied) st.linked = 1;
+				if (!corr.isNull() && (mode == USLAM_FIND ? (tied && st.found > 0) : (tied || (mode == USLAM_MAP && st.epoch == 0)))) {
 					const Eigen::Quaternionf q = corr.getQuaternionf();
 					st.corr[0] = corr.x(), st.corr[1] = corr.y(), st.corr[2] = corr.z();
 					st.corr[3] = q.x(), st.corr[4] = q.y(), st.corr[5] = q.z(), st.corr[6] = q.w();
@@ -233,8 +269,22 @@ USLAM_API uslam_t *uslam_create(const char *rig, const char *db, int mode, const
 	try {
 		if (!rig || !db) throw std::runtime_error("no rig or no map file");
 		std::unique_ptr<uslam> h(new uslam());
-		h->mode = mode == USLAM_FIND ? USLAM_FIND : USLAM_MAP;
-		h->db = db;
+		h->mode = mode == USLAM_FIND ? USLAM_FIND : mode == USLAM_EXTEND ? USLAM_EXTEND : USLAM_MAP;
+		if (h->mode == USLAM_EXTEND) {
+			// RTAB-Map writes places to its file as it goes, and closing "without saving" does not take them out
+			// again (measured: the file of a session that never saw the map had changed). So a map is added to in a
+			// copy, and the copy takes the saved map's place only when the session ends tied to it.
+			std::ifstream in(db, std::ios::binary);
+			if (!in) h->mode = USLAM_MAP;
+			else {
+				h->saved = db;
+				h->db = std::string(db) + ".work.db"; // RTAB-Map takes no file that does not end in .db
+				std::ofstream out(h->db, std::ios::binary | std::ios::trunc);
+				out << in.rdbuf();
+				if (!out) throw std::runtime_error("the saved map could not be copied to work on");
+			}
+		}
+		if (h->saved.empty()) h->db = db;
 		h->st.mode = h->mode;
 		std::istringstream in(rig);
 		for (int i = 0; i < 2; i++)
@@ -244,7 +294,7 @@ USLAM_API uslam_t *uslam_create(const char *rig, const char *db, int mode, const
 			FILE *f = fopen(db, "rb");
 			if (!f) throw std::runtime_error(std::string("no map at ") + db);
 			fclose(f);
-		} else {
+		} else if (h->mode == USLAM_MAP) {
 			remove(db);
 		}
 		ParametersMap &p = h->params;
@@ -272,7 +322,11 @@ USLAM_API uslam_t *uslam_create(const char *rig, const char *db, int mode, const
 			std::string line;
 			while (std::getline(ps, line)) {
 				const size_t eq = line.find('=');
-				if (eq != std::string::npos && eq > 0) p[line.substr(0, eq)] = line.substr(eq + 1);
+				if (eq == std::string::npos || eq == 0) continue;
+				const std::string k = line.substr(0, eq), v = line.substr(eq + 1);
+				if (k == "Ultra/Cores") h->cores = v;
+				else if (k == "Ultra/CvThreads") h->cv_threads = atoi(v.c_str());
+				else p[k] = v;
 			}
 		}
 		ULogger::setType(ULogger::kTypeNoLog);
@@ -332,10 +386,15 @@ USLAM_API void uslam_destroy(uslam_t *h, int save) {
 	if (h->worker.joinable()) h->worker.join();
 	try {
 		const double t0 = now_ms();
-		const bool keep = h->mode == USLAM_MAP && save;
+		const bool keep = save && (h->mode == USLAM_MAP || (h->mode == USLAM_EXTEND && h->st.linked));
 		if (h->rt) h->rt->close(keep);
 		if (h->mode == USLAM_MAP && !save) remove(h->db.c_str());
-		LOGI("closed in %.0f ms%s", now_ms() - t0, keep ? ", map written" : "");
+		if (!h->saved.empty()) {
+			if (keep) {
+				if (rename(h->db.c_str(), h->saved.c_str()) != 0) LOGW("the map that was added to could not take the saved one's place");
+			} else remove(h->db.c_str());
+		}
+		LOGI("closed in %.0f ms%s", now_ms() - t0, keep ? ", map written" : h->mode == USLAM_EXTEND && save ? ", nothing written: the new places were never tied to the map" : "");
 	} catch (const std::exception &e) {
 		LOGW("close failed: %s", e.what());
 	}

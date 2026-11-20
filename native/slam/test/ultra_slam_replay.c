@@ -101,12 +101,21 @@ int main(int argc, char **argv) {
 	printf("%s\n", uslam_version());
 	static uint8_t l[W * H], r[W * H];
 
-	for (int phase = 0; phase < 2; phase++) {
-		if (phase == 0 && strcmp(argv[1], "-") == 0) continue;
+	// UX_EXTEND="from to": between making and finding, the map is opened again and added to from that stretch of the
+	// first recording, as a session of its own whose world is turned and shifted (another unknown offset)
+	double ext[2] = {0, 0};
+	const int extend = getenv("UX_EXTEND") && sscanf(getenv("UX_EXTEND"), "%lf %lf", &ext[0], &ext[1]) == 2;
+	const double yaw2 = -65.0 * M_PI / 180.0;
+	const double G2[7] = {-0.8, 2.1, -0.2, 0, 0, sin(yaw2 / 2), cos(yaw2 / 2)};
+	for (int step = 0; step < 3; step++) {
+		const int phase = step == 2 ? 1 : 0, ex = step == 1;
+		if (ex && !extend) continue;
+		if (step == 0 && (strcmp(argv[1], "-") == 0 || getenv("UX_SKIP_MAP"))) continue;      // UX_SKIP_MAP: the map file is used as it is
 		int np = 0;
 		pose_t *poses = read_poses(argv[2 + 2 * phase], &np);
 		if (!poses) return 1;
-		uslam_t *h = uslam_create(rig, argv[6], phase == 0 ? USLAM_MAP : USLAM_FIND, params);
+		uslam_t *h = uslam_create(rig, argv[6], ex ? USLAM_EXTEND : phase == 0 ? USLAM_MAP : USLAM_FIND, params);
+		const double from = ex ? ext[0] : span[phase][0], to = ex ? ext[1] : span[phase][1];
 		if (!h) return fprintf(stderr, "create: %s\n", uslam_last_error()), 1;
 		FILE *pf = fopen(argv[1 + 2 * phase], "rb");
 		if (!pf) return perror("pairs"), 1;
@@ -121,8 +130,8 @@ int main(int argc, char **argv) {
 			long long tns;
 			if (fread(&tns, 8, 1, pf) != 1) break;
 			const double t = tns * 1e-9;
-			if (t >= span[phase][1]) break;
-			if (t < span[phase][0] || t - last < 1.0 / rate) {
+			if (t >= to) break;
+			if (t < from || t - last < 1.0 / rate) {
 				fseek(pf, 2L * W * H, SEEK_CUR);
 				continue;
 			}
@@ -131,7 +140,8 @@ int main(int argc, char **argv) {
 			if (np == 0 || fabs(poses[pi].t - t) > 0.02 || !poses[pi].ok) continue; // no trusted pose for this pair
 			last = t;
 			double odom[7];
-			if (phase == 1 && same) compose(G, poses[pi].v, odom);
+			if (ex) compose(G2, poses[pi].v, odom);
+			else if (phase == 1 && same) compose(G, poses[pi].v, odom);
 			else memcpy(odom, poses[pi].v, sizeof odom);
 			uslam_feed(h, tns, l, r, W, H, odom);
 			uslam_wait_idle(h);
@@ -140,10 +150,10 @@ int main(int argc, char **argv) {
 			found_before = st.found;
 			ms[n++] = st.last_ms;
 			double e = -1;
-			if (phase == 1 && st.has_corr) {
+			if ((phase == 1 || ex) && st.has_corr) {
 				double in[7];
 				compose(st.corr, odom, in);
-				if (same) {
+				if (same || ex) {
 					e = sqrt((in[0] - poses[pi].v[0]) * (in[0] - poses[pi].v[0]) + (in[1] - poses[pi].v[1]) * (in[1] - poses[pi].v[1]) + (in[2] - poses[pi].v[2]) * (in[2] - poses[pi].v[2]));
 					err[ne++] = e;
 				}
@@ -153,18 +163,19 @@ int main(int argc, char **argv) {
 				}
 				if (first_found < 0) first_found = t;
 			}
-			fprintf(out, "%s,%.3f,%lld,%d,%d,%d,%.1f,%d,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,%.5f,%.4f\n", phase == 0 ? "map" : "find", t, (long long)st.results, hit ? st.last_place : 0, hit ? st.inliers : 0,
+			fprintf(out, "%s,%.3f,%lld,%d,%d,%d,%.1f,%d,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,%.5f,%.4f\n", ex ? "extend" : phase == 0 ? "map" : "find", t, (long long)st.results, hit ? st.last_place : 0, hit ? st.inliers : 0,
 			        st.places, st.last_ms, st.has_corr, st.corr[0], st.corr[1], st.corr[2], st.corr[3], st.corr[4], st.corr[5], st.corr[6], e);
 		}
 		fclose(pf);
 		uslam_get_state(h, &st);
 		qsort(ms, n, sizeof(double), cmp);
-		printf("%s %.0f to %.0f s: %d pairs given, %d places in the map, %lld pairs matched to it; a pair takes median %.0f ms, 90th %.0f, worst %.0f\n", phase == 0 ? "map" : "find",
-		       span[phase][0], span[phase][1], n, st.places, (long long)st.found, n ? ms[n / 2] : 0, n ? ms[n * 9 / 10] : 0, n ? ms[n - 1] : 0);
-		if (phase == 1) {
+		printf("%s %.0f to %.0f s: %d pairs given, %d places in the map, %lld pairs matched to it; a pair takes median %.0f ms, 90th %.0f, worst %.0f\n", ex ? "extend" : phase == 0 ? "map" : "find",
+		       from, to, n, st.places, (long long)st.found, n ? ms[n / 2] : 0, n ? ms[n * 9 / 10] : 0, n ? ms[n - 1] : 0);
+		if (ex) printf("extend: %s\n", st.linked ? "the new places were tied to the map" : "the new places were never tied to the map: nothing is written");
+		if (phase == 1 || ex) {
 			if (first_found < 0) printf("find: the head was never found in the saved map\n");
 			else {
-				printf("find: first found %.1f s into the new session\n", first_found - span[1][0]);
+				printf("find: first found %.1f s into the new session\n", first_found - from);
 				if (ne) {
 					qsort(err, ne, sizeof(double), cmp);
 					printf("find: position against the estimator's own, over %d pairs: median %.1f cm, 90th %.1f cm, worst %.1f cm\n", ne, 100 * err[ne / 2], 100 * err[ne * 9 / 10], 100 * err[ne - 1]);

@@ -156,6 +156,20 @@ object LocalSite {
      * runtime: the frame in which the measured floor is y = 0. The page lines this frame up with its own from the head
      * pose, which is in both.
      */
+    /**
+     * Where the saved map of the room (Tracking's room memory) lies in this file's frame, once the session knows:
+     * games' anchors are kept in the map's coordinates (questlab's meta_layer.cpp). Its keys are its own ("mp", "myaw",
+     * "mv"): the layer finds numbers by name. A test can stand in for the map with
+     * "adb shell setprop debug.ultraxr.fake_map x,y,z,yaw_degrees".
+     */
+    private fun mapJson(h: Double): String? {
+        val fake = try { Class.forName("android.os.SystemProperties").getMethod("get", String::class.java, String::class.java).invoke(null, "debug.ultraxr.fake_map", "") as String } catch (_: Throwable) { "" }
+        val fk = fake.split(",").mapNotNull { it.trim().toDoubleOrNull() }
+        if (fk.size == 4) return ",\"map\":{\"known\":true,\"mp\":[" + f(fk[0]) + "," + f(fk[1] + h) + "," + f(fk[2]) + "],\"myaw\":" + f(Math.toRadians(fk[3])) + ",\"mv\":1}"
+        val am = Tracking.appFromMap() ?: return ",\"map\":{\"known\":false}"
+        return ",\"map\":{\"known\":true,\"mp\":[" + f(am.p[0]) + "," + f(am.p[1] + h) + "," + f(am.p[2]) + "],\"myaw\":" + f(dev.ultraxr.core.Q.yawY(am.q)) + ",\"mv\":" + Tracking.mapVersion + "}"
+    }
+
     fun roomJson(): String {
         val sb = StringBuilder("{\"v\":1,\"t_ms\":").append(System.currentTimeMillis())
         if (!XrHost.applicationConnected) return sb.append(",\"session\":false}").toString()
@@ -168,12 +182,13 @@ object LocalSite {
         val tracked = Tracking.simulateWearer || Tracking.head.predict(System.nanoTime()).mode == dev.ultraxr.core.HeadTracker.Mode.SIX_DOF
         sb.append(",\"tracked\":").append(tracked)
         sb.append(",\"plan\":{\"corners\":").append(Tracking.roomPlanCorners).append(",\"placed\":").append(Tracking.roomPlanPlaced).append("}")
-        val r = Tracking.roomFindings
+        // what this session found, and what is kept of the room from earlier ones (shown once the room is recognised)
+        val (r, conf) = Tracking.roomShown()
         val measured = r != null && !r.floorY.isNaN()
         sb.append(",\"floor\":{\"measured\":").append(measured).append(",\"y\":").append(f(if (measured) r!!.floorY - XrHost.floorTrimM + h else 0.0)).append("}")
         sb.append(",\"surfaces\":[")
         var n = 0
-        if (r != null) for (s in r.surfaces) {
+        if (r != null) for ((si, s) in r.surfaces.withIndex()) {
             if (!tracked && s.kind != RoomSurface.Kind.FLOOR) continue
             if (n++ > 0) sb.append(',')
             sb.append("{\"kind\":\"").append(when (s.kind) { RoomSurface.Kind.FLOOR -> "floor"; RoomSurface.Kind.TABLE -> "table"; RoomSurface.Kind.WALL -> "wall" })
@@ -181,9 +196,10 @@ object LocalSite {
                 .append("],\"u\":[").append(f(s.ux)).append(',').append(f(s.uy)).append(',').append(f(s.uz))
                 .append("],\"v\":[").append(f(s.vx)).append(',').append(f(s.vy)).append(',').append(f(s.vz))
                 .append("],\"n\":[").append(f(s.nx)).append(',').append(f(s.ny)).append(',').append(f(s.nz))
-                .append("],\"hu\":").append(f(s.halfU)).append(",\"hv\":").append(f(s.halfV)).append(",\"support\":").append(s.support).append('}')
+                .append("],\"hu\":").append(f(s.halfU)).append(",\"hv\":").append(f(s.halfV)).append(",\"support\":").append(s.support).append(",\"conf\":").append(f(conf.getOrElse(si) { 0.7 })).append('}')
         }
         sb.append("]")
+        mapJson(h)?.let { sb.append(it) }
         // where the cameras measured things in their newest picture, while it is fresh: a page can draw them on the things
         val pts = Tracking.roomPoints
         if (tracked && pts.isNotEmpty() && (Tracking.simulateWearer || System.nanoTime() - Tracking.roomPointsNs < 1_500_000_000L)) {

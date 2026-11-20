@@ -58,9 +58,27 @@ Not done: `build_all.sh` has not been run from an empty directory in one go; eac
   bundle adjustment. `g2o/Solver` must be 3 (Eigen): the default asks for CSparse, which is not built.
 - Stereo depth of a corner: optical flow from the left picture to the right one, on the rectified pair.
 
+## Three ways of opening a map (`ultra_slam.h`)
+
+- `USLAM_MAP`: a map is made afresh at the path.
+- `USLAM_FIND`: the map there is read; the file is never changed.
+- `USLAM_EXTEND`: the map there is copied to `<path>.work.db` and the copy is added to. The estimator's world is said
+  to lie in the map only while the newest place is linked, through the graph, to the map's first place (RTAB-Map
+  keeps the poses of every place it read from the file whether or not anything new is linked to them, so the poses
+  cannot be asked). At the end the copy takes the saved map's place only if the session was tied to it; otherwise it
+  is deleted and the saved map is byte for byte what it was. The copy is needed: RTAB-Map writes places to its file
+  as it goes, and closing "without saving" does not take them out again.
+
+Options that are this library's own, given with the RTAB-Map parameters: `Ultra/Cores=little` (the worker keeps to
+cores 0 to 3) and `Ultra/CvThreads=n` (OpenCV's thread count, for the whole process). The app sets both; they are
+what makes the map cost the estimator nothing measurable (`docs/SPATIAL.md`, section 8).
+
 ## The phone test
 
     python tools/tracking/hand_pairs_export.py REC.uxrec OUT.pairs
     python tools/tracking/slam_export.py BASALT_CALIB.json TAG-vio.csv OUT_DIR       # rig.txt, poses.txt
     adb push ... /data/local/tmp/slam/        # libultra_slam.so, librtabmap_core.so, libopencv_java4.so, libc++_shared.so, ultra_slam_replay
     LD_LIBRARY_PATH=/data/local/tmp/slam ./ultra_slam_replay a.pairs a.poses a.pairs a.poses rig.txt map.db out.csv 2 45 45 83 3
+
+`UX_EXTEND="from to"` puts a session that adds to the map between the making and the finding (its world turned and
+shifted by another unknown amount); `UX_SKIP_MAP=1` uses the map file as it is.

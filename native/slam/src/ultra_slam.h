@@ -24,7 +24,11 @@ extern "C" {
 
 typedef struct uslam uslam_t;
 
-enum { USLAM_MAP = 0, USLAM_FIND = 1 };
+/* USLAM_EXTEND: the map at db is opened and added to. What the estimator's world is in the map's is said only once a
+ * place of the map as it was has been seen again and the new places hang together with it; the file is written at
+ * the end only if that happened (new places that were never tied to the old ones would be a second map with a frame
+ * of its own in the same file). With no file there it is USLAM_MAP. */
+enum { USLAM_MAP = 0, USLAM_FIND = 1, USLAM_EXTEND = 2 };
 
 typedef struct {
 	int64_t results;    /* pairs worked through since create or the last new epoch */
@@ -32,7 +36,8 @@ typedef struct {
 	int64_t dropped;    /* pairs handed in while the worker was busy */
 	int64_t last_t_ns;  /* time of the last pair worked through */
 	int64_t found_t_ns; /* time of the last pair recognised */
-	int has_corr;       /* corr is set (FIND: at least one pair was recognised since the last new epoch) */
+	int has_corr;       /* corr is set: the newest place hangs together with the map's first place (its frame is the map's) */
+	int linked;         /* EXTEND: the new places were tied to the old map at some time in this session */
 	double corr[7];     /* the estimator's world in the map's world: p xyz, q xyzw */
 	int places;         /* places in the map */
 	int last_place;     /* the place the last pair was matched to, 0 for none */

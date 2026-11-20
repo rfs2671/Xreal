@@ -64,11 +64,11 @@ class MapAlignTest {
             if (m == null) { if (++quiet > 6) break else continue }      // the first readings of the drift are outvoted by the old ones
             quiet = 0
             val near = fix.p; val to = m.apply(near)
-            assertTrue("a step of " + dist(near, to), dist(near, to) <= MapAlign.STEP_M + 1e-9)
-            assertTrue(Math.abs(Q.yawY(m.q)) <= MapAlign.STEP_RAD + 1e-9)
+            assertTrue("a step of " + dist(near, to), dist(near, to) <= MapAlign.STEP_MAX_M + 1e-9)
+            assertTrue(Math.abs(Q.yawY(m.q)) <= MapAlign.STEP_MAX_RAD + 1e-9)
             fix = m * fix; a.onWorldMoved(m, own = true); n++
         }
-        assertTrue("steps: $n", n in 4..20)
+        assertTrue("steps: $n", n in 3..20)
         val left = a.appFromMap!! * a.seen(fix, drifted).inverse()
         assertTrue(dist(left.p, doubleArrayOf(0.0, 0.0, 0.0)) < 0.03); assertTrue(Math.abs(Q.yawY(left.q)) < Math.toRadians(0.5))
         assertEquals(1, a.version)
@@ -92,6 +92,17 @@ class MapAlignTest {
         val recentre = yUp(-1.0, 0.0, 2.0, 90.0)
         fix = recentre * fix; a.onWorldMoved(recentre)
         assertNull(a.onReading(fix, corr)); assertEquals(0.0, a.lastOffM, 1e-9)
+    }
+
+    @Test fun aStepMadeInPartsEndsWhereTheStepWould() {
+        val near = doubleArrayOf(1.5, 1.6, -0.7); val step = yUp(0.012, 0.0, -0.008, 0.2)
+        val part = MapAlign.part(step, near, 1.0 / 12)
+        var done = Pose(); repeat(12) { done = part * done }
+        assertEquals(0.0, dist(done.apply(near), step.apply(near)), 2e-4); assertEquals(Q.yawY(step.q), Q.yawY(done.q), 1e-9)
+        val far = doubleArrayOf(4.0, 1.0, 3.0)      // and a thing some metres off lands within a millimetre of where the whole step puts it
+        assertEquals(0.0, dist(done.apply(far), step.apply(far)), 1e-3)
+        // no part moves the nearby point by more than a millimetre and a half
+        assertTrue(dist(part.apply(near), near) < 0.0015)
     }
 
     @Test fun noiseIsLeftAlone() {

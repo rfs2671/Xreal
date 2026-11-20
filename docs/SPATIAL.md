@@ -189,7 +189,7 @@ without, and it gives 29.4 to 29.6 states a second against 29.8; at the default 
 A reading takes about 200 ms in the app (60 in the test program by itself). So the map is not free yet: it takes
 processor time the estimator feels.
 
-**Not done, not claimed:**
+**Not done, not claimed (as of the evening; section 8 takes up the first four):**
 
 - The world correction (drift taken out in steps, a large error at once) has run in unit tests only: in the replays
   the map never had to move the world. Whether a correction is seen as a jump is untested.
@@ -202,11 +202,133 @@ processor time the estimator feels.
   the map's accuracy has not been measured against anything.
 - Room geometry, planes for games through the map, depth: untouched.
 
+## 8. Anchors on the map, a map that grows, what it costs, corrections, and the room's surfaces (20 November 2026, late)
+
+Again all of it measured by replay or by test programs on the Galaxy S21 Ultra. **A replay is the same pictures from
+the same viewpoints in the same light; none of this says how well the room is found again in real use, and nothing
+here has been worn.** `tools/tracking/worn_map_report.py SERIAL` reads the app's log after a worn session (map starts,
+first recognition, every correction made at once, losses of position, restarts); the app writes a status line every
+ten seconds for it.
+
+### Games' anchors are kept in the map's coordinates
+
+`room.json` now says where the saved map lies in its frame (`"map":{"known":true,"mp":[..],"myaw":..,"mv":..}`), once
+the session knows. The Quest layer (`questlab/src/main/cpp/meta_layer.cpp`) keeps every anchor's pose in map
+coordinates beside its pose in the room's frame, saves both, and from then on takes the anchor's place from the map:
+a saved anchor is put back when the room is recognised and follows the map when the app corrects the world. With no
+map known it behaves as before (relative to where the session started).
+
+Tested with the synthetic Quest test on the phone and a stand-in for the map's place (`setprop
+debug.ultraxr.fake_map x,y,z,yaw`), which makes one anchor 0.5 m in front of the head and saves it each run:
+
+| run | the map stands at | the anchor of the run before is found | expected |
+|---|---|---|---|
+| 2 | where it stood | 0.50 m from this run's origin | 0.50 |
+| 3 | 1 m to the side | 1.12 m | 1.118 (the anchor went with the map) |
+| 4 | the same again | 0.50 m (run 3's anchor, made in the moved world) | 0.50 |
+| 5 | back at the origin, turned 90 degrees | 1.12 m, moved 1.58 m | 1.118 and 1.58 |
+
+Not tested: a real game, and the map's real place in a worn session (the stand-in replaces exactly that).
+
+### A map that is added to
+
+A saved map is now opened to be added to (`USLAM_EXTEND`; `room_map=find` in `vio_options.txt` gives the read-only
+way back). The rules that keep existing anchors valid:
+
+- the map's frame is that of its first place, for good;
+- a session's places count as part of the map only while they are linked to that first place through the graph; until
+  the session has recognised a saved place, nothing is said about where its world lies;
+- the session works on a copy, and the copy takes the saved map's place only if the session ended tied to it. A
+  session somewhere unknown leaves the file byte for byte as it was (checked by checksum).
+
+So a new room is added by walking into it from a room the map knows, in one session.
+
+| the library alone, on the 83 s recording | head found | recognised | position against the estimator's own |
+|---|---|---|---|
+| map from 2 to 30 s (58 places), find in 58 to 83 s | 3.6 s in | 28 of 70 pairs | median 9.9 cm, 90th 11.0, worst 11.9 |
+| the same map added to from 28 to 60 s as another session (136 places), then find in 58 to 83 s | 0.4 s in | 43 of 70 | median 10.0 cm, 90th 11.1, worst 12.4 |
+| the adding session itself (an unknown offset of its own) | at once | 31 of 90 | median 6.5 cm, 90th 8.6, worst 10.2 |
+| 20 November's pictures added to that map (another place) | never tied | | the file's checksum unchanged |
+
+In the app, across restarts (the test of section 7; a thing put down at the head's place in the first session):
+
+| | head found | off by | within 10 cm |
+|---|---|---|---|
+| first session after the map was made, adding to it | 4.0 s | median 2.5 cm, 90th 10.1, worst 12.4 | 89 % |
+| second, adding again | 4.6 s | median 4.3 cm, 90th 13.3, worst 16.2 | 78 % |
+| third, reading only | 16.3 s | median 3.7 cm, 90th 14.4, worst 17.2 | 79 % |
+
+**What is wrong with it:** walking the same room again adds its places again. The file went from 11 MB to 20 MB in two
+sessions of the same recording, a picture took 280 and then 430 ms to look at in place of 120 to 190, the third
+session needed 16 s to find itself, and opening the larger file once took 11 s. RTAB-Map's own remedy
+(`Mem/ReduceGraph`) was tried: 247 places and 18 MB instead, and worse placing (worst 31 cm, 72 % within 10 cm); not
+taken. Until places already known are not added again, a map should be learnt once and added to when there is a new
+room, not every day. Also not exercised: a restart of the estimator in the middle of adding.
+
+### What the map costs the estimator
+
+`tools/tracking/map_cost.py`, one recording, runs without the map between the others (the phone warms up over a
+batch, so a run is compared with its neighbours):
+
+| | estimator, ms a frame (median) | states a second | hands, ms a result |
+|---|---|---|---|
+| no map (three runs through the batch) | 34.6, 41.8, 43.3 | 29.8, 29.7, 29.7 | 35.7, 39.2, 39.8 |
+| map read, as section 7 left it (twice) | 48.4, 46.5 | 29.5, 29.5 | 40.1, 41.3 |
+| worker kept to the small cores | 45.4 | 29.5 | 40.4 |
+| OpenCV with one thread | 36.1 | 29.9 | 40.4 |
+| both (**as it is now**; twice) | 37.5, 36.6 | 29.9, 29.9 | 35.0, 36.3 |
+| both, and half the corners | 36.2 | 29.9 | 37.1 |
+
+It was OpenCV's thread pool, not the map's own work: the map's pictures were being spread over every core. With one
+OpenCV thread and the worker on the small cores, a run with the map is within what runs without it differ by, and no
+state is dropped. A map picture still takes 140 to 250 ms in the app (it has the small cores to itself), which is why
+it is given one picture in three. The hand tracker found hands as often as without (its counts differ more from run to
+run than between settings). The estimator's 35 to 43 ms a frame is its own cost and is over the 33 ms a camera frame
+lasts: it keeps up at 29.7 to 29.9 states a second because it uses two threads, but there is no headroom. That has not
+been worked on.
+
+### Corrections without a jump
+
+- A small correction is no longer made at once: the step (a quarter of what is left, between 1.5 and 4 cm and up to a
+  degree) is cut into twelve parts made 25 ms apart, so no frame moves the wearer's surroundings by more than 3.3 mm
+  (unit test: twelve parts end where the whole step would, to 0.2 mm). These parts do not interrupt the room finder.
+- Forced by replay (`map_test_slip` in `vio_options.txt`, `tools/tracking/map_slip_report.py`): at second 30 the
+  app's world is pushed aside and the aligner is not told, as after a wrong join.
+
+| pushed by | first seen by the map | within 2 cm again (by the app's own readings) | put back at once |
+|---|---|---|---|
+| 8 cm | 3.4 s later, 7.0 cm off | 7.7 s after the push (10.5 s with the later step rule; one run each) | no |
+| 8 cm and 2 degrees | 3.0 s, 7.0 cm | 10.4 s | no |
+| 20 cm and 3 degrees | 2.9 s, 20.3 cm | 17.2 s at 1.5 cm a step; 12.0 s with a quarter of what is left a step | no |
+| 1 m and 25 degrees | 3.3 s, 99 cm | 4.0 s | yes, once: a jump, by design |
+
+Against a run that was not pushed, the head's place came back to within what two runs differ by anyway (1 to 3 cm).
+**What a replay cannot show is whether the wearer sees it:** the head's place in two runs of one recording differs by
+1 to 2 cm from state to state, far more than a part of a step, so the smoothness itself is from the unit test and
+the arithmetic, not from a measurement. Three seconds pass before the map says anything, because three readings must
+agree; that is the price of not believing one.
+
+### The room's surfaces are kept with the map
+
+`core/RoomMemory.kt` (4 unit tests), `files/room_surfaces.txt`: the walls, table tops and floor height the room finder
+has are kept in map coordinates, merged as it goes (the same wall seen again grows the one kept). A later session has
+them the moment the room is recognised. Games and pages get both, each with a confidence in `room.json` (`"conf"`):
+1.0 kept and found again in this session, 0.7 found in this session only, 0.4 kept and not seen yet.
+
+By replay: 6 to 8 walls and table tops and the floor were back 0.4 s after the room was recognised (about 4.4 s into
+the session; without it the first wall takes the time it takes to look at one). Walls the session then found itself
+lay 1.3 to 5.6 cm (median) from the kept ones they were taken for, 7.9 cm at worst, over 1 to 4 walls a run.
+
+This is a beginning, not better geometry: the surfaces are the same planes as before, only remembered. Nothing kept
+is ever dropped (a wardrobe that was moved stays until the room is learnt anew), the kept surfaces are not used for
+the floor the app itself stands games on, there is still no mesh and nothing for furniture that is not a table top.
+
 ## What is known to be weak (measured, `docs/QUEST_COMPAT.md`, `docs/TRACKING_ANALYSIS.md`)
 
-- **A saved map only since 20 November, and only for the desktop's windows** (section 7); not yet worn. Anchors saved
-  by a game still come back relative to where the next session started: one put on a wall was 0.73 m off in the next
-  run and 2.70 m off after walking.
+- **A saved map only since 20 November** (sections 7 and 8), for the desktop's windows, games' anchors and the room's
+  surfaces; **not yet worn**, so how well a room is found again from other viewpoints and in other light is not
+  known. Before it, an anchor put on a wall was 0.73 m off in the next run and 2.70 m off after walking.
+- **A map that is added to keeps growing** when the same room is walked again (section 8).
 - **Position was lost while walking** (seconds at a time, worn, 18 and 19 November); each loss of more than 2 s makes
   the room model forget its surfaces. The long wait after a loss is fixed (section 7); why it is lost is not known,
   and no recording reproduces it.
@@ -218,7 +340,7 @@ processor time the estimator feels.
 
 ## Where the code is
 
-`native/vio/` (Basalt and its wrapper), `native/slam/` (RTAB-Map and its wrapper), `core/MapAlign.kt`, `tracking/Tracking.kt` (the loops that tie it together),
+`native/vio/` (Basalt and its wrapper), `native/slam/` (RTAB-Map and its wrapper), `core/MapAlign.kt`, `core/RoomMemory.kt`, `tracking/Tracking.kt` (the loops that tie it together),
 `core/HeadTracker.kt`, `core/PositionConfidence.kt`, `core/FactoryCalibration.kt`, `core/FloorCalibrator.kt`,
 `core/StereoPoints.kt`, `core/RoomModel.kt`, `core/RoomTidy.kt`, `core/DenseStereo.kt`, `core/WallMap.kt`,
 `core/RoomMesh.kt`, `core/RoomPlan.kt`, `core/RoomRecall.kt`, `xr/XrHost.kt`, `questlab/src/main/cpp/meta_layer.cpp`.

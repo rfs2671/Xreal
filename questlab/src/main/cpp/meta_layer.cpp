@@ -250,6 +250,8 @@ struct Entity {
     bool locatable = false, storable = false, saved = false;
     int key = 0;                                  // which wall or table it was in the room data
     bool live = true;                             // false: a wall or table the room model no longer has; the handle stays good, queries leave it out
+    bool hasMap = false; XrPosef mapPose{{0, 0, 0, 1}, {0, 0, 0}};   // an anchor's pose in the saved map of the room (Ultra XR's room memory), once known
+    int mapSeen = 0;                              // the map reading (room.json's "mv") its pose was last taken from
 };
 std::vector<Entity *> entities;                   // never freed while the instance lives: games keep the handles
 bool isEntity(XrSpace s) { for (auto *e : entities) if ((XrSpace)(uintptr_t)e == s) return true; return false; }
@@ -260,10 +262,14 @@ XrUuidEXT makeUuid(Kind k, int n) {
 }
 int anchorCount = 0;
 
-// Saved anchors, kept between runs in the game's own data folder. There is no saved map of the room yet, so there is
-// nothing to find a place by on the next run: an anchor comes back where it was relative to where the session
-// started (the room's frame begins at the head's place and heading at the start). Start in the same spot facing the
-// same way and it is where it was; start elsewhere and it is off by as much.
+// Saved anchors, kept between runs in the game's own data folder.
+// Ultra XR keeps a map of the room between sessions (its "room memory") and says in room.json where that map lies in
+// the room's frame, once it knows. While it does, an anchor's place is kept in the map's coordinates as well, and
+// that is what is saved: in a later run the anchor is put back from the map as soon as the room is recognised, and it
+// follows the map when the app corrects the world. Until the room is recognised (or with no map at all) an anchor
+// comes back where it was relative to where the session started, as before: start in the same spot facing the same
+// way and it is where it was; start elsewhere and it is off by as much.
+bool mapKnown = false; XrPosef mapInRoom{{0, 0, 0, 1}, {0, 0, 0}}; int mapVersion = 0; int anchorsFromMap = 0; float anchorsMovedMax = 0;
 std::string anchorFile() {
     char name[256] = ""; FILE *f = fopen("/proc/self/cmdline", "r"); if (f) { fread(name, 1, sizeof name - 1, f); fclose(f); }
     for (char *c = name; *c; c++) if (*c == ':') { *c = 0; break; }      // a process name may be package:suffix
@@ -277,23 +283,29 @@ void storeAnchors() {      // lock held
     for (auto *e : entities) {
         if (e->kind != ANCHOR || !e->saved) continue;
         fprintf(f, "%d ", e->key); for (int i = 0; i < 16; i++) fprintf(f, "%02x", e->uuid.data[i]);
-        fprintf(f, " %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", e->pose.orientation.x, e->pose.orientation.y, e->pose.orientation.z, e->pose.orientation.w, e->pose.position.x, e->pose.position.y, e->pose.position.z);
+        fprintf(f, " %.6f %.6f %.6f %.6f %.6f %.6f %.6f", e->pose.orientation.x, e->pose.orientation.y, e->pose.orientation.z, e->pose.orientation.w, e->pose.position.x, e->pose.position.y, e->pose.position.z);
+        if (e->hasMap) fprintf(f, " M %.6f %.6f %.6f %.6f %.6f %.6f %.6f", e->mapPose.orientation.x, e->mapPose.orientation.y, e->mapPose.orientation.z, e->mapPose.orientation.w, e->mapPose.position.x, e->mapPose.position.y, e->mapPose.position.z);
+        fprintf(f, "\n");
     }
     fclose(f); rename((p + ".new").c_str(), p.c_str());
 }
 void loadAnchors() {       // lock held; once an instance
     for (auto *e : entities) if (e->kind == ANCHOR) return;
     std::string p = anchorFile(); FILE *f = p.empty() ? nullptr : fopen(p.c_str(), "r"); if (!f) return;
-    int key; char hex[40]; float q[4], t[3];
-    while (fscanf(f, "%d %32s %f %f %f %f %f %f %f", &key, hex, &q[0], &q[1], &q[2], &q[3], &t[0], &t[1], &t[2]) == 9) {
+    int key; char hex[40]; float q[4], t[3]; char row[512]; int withMap = 0;
+    while (fgets(row, sizeof row, f)) {
+        float mq[4], mt[3];
+        int n = sscanf(row, "%d %32s %f %f %f %f %f %f %f M %f %f %f %f %f %f %f", &key, hex, &q[0], &q[1], &q[2], &q[3], &t[0], &t[1], &t[2], &mq[0], &mq[1], &mq[2], &mq[3], &mt[0], &mt[1], &mt[2]);
+        if (n < 9) continue;
         if (strlen(hex) != 32) continue;
         auto *e = new Entity{ANCHOR, {}, {{q[0], q[1], q[2], q[3]}, {t[0], t[1], t[2]}}};
+        if (n == 16) { e->hasMap = true; e->mapPose = {{mq[0], mq[1], mq[2], mq[3]}, {mt[0], mt[1], mt[2]}}; withMap++; }
         for (int i = 0; i < 16; i++) { unsigned v = 0; sscanf(hex + 2 * i, "%2x", &v); e->uuid.data[i] = (uint8_t)v; }
         e->key = key; e->saved = true; e->storable = true; entities.push_back(e); anchorsRestored++;
         if (key > anchorCount) anchorCount = key;
     }
     fclose(f);
-    LOGI("%d saved anchors read back (placed relative to where this session started)", anchorsRestored);
+    LOGI("%d saved anchors read back, %d with a place in the saved map of the room (put there once the room is recognised; until then relative to where this session started)", anchorsRestored, withMap);
 }
 
 // room.json's frame seen from our local-floor space: a turn about the vertical and a shift, from the head, which is in both
@@ -352,6 +364,25 @@ void readRoom() {
     size_t hi = s.find("\"head\":");
     if (hi != std::string::npos && numbers(s, hi, "p", hp, 3) && numbers(s, hi, "q", hq, 4)) { jsonHead.p = {{hq[0], hq[1], hq[2], hq[3]}, {hp[0], hp[1], hp[2]}}; jsonHead.ok = true; }
     float fy = 0; size_t fi = s.find("\"floor\":"); if (fi != std::string::npos) numbers(s, fi, "y", &fy, 1);
+    // The saved map of the room, when the app knows where it lies: anchors are tied to it.
+    {
+        size_t mi = s.find("\"map\":{\"known\":true"); float mp[3], myaw = 0, mv = 0;
+        bool was = mapKnown; mapKnown = mi != std::string::npos && numbers(s, mi, "mp", mp, 3) && numbers(s, mi, "myaw", &myaw, 1) && numbers(s, mi, "mv", &mv, 1);
+        if (mapKnown) {
+            mapInRoom = {{0, std::sin(myaw / 2), 0, std::cos(myaw / 2)}, {mp[0], mp[1], mp[2]}}; mapVersion = (int)mv;
+            bool changed = false; int placed = 0;
+            for (auto *e : entities) {
+                if (e->kind != ANCHOR) continue;
+                if (!e->hasMap) { e->mapPose = compose(inverse(mapInRoom), e->pose); e->hasMap = true; e->mapSeen = mapVersion; changed |= e->saved; continue; }
+                XrPosef now = compose(mapInRoom, e->mapPose);
+                float d = std::sqrt((now.position.x - e->pose.position.x) * (now.position.x - e->pose.position.x) + (now.position.y - e->pose.position.y) * (now.position.y - e->pose.position.y) + (now.position.z - e->pose.position.z) * (now.position.z - e->pose.position.z));
+                if (e->mapSeen == 0) { placed++; anchorsFromMap++; if (d > anchorsMovedMax) anchorsMovedMax = d; }
+                e->pose = now; e->mapSeen = mapVersion;
+            }
+            if (placed) diag("ANCHORS  %d saved anchors put back from the saved map of the room (the room is recognised); the farthest moved %.2f m from where the session's start had it", placed, anchorsMovedMax);
+            if (changed) storeAnchors();
+        } else if (was) diag("ANCHORS  the saved map of the room is not known any more; anchors stay where they are in the room's frame");
+    }
     // the floor and (assumed 2.5 m above it) the ceiling: 8 m squares around the room's origin; x, y in the plane, z out of it
     upsert(FLOOR, 0, {fromAxes({1, 0, 0}, {0, 0, -1}, {0, 1, 0}), {0, fy, 0}}, 8, 8);
     upsert(CEILING, 0, {fromAxes({1, 0, 0}, {0, 0, 1}, {0, -1, 0}), {0, fy + 2.5f, 0}}, 8, 8);
@@ -489,6 +520,7 @@ XrResult XRAPI_CALL uCreateSpatialAnchorFB(XrSession, const XrSpatialAnchorCreat
     }
     auto *e = new Entity{ANCHOR, makeUuid(ANCHOR, ++anchorCount), refInRoom(compose(base, info->poseInSpace))};
     e->key = anchorCount; e->locatable = true; entities.push_back(e);
+    if (mapKnown) { e->mapPose = compose(inverse(mapInRoom), e->pose); e->hasMap = true; e->mapSeen = mapVersion; }
     *req = nextRequest++;
     XrEventDataSpatialAnchorCreateCompleteFB ev{XR_TYPE_EVENT_DATA_SPATIAL_ANCHOR_CREATE_COMPLETE_FB}; ev.requestId = *req; ev.result = XR_SUCCESS; ev.space = (XrSpace)(uintptr_t)e; ev.uuid = e->uuid; push(ev);
     return XR_SUCCESS;

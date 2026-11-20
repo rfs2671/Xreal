@@ -153,9 +153,10 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     @Synchronized fun shiftWorld(dx: Double, dz: Double) = moveWorld(Pose(doubleArrayOf(dx, 0.0, dz)))
 
     /** Moves the app world by [moved] (a turn about the vertical and a shift along the floor): every point p of it is then at moved applied to p. */
-    @Synchronized fun moveWorld(moved: Pose) {
+    @Synchronized fun moveWorld(moved: Pose, quiet: Boolean = false) {
         fix = moved * fix
-        worldVersion++
+        // a part of a small step towards the saved map (a millimetre): work begun before it is as good after it
+        if (!quiet) worldVersion++
         onWorldMoved?.invoke(moved)
     }
 
