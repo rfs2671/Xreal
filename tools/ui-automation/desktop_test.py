@@ -83,13 +83,13 @@ def dock_to(title):
 def side_to(name):
     """On the home panel: the focus to the sidebar's entry [name] (home, games, apps, windows, settings)."""
     to_shelf()
-    for _ in range(8):
+    for _ in range(3):      # the sections are the top row: up from the covers, and from the actions by way of the covers
         if (state()[1] or "").startswith("side:"): break
-        key("DPAD_LEFT", pause=0.2)
-    key("DPAD_UP", "DPAD_UP", "DPAD_UP", "DPAD_UP", pause=0.15)
+        key("DPAD_UP", pause=0.2)
+    key("DPAD_LEFT", "DPAD_LEFT", "DPAD_LEFT", "DPAD_LEFT", pause=0.15)
     for _ in range(5):
         if state()[1] == "side:" + name: return True
-        key("DPAD_DOWN", pause=0.2)
+        key("DPAD_RIGHT", pause=0.2)
     return state()[1] == "side:" + name
 
 def row_to(name, way="DPAD_RIGHT"):
@@ -122,7 +122,7 @@ def close_everything():
         if mode == "dock":
             dock_to("System"); key("DPAD_CENTER"); time.sleep(0.6); dock_to("Close all"); key("DPAD_CENTER"); time.sleep(1.0)
         else:
-            side_to("windows"); key("DPAD_CENTER"); time.sleep(0.8); key("DPAD_RIGHT"); row_to("sys:closeall"); key("DPAD_CENTER"); time.sleep(1.0)
+            side_to("windows"); key("DPAD_CENTER"); time.sleep(0.8); key("DPAD_DOWN", "DPAD_DOWN"); row_to("sys:closeall"); key("DPAD_CENTER"); time.sleep(1.0)
     return not state()[2]
 
 def main():
@@ -143,25 +143,27 @@ def main():
 
     # ---- start from nothing
     check("every window of earlier days can be closed with 'Close all'", close_everything(), [w["id"] for w in state()[2]])
-    side_to("home"); key("DPAD_CENTER", "DPAD_RIGHT"); time.sleep(0.5)
+    side_to("home"); key("DPAD_CENTER", "DPAD_DOWN"); time.sleep(0.5)
 
     # ---- the home panel
     f, name, ws, mode = state()
     check("with no window open the home panel is shown", mode == "panel:home" and f.startswith("shelf"), mode)
-    check("right of the sidebar is the large card", name == "hero", name)
+    check("under the sections is the wall of covers, the focus on the one in the middle", (name or "").startswith("item:"), name)
     p = shot("01-home")
-    check("an eye's picture of the home panel can be taken, and the panel fills its middle", p is not None and lit(p, (0.05, 0.2, 0.95, 0.8)) > 0.5, "%.0f%% lit" % (100 * lit(p, (0.05, 0.2, 0.95, 0.8))) if p else "no picture")
-    key("DPAD_RIGHT"); check("Right goes to the quick games", (state()[1] or "").startswith("quick:"), state()[1])
-    key("DPAD_LEFT"); check("Left comes back", state()[1] == "hero", state()[1])
-    key("DPAD_LEFT"); check("Left again goes to the sidebar, on the section shown", state()[1] == "side:home", state()[1])
-    key("DPAD_DOWN", "DPAD_CENTER"); time.sleep(0.8); check("Down and Select show the games", state()[3] == "panel:games" and state()[1] == "side:games", state()[1:4:2]); shot("02-games")
-    key("DPAD_DOWN", "DPAD_CENTER"); time.sleep(1.5); check("the phone's apps are a section too", state()[3] == "panel:apps", state()[3]); shot("03-apps")
-    key("ESCAPE"); check("Back does nothing on the panel, and the screen is not left", state()[3] == "panel:apps" and uia.find("Open in the glasses") is None, state()[3])
-    check("Home is at the top of the sidebar", side_to("home")); key("DPAD_CENTER"); time.sleep(0.6)
+    check("an eye's picture of the home can be taken, and the wall fills its middle", p is not None and lit(p, (0.1, 0.25, 0.9, 0.7)) > 0.5, "%.0f%% lit" % (100 * lit(p, (0.1, 0.25, 0.9, 0.7))) if p else "no picture")
+    was = name; key("DPAD_RIGHT"); check("Right turns the wall to the next cover", (state()[1] or "").startswith("item:") and state()[1] != was, state()[1])
+    key("DPAD_LEFT"); check("Left comes back", state()[1] == was, state()[1])
+    key("DPAD_DOWN"); check("Down goes to the actions under the wall", state()[1] == "sys:recentre", state()[1])
+    key("DPAD_LEFT"); check("with the room to their left", state()[1] == "room", state()[1])
+    key("DPAD_UP"); check("Up comes back to the cover in the middle", state()[1] == was, state()[1])
+    key("DPAD_UP"); check("Up again goes to the sections, on the one shown", state()[1] == "side:home", state()[1])
+    key("DPAD_RIGHT", "DPAD_CENTER"); time.sleep(0.8); check("Right and Select show the games", state()[3] == "panel:games" and state()[1] == "side:games", state()[1:4:2]); shot("02-games")
+    key("DPAD_RIGHT", "DPAD_CENTER"); time.sleep(1.5); check("the phone's apps are a section too", state()[3] == "panel:apps", state()[3]); shot("03-apps")
+    key("ESCAPE"); check("Back does nothing on the home, and the screen is not left", state()[3] == "panel:apps" and uia.find("Open in the glasses") is None, state()[3])
+    check("Home is the first of the sections", side_to("home")); key("DPAD_CENTER"); time.sleep(0.6)
 
     # ---- a window
-    key("DPAD_RIGHT", "DPAD_DOWN"); check("under the large card is the library", (state()[1] or "").startswith("lib:"), state()[1])
-    row_to("lib:YouTube", "DPAD_LEFT"); check("the library has the Browser", row_to("lib:Browser"), state()[1])
+    key("DPAD_DOWN"); check("the wall has the Browser, and it goes round", row_to("item:Browser"), state()[1])
     key("DPAD_CENTER")
     f, _, ws, mode = wait(lambda s: s[0].startswith("page") and len(visible(s[2])) == 1)
     w = focused(ws)
@@ -227,7 +229,7 @@ def main():
     check("Home is the dock's first mark", dock_to("Home")); key("DPAD_CENTER"); time.sleep(1.0)
     f, name, ws, mode = state()
     check("Select on it puts the windows away and shows the home panel", mode == "panel:home" and len(ws) == 2 and not visible(ws), "%s, %d windows, %d in view" % (mode, len(ws), len(visible(ws)))); shot("12-home-with-windows-away")
-    side_to("windows"); key("DPAD_CENTER"); time.sleep(0.8); key("DPAD_RIGHT")
+    side_to("windows"); key("DPAD_CENTER"); time.sleep(0.8); key("DPAD_DOWN")
     check("the Windows section lists them", (state()[1] or "").startswith("win:"), state()[1]); shot("13-windows")
     key("DPAD_CENTER"); f, _, ws, mode = wait(lambda s: len(visible(s[2])) == 1)
     back = focused(ws)
@@ -242,7 +244,7 @@ def main():
     log = uia.sh("logcat -d -t 4000 | grep -E 'FATAL EXCEPTION|AndroidRuntime: Process: dev.ultraxr' | grep -v adbd")
     check("no crash was logged", not log.strip(), log.strip()[-160:])
     perf = [l for l in uia.sh("logcat -d -t 4000 | grep 'desktop: .* fps'").splitlines() if l.strip()]
-    fps = float(re.search(r"desktop: (\d+) fps", perf[-1]).group(1)) if perf else 0
+    found = [m for m in (re.search(r"desktop: (\d+) fps", line) for line in perf) if m]; fps = float(found[-1].group(1)) if found else 0
     check("the desktop draws at the screen's rate", fps >= 55, perf[-1].split("UltraXR :")[-1].strip() if perf else "no line")
     finish()
 

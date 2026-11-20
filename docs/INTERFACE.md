@@ -42,6 +42,31 @@ fainter and the cards carry it.
   glass pills. Corner brackets are drawn only while a window is being sized. A window that was put away comes
   back in front of the wearer, not where it last stood.
 
+## The home is "Aurora" (20 November 2026; this replaces the glass panel described below)
+
+Of the three directions in `docs/design/` the owner chose the second. What is built of it (`desktop/HomePanel.kt`):
+
+- **A wall of covers that curves round the wearer.** Each cover is a thing of its own in the room, not part of one
+  flat picture: the one in the middle is a quarter larger and 14 cm nearer, its neighbours stand back (22 cm for
+  the outer ones) and are turned inwards by about 29 and 34 degrees, so the wall is seen to curve and shifts in
+  depth as the head moves (`Home.coverX`, `coverScale`, `coverTurn`, `coverDepth`, drawn as `RenderPiece`s). Five
+  are in view. With five covers or more the wall goes round: after the last comes the first.
+- **Movement.** Left and Right turn the wall to the next cover in a quarter of a second. Coming into view, the
+  wall comes forward out of the room, the outer covers last. The cover in focus has a rim of light, violet round
+  white, a glow of violet into cyan behind it that breathes slowly, and floats by a few millimetres. With "reduce
+  motion" nothing moves by itself.
+- **A ray or a look** takes the focus to a cover without turning the wall (it comes forward a little where it
+  stands): if the wall turned to whatever was pointed at, it would run away under the pointer.
+- **Three rows.** The sections above (Home, Games, Apps, Windows, Settings; the one shown has a line of light under
+  it), the covers, the actions under them (the room's state, Recentre, Gather, Close all). Up and Down go between
+  the rows, Left and Right along them (`Home.neighbour`).
+- **Only real things.** The covers are the web apps and games there are, the phone's apps with their own icons,
+  and the windows that are open. A thing with no picture of its own gets one drawn in its colour. The one used
+  last is in the middle when the home opens and says "Resume".
+- **Checked** in eye pictures and by keys on the S21 Ultra without the glasses. **Not seen** through the glasses.
+  **Not yet in this look:** the dock under open windows, a window's handle, the settings window, the phone's own
+  screens.
+
 ## Working first (20 November 2026, after the owner wore the glass home)
 
 The owner's words: "hand tracking not working... not 6dof and no way to move windows or resize them... Fix everything

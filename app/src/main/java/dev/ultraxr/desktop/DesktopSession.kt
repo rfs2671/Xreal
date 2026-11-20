@@ -143,6 +143,16 @@ class DesktopSession(private val activity: Activity) {
     private var homeSection = "home"; private var appsPage = 0
     @Volatile private var tiles: List<HomeTile> = emptyList()
     private var homeModel: HomeModel? = null; private var homeNs = 0L; private var panelWas = false; private var panelSinceNs = 0L
+    /** The cover in the middle of the home's wall. The d-pad turns the wall; a ray or a look takes the focus to a cover without turning it. */
+    private var coverCentre = 0; private val coverGlide = Glide(0.0); private val coverPop = HashMap<String, Glide>(); private var coverSection = ""
+    /** The d-pad (or a slide) has brought the focus to tile [i]: when that is a cover, the wall turns to it. */
+    private fun centreOn(i: Int) {
+        val m = homeModel ?: return; val n = Home.coverCount(tiles)
+        if (i < Home.SIDE || i >= Home.SIDE + n || i - Home.SIDE == coverCentre) return
+        coverCentre = i - Home.SIDE; tiles = Home.layout(m, coverCentre)
+        // round the wall the short way
+        if (n >= Home.ROUND_FROM) { if (coverCentre - coverGlide.value > n / 2.0) coverGlide.value += n else if (coverCentre - coverGlide.value < -n / 2.0) coverGlide.value -= n }
+    }
     private val appIcons = HashMap<String, Bitmap?>()
     private fun appIcon(item: HomeItem): Bitmap? {
         if (item.kind != HomeItem.Kind.APP) return null
@@ -168,9 +178,16 @@ class DesktopSession(private val activity: Activity) {
             SimpleDateFormat("h:mm a", Locale.getDefault()).format(now), SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(now), ::appIcon)
         if (m.key() != homeModel?.key()) {
             val before = tiles.getOrNull(desktop.shelfIndex)?.id
-            homeModel = m; tiles = Home.layout(m)
+            val covers = when (m.section) { "games" -> m.games.size; "apps" -> m.phoneApps.size + 2; "windows" -> m.windows.size; else -> m.web.size + m.games.size }
+            if (m.section != coverSection) {      // another section: its wall begins in the middle of what was used last, or at its first cover
+                coverSection = m.section
+                coverCentre = if (m.section == "home") (m.web + m.games).indexOfFirst { it.title == m.last?.title }.coerceAtLeast(0) else 0
+                coverGlide.value = coverCentre.toDouble()
+            }
+            coverCentre = coverCentre.coerceIn(0, maxOf(0, covers - 1))
+            homeModel = m; tiles = Home.layout(m, coverCentre)
             // the focus stays on the same thing when the tiles change under it, and goes to the first when that thing has gone
-            if (panelShown && desktop.focus is Focus.Shelf) { val i = tiles.indexOfFirst { it.id == before }; if (i < 0) desktop.point(Focus.Shelf(Home.first(tiles))) else if (i != desktop.shelfIndex) desktop.point(Focus.Shelf(i)) }
+            if (panelShown && desktop.focus is Focus.Shelf) { val i = tiles.indexOfFirst { it.id == before }; if (i < 0) desktop.point(Focus.Shelf(Home.first(tiles, coverCentre))) else if (i != desktop.shelfIndex) desktop.point(Focus.Shelf(i)) }
         }
     }
     private fun trackingWord(head: HeadTracker.State) = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "finding the room" }
@@ -402,7 +419,8 @@ class DesktopSession(private val activity: Activity) {
         val was = desktop.focus
         // on the home panel the four directions lead to the tile that lies that way
         if (panelShown && was is Focus.Shelf && (key == FocusKey.LEFT || key == FocusKey.RIGHT || key == FocusKey.UP || key == FocusKey.DOWN)) {
-            val n = Home.neighbour(tiles, was.index.coerceIn(0, maxOf(0, tiles.size - 1)), key)
+            val n = Home.neighbour(tiles, was.index.coerceIn(0, maxOf(0, tiles.size - 1)), key, coverCentre)
+            centreOn(n)
             if (n != was.index && desktop.point(Focus.Shelf(n))) { onLookPress?.invoke(); changed() }
             return
         }
@@ -663,7 +681,7 @@ class DesktopSession(private val activity: Activity) {
         refreshHome(nowNs, head)
         if (panelShown != panelWas) {      // the panel has come or gone: on it the focus begins on its first tile, on the dock on its first mark
             panelWas = panelShown; panelSinceNs = nowNs
-            desktop.shelfAt(if (panelShown) Home.first(tiles) else 0); shelfFirst = 0
+            desktop.shelfAt(if (panelShown) Home.first(tiles, coverCentre) else 0); shelfFirst = 0
         }
         val markLooked = if (full) null else shelfHit(origin, forward, anchor)
         // Gaze focus: the window a look comes to rest on gets the focus, unless the pad is in use. Once for each
@@ -965,17 +983,39 @@ class DesktopSession(private val activity: Activity) {
         if (panelShown && pm != null) {
             val ts = tiles; val t = if (fo is Focus.Shelf) ts.getOrNull(fo.index) else null
             val panel = pictures[pm.key()] ?: run { val drop = pictures.keys.filter { it.startsWith("panel|") }; for (k in drop) pictures.remove(k); picture(pm.key()) { Home.draw(pm, ts) } }
-            val arrive = Motion.ease(Motion.progress(panelSinceNs, nowNs, Motion.OPEN_NS, still)).toFloat()
-            if (t == null) return RenderShelf(emptyList(), null, 0.0, statusPicture(nowNs, head, true), yaw, panel = panel, panelAlpha = arrive)
+            val arrive = Motion.ease(Motion.progress(panelSinceNs, nowNs, Motion.OPEN_NS * 2, still))
+            // ---- the wall of covers: each stands by itself, by how many places it is from the middle while the wall turns
+            val k = Home.WIDTH / Home.W; val count = Home.coverCount(ts)
+            val pos = coverGlide.toward(coverCentre.toDouble(), nowNs, Motion.COVER_NS, still)
+            val seconds = nowNs * 1e-9
+            val pieces = ArrayList<RenderPiece>(8)
+            for (i in 0 until count) {
+                val slot = Home.slot(i, pos, count); if (Math.abs(slot) > 2.6) continue
+                val tile = ts[Home.SIDE + i]; val inFocus = fo is Focus.Shelf && fo.index == Home.SIDE + i
+                // a cover the focus is on comes forward a little wherever it stands (a ray or a look can be on one at the side)
+                val pop = coverPop.getOrPut(tile.id) { Glide(0.0) }.toward(if (inFocus) 1.0 else 0.0, nowNs, Motion.FOCUS_NS * 2, still)
+                val scale = Home.coverScale(slot) * (1 + 0.07 * pop * minOf(1.0, Math.abs(slot)))
+                val w = Home.COVER_W * scale * k; val h = Home.COVER_H * scale * k
+                val bob = if (still) 0.0 else pop * Math.sin(seconds * 1.7) * 0.004      // the one in focus floats, slowly
+                val x = (Home.coverX(slot) - Home.W / 2.0) * k; val y = (Home.H / 2.0 - Home.COVER_Y) * k + bob
+                // arriving, the wall comes forward out of the room, the outer covers last
+                val depth = Home.coverDepth(slot) + 0.07 * pop - (1 - arrive) * (0.5 + 0.25 * Math.abs(slot))
+                val sprite = picture("cover|${pm.section}|${tile.id}|${tile.label}|${tile.sub}|${tile.running}|${tile.chosen}|$inFocus") { Home.cover(tile, pm, inFocus) }
+                pieces += RenderPiece(sprite, x, y, w, h, Home.coverTurn(slot), depth, (Home.coverAlpha(slot) * arrive + (1 - Home.coverAlpha(slot)) * pop * 0.6).toFloat())
+                if (pop > 0.01) {
+                    val pulse = if (still) 1.0 else 0.88 + 0.12 * Math.sin(seconds * 1.1)
+                    pieces += RenderPiece(picture("coverglow") { Home.glow() }, x, y, w * 2.5, h * 1.75, Home.coverTurn(slot), depth - 0.1, (0.9 * pop * pulse * arrive).toFloat())
+                }
+            }
+            val flat = t == null || (fo as Focus.Shelf).index in Home.SIDE until Home.SIDE + count      // a cover shows the focus itself
+            if (flat) return RenderShelf(emptyList(), null, 0.0, statusPicture(nowNs, head, true), yaw, panel = panel, panelAlpha = arrive.toFloat(), pieces = pieces)
+            t!!
             // the light glides from tile to tile
             val x = ringGlide[0].toward(t.cx.toDouble(), nowNs, Motion.FOCUS_NS, still); val y = ringGlide[1].toward(t.cy.toDouble(), nowNs, Motion.FOCUS_NS, still)
             val w = ringGlide[2].toward(t.w.toDouble(), nowNs, Motion.FOCUS_NS, still); val h = ringGlide[3].toward(t.h.toDouble(), nowNs, Motion.FOCUS_NS, still)
-            val round = if (t.kind == HomeTile.Kind.ROUND) 36f else t.radius; val rw = if (t.kind == HomeTile.Kind.ROUND) 72f else t.w; val rh = if (t.kind == HomeTile.Kind.ROUND) 72f else t.h
-            val ring = picture("ring|$rw|$rh|$round") { Home.ring(rw, rh, round) }
-            val k = Home.WIDTH / Home.W; val sw = if (t.kind == HomeTile.Kind.ROUND) rw.toDouble() else w; val sh = if (t.kind == HomeTile.Kind.ROUND) rh.toDouble() else h
-            val cy = if (t.kind == HomeTile.Kind.ROUND) y - (t.h - 72f) / 2 else y
+            val ring = picture("ring|${t.w}|${t.h}|${t.radius}") { Home.ring(t.w, t.h, t.radius) }
             return RenderShelf(emptyList(), null, 0.0, statusPicture(nowNs, head, true), yaw, panel = panel, ring = ring,
-                ringX = (x - Home.W / 2.0) * k, ringY = (Home.H / 2.0 - cy) * k, ringW = (sw + 2 * Home.RING_PAD) * k, ringH = (sh + 2 * Home.RING_PAD) * k, panelAlpha = arrive)
+                ringX = (x - Home.W / 2.0) * k, ringY = (Home.H / 2.0 - y) * k, ringW = (w + 2 * Home.RING_PAD) * k, ringH = (h + 2 * Home.RING_PAD) * k, panelAlpha = arrive.toFloat(), pieces = pieces)
         }
         val items = homeItems; val n = Shelf.shown(items.size)
         if (swellsFor !== items) { swellsFor = items; swells.clear(); slide.value = shelfFirst.toDouble() }      // another page of marks: nothing of the old one is left to move

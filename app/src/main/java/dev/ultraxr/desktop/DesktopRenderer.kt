@@ -48,7 +48,16 @@ class RenderMark(val yaw: Double, val scale: Double, val sprite: Sprite, val alp
 class RenderShelf(val marks: List<RenderMark>, val name: Sprite?, val nameYaw: Double, val status: Sprite?, val yaw: Double,
     val moreLeft: Double = Double.NaN, val moreRight: Double = Double.NaN,
     /** The home panel ([Home]), shown in the shelf's place when no window is open, and the light round its tile in focus: where its middle is on the panel (metres right and up) and how large. */
-    val panel: Sprite? = null, val ring: Sprite? = null, val ringX: Double = 0.0, val ringY: Double = 0.0, val ringW: Double = 0.0, val ringH: Double = 0.0, val panelAlpha: Float = 1f)
+    val panel: Sprite? = null, val ring: Sprite? = null, val ringX: Double = 0.0, val ringY: Double = 0.0, val ringW: Double = 0.0, val ringH: Double = 0.0, val panelAlpha: Float = 1f,
+    /** Things of the home that stand in the room by themselves (the covers of its wall, the light behind the one in focus). */
+    val pieces: List<RenderPiece> = emptyList())
+
+/**
+ * A picture standing by itself in front of the home's flat picture: its middle [x] to the right of and [y] above the
+ * middle of that picture (metres), [w] by [h] metres, turned by [turn] about the vertical, and [depth] metres nearer
+ * to the wearer than the flat picture (negative: further).
+ */
+class RenderPiece(val sprite: Sprite, val x: Double, val y: Double, val w: Double, val h: Double, val turn: Double, val depth: Double, val alpha: Float)
 
 class RenderFrame(val windows: List<RenderWindow>, val anchor: DoubleArray, val shelf: RenderShelf?, val usePosition: Boolean, val dim: Float,
     /** Everything the glasses are shown is multiplied by this (the picture brightness of the settings). */
@@ -316,8 +325,16 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         if (s.panel != null) {      // the home panel, a little larger while it arrives, and the light round its tile in focus
             val c = Geometry.centre(f.anchor, s.yaw, Home.PITCH, Home.DISTANCE)
             sprite(s.panel, c, s.yaw, Home.PITCH, Home.HEIGHT * (1.04 - 0.04 * s.panelAlpha), s.panelAlpha, 0, vp)
+            // the wall of covers: the furthest first, so that the nearer ones cover them
+            val nx = Math.sin(s.yaw) * Math.cos(Home.PITCH); val ny = -Math.sin(Home.PITCH); val nz = Math.cos(s.yaw) * Math.cos(Home.PITCH)
+            for (q in s.pieces.sortedBy { it.depth }) {
+                if (q.sprite.bitmap.isRecycled || q.alpha <= 0f) continue
+                val at = offset(c, s.yaw, Home.PITCH, q.x, q.y); at[0] += nx * q.depth; at[1] += ny * q.depth; at[2] += nz * q.depth
+                Geometry.modelMatrix(at, s.yaw + q.turn, Home.PITCH, q.w, q.h, model)
+                draw(prog2d, GLES30.GL_TEXTURE_2D, texture(q.sprite), vp, ident, q.w, q.h, 0.0, WHITE, q.alpha)
+            }
             s.ring?.let { r -> if (!r.bitmap.isRecycled) { Geometry.modelMatrix(offset(c, s.yaw, Home.PITCH, s.ringX, s.ringY), s.yaw, Home.PITCH, s.ringW, s.ringH, model); draw(prog2d, GLES30.GL_TEXTURE_2D, texture(r), vp, ident, s.ringW, s.ringH, 0.0, WHITE, s.panelAlpha) } }
-            s.status?.let { sprite(it, Geometry.centre(f.anchor, s.yaw, Shelf.STATUS_PITCH, Shelf.DISTANCE), s.yaw, Shelf.STATUS_PITCH, Sight.STRIP * Sight.metres(Sight.BODY, Shelf.DISTANCE), 1f, 0, vp) }
+            s.status?.let { sprite(it, Geometry.centre(f.anchor, s.yaw, Home.NOTICE_PITCH, Shelf.DISTANCE * 0.9), s.yaw, Home.NOTICE_PITCH, Sight.STRIP * Sight.metres(Sight.BODY, Shelf.DISTANCE), 1f, 0, vp) }
             return
         }
         // the dock: a pane of glass behind the row of marks

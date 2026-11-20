@@ -117,6 +117,8 @@ object Motion {
     const val OPEN_NS = 180_000_000L
     const val CLOSE_NS = 140_000_000L
     const val FOCUS_NS = 90_000_000L
+    /** The home's wall of covers turns to the next cover in this long. */
+    const val COVER_NS = 260_000_000L
     /** The brackets draw themselves when the window has grown. */
     const val BRACKET_NS = 90_000_000L
 

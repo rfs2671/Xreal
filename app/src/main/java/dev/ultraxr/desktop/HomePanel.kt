@@ -13,7 +13,6 @@ import android.graphics.Shader
 import android.text.TextPaint
 import android.text.TextUtils
 import kotlin.math.abs
-import kotlin.math.tan
 
 /**
  * The colours of the glass look (docs/INTERFACE.md, "The look: glass"). The glasses add light and cannot darken the
@@ -29,6 +28,7 @@ object Glass {
     const val FAINT = 0xFF8088A0.toInt()
     const val VIOLET = 0xFF9B8CFF.toInt()      // the accent: what is chosen, what is in focus
     const val VIOLET_DEEP = 0xFF6B57F5.toInt()
+    const val CYAN = 0xFF4FE3FF.toInt()        // the accent's other end: violet runs into it
     const val GREEN = 0xFF4ADE80.toInt()       // running, connected, ready
     const val EMBER = 0xFFFF6B5E.toInt()
 }
@@ -57,65 +57,96 @@ class HomeModel(
 }
 
 /**
- * The home panel: what is in view when no window is open. One pane of glass in front of the wearer with the things
- * there are to open, drawn as one picture ([draw]) from a list of tiles ([layout]) that is also what the focus moves
- * over ([neighbour]) and what a ray or a look finds ([hit]). Plain numbers, so that the three cannot disagree.
+ * The home: what is in view when no window is open ("Aurora", chosen by the owner on 20 November 2026 from three
+ * directions, docs/design/direction2.png). A wall of covers that curves round the wearer: the one in the middle is
+ * large and near, its neighbours stand back and turn inwards. Above it a bar with the name, the sections and what is
+ * connected; under it a row of actions. The covers are separate things in the room, each at its own depth
+ * ([coverX], [coverTurn], [coverDepth]); the bar and the row are one flat picture ([draw]).
+ *
+ * The tiles ([layout]) are what the focus moves over ([neighbour]) and what a ray or a look finds ([hit]): first the
+ * five sections, then the covers, then the row of actions. Their places are in the pixels of the flat picture, which
+ * is as large as an eye's view.
  */
 object Home {
-    /** The picture: about as many pixels to a degree as the glasses have. */
-    const val W = 1680; const val H = 760
-    const val DISTANCE = 1.8
-    /** 42 of the 46 degrees an eye sees, and a little under the line of sight's middle so that the head of the panel is not at the very top. */
-    val WIDTH = 2 * DISTANCE * tan(Math.toRadians(21.0))
+    /** The flat picture: about as many pixels to a degree as the glasses have, and nearly all an eye sees. */
+    const val W = 1760; const val H = 980
+    const val DISTANCE = 2.0
+    val WIDTH = 2 * DISTANCE * 0.385
     val HEIGHT = WIDTH * H / W
-    val PITCH = Math.toRadians(-0.6)
-    const val SIDE = 5      // the sidebar's tiles come first, in every section
+    const val PITCH = 0.0
+    const val SIDE = 5      // the sections' tiles come first
+    /** A page of the phone's apps. */
+    const val APPS_A_PAGE = 19
+    /** Something said to the wearer stands here on the home, between the covers and the row of actions. */
+    val NOTICE_PITCH = Math.toRadians(-7.7)
 
-    private const val TOP = 108f; private const val BOTTOM = 738f
-    /** The upper row of the home section is this high, and the lower row begins this far under the top. */
-    private const val UPPER = 330f; private const val LOWER = 348f
+    // ---- the wall of covers. A cover's slot is how many places it is from the middle (fractions while the wall turns).
+    const val COVER_W = 300f; const val COVER_H = 420f; const val COVER_Y = 462f
+    /** The cover in the middle is this much larger. */
+    const val COVER_FOCUS = 1.27f
+    private const val STEP1 = 380.0; private const val STEP = 336.0
+    /** With this many covers or more the wall goes round: after the last comes the first, and the middle one always has neighbours on both sides. */
+    const val ROUND_FROM = 5
+    /** How many places cover [i] is from the place [pos] of a wall of [n] covers. */
+    fun slot(i: Int, pos: Double, n: Int): Double {
+        var d = i - pos
+        if (n >= ROUND_FROM) { d %= n; if (d > n / 2.0) d -= n; if (d < -n / 2.0) d += n }
+        return d
+    }
+    /** Covers in view on each side of the middle one. */
+    const val EACH_SIDE = 2
+    /** The picture a cover is drawn in. */
+    const val COVER_PX_W = 380; const val COVER_PX_H = 532
 
-    fun layout(m: HomeModel): List<HomeTile> {
+    /** Where a cover's middle is across the picture, pixels. */
+    fun coverX(slot: Double): Double { val a = abs(slot); return W / 2.0 + Math.signum(slot) * (minOf(a, 1.0) * STEP1 + maxOf(a - 1.0, 0.0) * STEP) }
+    fun coverScale(slot: Double): Double = 1.0 + (COVER_FOCUS - 1.0) * maxOf(0.0, 1.0 - abs(slot))
+    /** How far a cover is turned inwards, radians: the wall is tighter than a circle round the wearer, so that it is seen to curve. */
+    fun coverTurn(slot: Double): Double { val a = minOf(abs(slot), 2.6); return -Math.signum(slot) * (minOf(a, 1.0) * 0.50 + maxOf(a - 1.0, 0.0) * 0.10) }
+    /** How much nearer than the flat picture a cover stands, metres (negative: further). */
+    fun coverDepth(slot: Double): Double { val a = abs(slot); return 0.14 * maxOf(0.0, 1.0 - a) - 0.22 * maxOf(0.0, a - 1.0) }
+    fun coverAlpha(slot: Double): Double { val a = abs(slot); return if (a <= 1) 1.0 - 0.05 * a else if (a <= 2) 0.95 - 0.27 * (a - 1) else maxOf(0.0, 0.68 * (1 - (a - 2) / 0.6)) }
+
+    private fun isCover(t: HomeTile) = t.kind == HomeTile.Kind.ART || t.kind == HomeTile.Kind.PLAIN || t.kind == HomeTile.Kind.HERO
+    /** How many covers the section has (in view or not). They follow the five sections in [layout]'s list. */
+    fun coverCount(tiles: List<HomeTile>): Int = tiles.count { isCover(it) }
+
+    /** The tiles of the section shown, with the cover numbered [centre] in the middle of the wall. A cover out of view has no size. */
+    fun layout(m: HomeModel, centre: Int = 0): List<HomeTile> {
         val t = ArrayList<HomeTile>()
-        val side = listOf(Triple("home", "Home", "#home"), Triple("games", "Games", "#pad"), Triple("apps", "Apps", "#grid"), Triple("windows", "Windows", "#windows"), Triple("settings", "Settings", "#sliders"))
-        for ((i, s) in side.withIndex()) t += HomeTile("side:" + s.first, 46f, TOP + 18f + i * 66f, 186f, 56f, 28f, HomeTile.Kind.SIDE, if (s.first == "settings") "settings" else "sec:" + s.first,
-            s.second, sign = s.third, chosen = m.section == s.first, running = if (s.first == "windows" && m.windows.isNotEmpty()) 2 else 0)
-        when (m.section) {
-            "games" -> grid(t, m.games.map { art(it, m) })
-            "apps" -> grid(t, m.phoneApps.map { art(it, m) } +
-                (if (m.appsPage > 0) listOf(plain("apps:prev", "Earlier", "#back")) else emptyList()) + (if (m.appsPage < m.appsPages - 1) listOf(plain("apps:next", "More", "#more")) else emptyList()))
-            "windows" -> grid(t, m.windows.map { w -> HomeTile("win:" + w.first, 0f, 0f, 0f, 0f, 22f, HomeTile.Kind.ART, "win:" + w.first, w.second, if (w.third) "put away" else "open", sign = HomeIcon.sign(w.second), running = if (w.third) 1 else 2) } +
-                (if (m.windows.isNotEmpty()) listOf(plain("sys:closeall", "Close all", "#x")) else emptyList()))
-            else -> {
-                val hero = m.last ?: m.web.firstOrNull()
-                if (hero != null) t += HomeTile("hero", 268f, TOP, 600f, UPPER, 30f, HomeTile.Kind.HERO, "item", hero.title, if (m.last != null) "Continue" else "Start here", hero, signOf(hero), hero.color, m.running[hero.title] ?: 0)
-                // quick play: three games and the way to the rest
-                val q = m.games.take(3)
-                for ((i, g) in q.withIndex()) t += HomeTile("quick:" + g.title, 906f + (i % 2) * 150f, TOP + 62f + (i / 2) * 134f, 140f, 124f, 18f, HomeTile.Kind.ART, "item", g.title, "", g, signOf(g), g.color, m.running[g.title] ?: 0)
-                if (m.games.isNotEmpty()) t += HomeTile("quick:more", 906f + 150f, TOP + 62f + 134f, 140f, 124f, 18f, HomeTile.Kind.PLAIN, "sec:games", "More", sign = "#grid")
-                t += HomeTile("room", 1240f, TOP, 394f, UPPER, 30f, HomeTile.Kind.ROOM, "room", if (m.room.isEmpty()) "No room marked" else if (m.roomPlaced) "Room ready" else "Room marked", roomSize(m.room))
-                // the library: the web apps, then the games
-                val lib = (m.web + m.games).take(7)
-                for ((i, a) in lib.withIndex()) t += HomeTile("lib:" + a.title, 286f + i * 132f, TOP + LOWER + 60f, 122f, 208f, 20f, HomeTile.Kind.ART, "item", a.title, "", a, signOf(a), a.color, m.running[a.title] ?: 0)
-                val cuts = listOf(Triple("sys:recentre", "Recentre", "#target"), Triple("sys:gather", "Gather", "#gather"), Triple("sys:closeall", "Close all", "#x"))
-                for ((i, c) in cuts.withIndex()) t += HomeTile(c.first, 1268f + i * 122f, TOP + LOWER + 92f, 96f, 96f, 48f, HomeTile.Kind.ROUND, c.first, c.second, sign = c.third)
-            }
+        val tabs = listOf(Triple("home", "Home", 118f), Triple("games", "Games", 132f), Triple("apps", "Apps", 112f), Triple("windows", "Windows", 164f), Triple("settings", "Settings", 152f))
+        var x = 548f
+        for (s in tabs) {
+            t += HomeTile("side:" + s.first, x, 40f, s.third, 56f, 28f, HomeTile.Kind.SIDE, if (s.first == "settings") "settings" else "sec:" + s.first, s.second,
+                chosen = m.section == s.first, running = if (s.first == "windows" && m.windows.isNotEmpty()) 2 else 0)
+            x += s.third + 8f
         }
+        val covers: List<HomeTile> = when (m.section) {
+            "games" -> m.games.map { art(it, m) }
+            "apps" -> (if (m.appsPage > 0) listOf(plain("apps:prev", "Earlier", "#back")) else emptyList()) + m.phoneApps.map { art(it, m) } +
+                (if (m.appsPage < m.appsPages - 1) listOf(plain("apps:next", "More", "#more")) else emptyList())
+            "windows" -> m.windows.map { w -> HomeTile("win:" + w.first, 0f, 0f, 0f, 0f, 30f, HomeTile.Kind.ART, "win:" + w.first, w.second, if (w.third) "Put away" else "Open", sign = HomeIcon.sign(w.second), color = 0xFF5B8DEF.toInt(), running = if (w.third) 1 else 2) }
+            else -> (m.web + m.games).map { art(it, m) }
+        }
+        val mid = centre.coerceIn(0, maxOf(0, covers.size - 1))
+        for ((i, c) in covers.withIndex()) {
+            val slot = slot(i, mid.toDouble(), covers.size)
+            if (abs(slot) > EACH_SIDE) { t += at(c, -9000f, COVER_Y, 0f, 0f); continue }
+            val k = coverScale(slot).toFloat(); val w = COVER_W * k; val h = COVER_H * k
+            t += at(c, coverX(slot).toFloat() - w / 2, COVER_Y - h / 2, w, h)
+        }
+        t += HomeTile("room", 60f, 858f, 340f, 64f, 32f, HomeTile.Kind.ROOM, "room", if (m.room.isEmpty()) "No room marked" else if (m.roomPlaced) "Room ready" else "Room marked", roomSize(m.room))
+        val cuts = listOf(Triple("sys:recentre", "Recentre", "#target"), Triple("sys:gather", "Gather", "#gather"), Triple("sys:closeall", "Close all", "#x"))
+        for ((i, c) in cuts.withIndex()) t += HomeTile(c.first, W / 2f - 36f + (i - 1) * 124f, 850f, 72f, 72f, 36f, HomeTile.Kind.ROUND, c.first, c.second, sign = c.third)
         return t
     }
 
     private fun signOf(i: HomeItem) = HomeIcon.sign(i.title, if (i.kind == HomeItem.Kind.WEB) i.webKind else "")
-    private fun art(i: HomeItem, m: HomeModel) = HomeTile("item:" + i.title, 0f, 0f, 0f, 0f, 22f, HomeTile.Kind.ART, "item", i.title, "", i, signOf(i), i.color, m.running[i.title] ?: 0)
-    private fun plain(action: String, label: String, sign: String) = HomeTile(action, 0f, 0f, 0f, 0f, 22f, HomeTile.Kind.PLAIN, action, label, sign = sign)
-
-    /** A section that is one grid: seven to a row, three rows. */
-    private fun grid(t: MutableList<HomeTile>, cells: List<HomeTile>) {
-        for ((i, c) in cells.take(GRID).withIndex())
-            t += HomeTile(c.id, 290f + (i % 7) * 192f, TOP + 78f + (i / 7) * 186f, 180f, 174f, 22f, c.kind, c.action, c.label, c.sub, c.item, c.sign, c.color, c.running, c.chosen)
-    }
-    const val GRID = 21
-    /** A page of the phone's apps leaves room for "Earlier" and "More". */
-    const val APPS_A_PAGE = 19
+    private fun art(i: HomeItem, m: HomeModel) = HomeTile("item:" + i.title, 0f, 0f, 0f, 0f, 30f, HomeTile.Kind.ART, "item", i.title,
+        when (i.kind) { HomeItem.Kind.GAME -> "Game"; HomeItem.Kind.APP -> "On this phone"; else -> when (i.webKind) { "youtube" -> "Video"; "xbox" -> "Cloud gaming"; else -> "Web" } },
+        i, signOf(i), i.color, m.running[i.title] ?: 0, chosen = m.last?.title == i.title)
+    private fun plain(action: String, label: String, sign: String) = HomeTile(action, 0f, 0f, 0f, 0f, 30f, HomeTile.Kind.PLAIN, action, label, sign = sign)
+    private fun at(c: HomeTile, x: Float, y: Float, w: Float, h: Float) = HomeTile(c.id, x, y, w, h, c.radius, c.kind, c.action, c.label, c.sub, c.item, c.sign, c.color, c.running, c.chosen)
 
     private fun roomSize(c: List<DoubleArray>): String {
         if (c.size < 3) return "Mark it from the phone"
@@ -123,41 +154,47 @@ object Home {
         return String.format(java.util.Locale.US, "%.1f × %.1f m", maxOf(w, d), minOf(w, d))
     }
 
-    /** The tile the focus begins on in a section. */
-    fun first(tiles: List<HomeTile>): Int = tiles.indexOfFirst { it.id == "hero" }.let { if (it >= 0) it else if (tiles.size > SIDE) SIDE else 0 }
+    /** The tile the focus begins on: the cover in the middle, or the section's own tile when it has no covers. */
+    fun first(tiles: List<HomeTile>, centre: Int = 0): Int {
+        val n = coverCount(tiles)
+        return if (n > 0 && tiles.size > SIDE) SIDE + centre.coerceIn(0, n - 1) else tiles.indexOfFirst { it.kind == HomeTile.Kind.SIDE && it.chosen }.coerceAtLeast(0)
+    }
 
     /**
-     * The tile a direction leads to from tile [from], or [from] itself when there is none that way: the nearest of
-     * those that lie that way, where being off to the side counts more than being far.
+     * The tile a direction leads to from tile [from], or [from] itself when there is none that way. Three rows: the
+     * sections, the covers, the actions. Left and right walk along a row; up and down go between them, to the section
+     * shown, to the cover in the middle ([centre]) and to the first action.
      */
-    fun neighbour(tiles: List<HomeTile>, from: Int, key: FocusKey): Int {
-        val a = tiles.getOrNull(from) ?: return if (tiles.isEmpty()) 0 else first(tiles)
-        var best = from; var bestScore = Float.MAX_VALUE
-        for ((i, b) in tiles.withIndex()) {
-            if (i == from) continue
-            if (from < SIDE && i >= SIDE && (key == FocusKey.UP || key == FocusKey.DOWN)) continue      // the sidebar is walked up and down within itself
-            val dx = b.cx - a.cx; val dy = b.cy - a.cy
-            val along: Float; val across: Float; val overlap: Boolean
-            when (key) {
-                FocusKey.LEFT -> { along = a.x - (b.x + b.w); across = abs(dy); overlap = b.y < a.y + a.h && a.y < b.y + b.h; if (dx >= 0) continue }
-                FocusKey.RIGHT -> { along = b.x - (a.x + a.w); across = abs(dy); overlap = b.y < a.y + a.h && a.y < b.y + b.h; if (dx <= 0) continue }
-                FocusKey.UP -> { along = a.y - (b.y + b.h); across = abs(dx); overlap = b.x < a.x + a.w && a.x < b.x + b.w; if (dy >= 0) continue }
-                FocusKey.DOWN -> { along = b.y - (a.y + a.h); across = abs(dx); overlap = b.x < a.x + a.w && a.x < b.x + b.w; if (dy <= 0) continue }
-                else -> return from
+    fun neighbour(tiles: List<HomeTile>, from: Int, key: FocusKey, centre: Int = 0): Int {
+        if (tiles.isEmpty()) return 0
+        if (from !in tiles.indices) return first(tiles, centre)
+        val n = coverCount(tiles); val foot = SIDE + n
+        val chosen = tiles.indexOfFirst { it.kind == HomeTile.Kind.SIDE && it.chosen }.coerceAtLeast(0)
+        val middle = if (n > 0) SIDE + centre.coerceIn(0, n - 1) else -1
+        return when {
+            from < SIDE -> when (key) {
+                FocusKey.LEFT -> maxOf(0, from - 1); FocusKey.RIGHT -> minOf(SIDE - 1, from + 1)
+                FocusKey.DOWN -> if (middle >= 0) middle else minOf(tiles.size - 1, foot + 1)
+                else -> from
             }
-            if (along < -8f) continue      // it is beside, not that way
-            val score = maxOf(along, 0f) + (if (overlap) across * 0.3f else across * 2.2f + 300f)
-            if (score < bestScore) { bestScore = score; best = i }
+            from < foot -> when (key) {
+                FocusKey.LEFT -> if (n >= ROUND_FROM) SIDE + (from - SIDE - 1 + n) % n else maxOf(SIDE, from - 1)
+                FocusKey.RIGHT -> if (n >= ROUND_FROM) SIDE + (from - SIDE + 1) % n else minOf(foot - 1, from + 1)
+                FocusKey.UP -> chosen; FocusKey.DOWN -> minOf(tiles.size - 1, foot + 1)
+                else -> from
+            }
+            else -> when (key) {
+                FocusKey.LEFT -> maxOf(foot, from - 1); FocusKey.RIGHT -> minOf(tiles.size - 1, from + 1)
+                FocusKey.UP -> if (middle >= 0) middle else chosen
+                else -> from
+            }
         }
-        // from the things of a section, left leads to the sidebar's tile of that section: the way back is the way in
-        if (key == FocusKey.LEFT && from >= SIDE && best < SIDE) tiles.indexOfFirst { it.kind == HomeTile.Kind.SIDE && it.chosen }.let { if (it >= 0) return it }
-        return best
     }
 
     /** The tile at a place of the picture, or null. */
-    fun at(tiles: List<HomeTile>, x: Double, y: Double): Int? = tiles.indexOfFirst { x >= it.x - 4 && x <= it.x + it.w + 4 && y >= it.y - 4 && y <= it.y + it.h + 4 }.takeIf { it >= 0 }
+    fun at(tiles: List<HomeTile>, x: Double, y: Double): Int? = tiles.indexOfFirst { it.w > 0f && x >= it.x - 4 && x <= it.x + it.w + 4 && y >= it.y - 4 && y <= it.y + it.h + 4 }.takeIf { it >= 0 }
 
-    /** The tile a ray is on, or null: the panel is a plane [DISTANCE] metres in front of the heading [yaw]. */
+    /** The tile a ray is on, or null: the home is taken as a plane [DISTANCE] metres in front of the heading [yaw]. */
     fun hit(tiles: List<HomeTile>, origin: DoubleArray, dir: DoubleArray, anchor: DoubleArray, yaw: Double): Int? {
         val h = Geometry.planeHit(origin, dir, Geometry.centre(anchor, yaw, PITCH, DISTANCE), yaw, PITCH) ?: return null
         return at(tiles, (h[0] / WIDTH + 0.5) * W, (0.5 - h[1] / HEIGHT) * H)
@@ -230,90 +267,110 @@ object Home {
         if (running == 2) { p.style = Paint.Style.FILL; c.drawCircle(x, y, 5f, p) } else { p.style = Paint.Style.STROKE; p.strokeWidth = 2f; c.drawCircle(x, y, 4.5f, p); p.style = Paint.Style.FILL }
     }
 
+    private fun gradientText(c: Canvas, str: String, x: Float, y: Float, size: Float, from: Int, to: Int): Float {
+        val p = TextPaint(Paint.ANTI_ALIAS_FLAG); p.typeface = Type.bold; p.textSize = size; val w = p.measureText(str)
+        p.shader = LinearGradient(x, 0f, x + w, 0f, from, to, Shader.TileMode.CLAMP); c.drawText(str, x, y, p); return w
+    }
+
+    /** A line of light that fades at both ends: violet into cyan, with its glow. */
+    private fun lightLine(c: Canvas, p: Paint, x0: Float, x1: Float, y: Float, thick: Float, glow: Float) {
+        val colors = intArrayOf(0x008F7BFF, Glass.VIOLET, Glass.CYAN, 0x004FE3FF); val stops = floatArrayOf(0f, 0.3f, 0.7f, 1f)
+        p.style = Paint.Style.STROKE; p.strokeCap = Paint.Cap.ROUND
+        p.shader = LinearGradient(x0, 0f, x1, 0f, colors, stops, Shader.TileMode.CLAMP)
+        if (glow > 0f) { p.strokeWidth = thick * 3f; p.alpha = 150; p.maskFilter = BlurMaskFilter(glow, BlurMaskFilter.Blur.NORMAL); c.drawLine(x0, y, x1, y, p); p.maskFilter = null; p.alpha = 255 }
+        p.strokeWidth = thick; c.drawLine(x0, y, x1, y, p)
+        p.shader = null; p.style = Paint.Style.FILL; p.strokeCap = Paint.Cap.BUTT
+    }
+
+    /** A pill of tinted glass: a veil of violet light, brighter along its upper edge, with a rim. */
+    private fun glassPill(c: Canvas, p: Paint, x: Float, y: Float, w: Float, h: Float) {
+        val r = h / 2
+        p.style = Paint.Style.FILL; p.shader = LinearGradient(0f, y, 0f, y + h, 0x5A968CFF, 0x30465AAA, Shader.TileMode.CLAMP); c.drawRoundRect(x, y, x + w, y + h, r, r, p); p.shader = null
+        p.style = Paint.Style.STROKE; p.strokeWidth = 1.6f; p.shader = LinearGradient(0f, y, 0f, y + h, 0xAAFFFFFF.toInt(), 0x50A0AAFF, Shader.TileMode.CLAMP); c.drawRoundRect(x + 0.8f, y + 0.8f, x + w - 0.8f, y + h - 0.8f, r, r, p)
+        p.shader = null; p.style = Paint.Style.FILL
+    }
+
+    /** The flat parts of the home: the bar above the covers and the row under them. The covers are not in this picture ([cover]). */
     fun draw(m: HomeModel, tiles: List<HomeTile>): Bitmap {
         val b = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888); val c = Canvas(b); val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        // ---- the head of the panel: the name, what is connected, the time
-        p.shader = LinearGradient(40f, 26f, 92f, 78f, Glass.VIOLET, 0xFF5B8DEF.toInt(), Shader.TileMode.CLAMP); p.style = Paint.Style.STROKE; p.strokeWidth = 9f; p.strokeCap = Paint.Cap.ROUND
-        c.drawArc(RectF(46f, 30f, 90f, 74f), 40f, 280f, false, p); p.shader = null; p.style = Paint.Style.FILL; p.strokeCap = Paint.Cap.BUTT
-        text(c, "Ultra", 106f, 62f, 40f, Glass.TEXT, true); val uw = TextPaint().apply { typeface = Type.bold; textSize = 40f }.measureText("Ultra ")
-        text(c, "XR", 106f + uw, 62f, 40f, Glass.VIOLET, true)
-        text(c, "Mixed reality home", 108f, 86f, 17f, Glass.SOFT)
-        pane(c, p, 560f, 22f, 640f, 62f, 31f)
-        fun status(x: Float, signText: String, a: String, bText: String, ok: Boolean?) {
-            sign(c, p, x + 20f, 53f, 13f, signText, Glass.TEXT); text(c, a, x + 48f, 48f, 17f, Glass.TEXT)
-            if (ok != null) { p.color = if (ok) Glass.GREEN else Glass.EMBER; c.drawCircle(x + 53f, 64f, 4f, p) }
-            text(c, bText, x + (if (ok != null) 64f else 48f), 70f, 15f, Glass.SOFT)
+        // ---- the bar: the name, the sections, what is connected and the time
+        text(c, "Ultra", 60f, 80f, 38f, Glass.TEXT, true); val uw = TextPaint().apply { typeface = Type.bold; textSize = 38f }.measureText("Ultra ")
+        gradientText(c, "XR", 60f + uw, 80f, 38f, Glass.VIOLET, Glass.CYAN)
+        for (t in tiles) if (t.kind == HomeTile.Kind.SIDE) {
+            text(c, t.label, t.cx, t.cy + 9f, 25f, if (t.chosen) Color.WHITE else Glass.SOFT, t.chosen, align = Paint.Align.CENTER)
+            if (t.chosen) lightLine(c, p, t.x + 22f, t.x + t.w - 22f, t.y + t.h + 4f, 4f, 7f)
+            if (t.running > 0 && !t.chosen) dot(c, p, t.x + t.w - 10f, t.y + 18f, 2)
         }
-        status(582f, "#glasses", "XREAL Air 2 Ultra", if (m.glasses) "Connected" else "Not connected", m.glasses)
-        status(800f, "#phone", "Phone", if (m.battery in 0..100) "${m.battery} %" else "", null)
-        status(952f, "#target", "Tracking", m.tracking.replaceFirstChar { it.uppercase() }, m.tracking == "room found")
-        p.color = 0x30FFFFFF; c.drawRect(786f, 36f, 787f, 70f, p); c.drawRect(938f, 36f, 939f, 70f, p)
-        text(c, m.time, 1634f, 56f, 30f, Glass.TEXT, true, align = Paint.Align.RIGHT); text(c, m.date, 1634f, 80f, 16f, Glass.SOFT, align = Paint.Align.RIGHT)
+        text(c, m.time, W - 60f, 78f, 30f, Glass.TEXT, true, align = Paint.Align.RIGHT)
+        val tw = TextPaint().apply { typeface = Type.bold; textSize = 30f }.measureText(m.time)
+        val word = m.tracking.replaceFirstChar { it.uppercase() }; val ok = m.tracking == "room found"
+        var sx = W - 60f - tw - 26f
+        if (m.battery in 0..100) { val bt = "${m.battery} %"; text(c, bt, sx, 76f, 19f, Glass.SOFT, align = Paint.Align.RIGHT); sx -= TextPaint().apply { typeface = Type.regular; textSize = 19f }.measureText(bt) + 24f }
+        text(c, if (m.glasses) word else "Glasses not connected", sx, 76f, 19f, Glass.SOFT, align = Paint.Align.RIGHT)
+        sx -= TextPaint().apply { typeface = Type.regular; textSize = 19f }.measureText(if (m.glasses) word else "Glasses not connected") + 14f
+        p.color = if (m.glasses && ok) Glass.GREEN else Glass.EMBER; p.maskFilter = BlurMaskFilter(5f, BlurMaskFilter.Blur.SOLID); c.drawCircle(sx, 70f, 5f, p); p.maskFilter = null
 
-        // ---- the panes
-        pane(c, p, 30f, TOP, 218f, BOTTOM - TOP, 30f)
-        text(c, "Select opens", 62f, BOTTOM - 46f, 15f, Glass.FAINT); text(c, "Back returns", 62f, BOTTOM - 24f, 15f, Glass.FAINT)
-        if (m.section == "home") {
-            pane(c, p, 888f, TOP, 334f, UPPER, 30f); text(c, "Quick play", 910f, TOP + 40f, 23f, Glass.TEXT, true)
-            pane(c, p, 268f, TOP + LOWER, 954f, BOTTOM - TOP - LOWER, 30f); text(c, "My library", 290f, TOP + LOWER + 38f, 23f, Glass.TEXT, true)
-            pane(c, p, 1240f, TOP + LOWER, 394f, BOTTOM - TOP - LOWER, 30f); text(c, "Shortcuts", 1264f, TOP + LOWER + 38f, 23f, Glass.TEXT, true)
-            if (m.games.isEmpty()) text(c, "No games yet", 910f, TOP + 110f, 17f, Glass.SOFT)
-        } else {
-            pane(c, p, 268f, TOP, 1366f, BOTTOM - TOP, 30f)
-            val head = when (m.section) { "games" -> "Games"; "apps" -> "Apps on this phone" + (if (m.appsPages > 1) "  ·  ${m.appsPage + 1} of ${m.appsPages}" else ""); else -> "Windows" }
-            text(c, head, 292f, TOP + 48f, 28f, Glass.TEXT, true)
-            if (tiles.size <= SIDE) text(c, when (m.section) { "windows" -> "No window is open. Open something from Home."; "apps" -> "The helper that shows phone apps in windows is not running."; else -> "Nothing here yet." }, 292f, TOP + 110f, 19f, Glass.SOFT)
-        }
+        // ---- the floor the covers stand on: a line of light
+        lightLine(c, p, 330f, W - 330f, 760f, 3f, 16f)
+        if (coverCount(tiles) == 0) text(c, when (m.section) { "windows" -> "No window is open. Open something from Home."; "apps" -> "The helper that shows phone apps in windows is not running."; else -> "Nothing here yet." }, W / 2f, COVER_Y, 24f, Glass.SOFT, align = Paint.Align.CENTER)
+        if (m.section == "apps" && m.appsPages > 1) text(c, "Page ${m.appsPage + 1} of ${m.appsPages}", W / 2f, 800f, 17f, Glass.FAINT, align = Paint.Align.CENTER)
 
-        // ---- the tiles
+        // ---- the row of actions
+        val rounds = tiles.filter { it.kind == HomeTile.Kind.ROUND }
+        if (rounds.isNotEmpty()) glassPill(c, p, rounds.first().x - 30f, 838f, rounds.last().x + 72f + 30f - (rounds.first().x - 30f), 96f)
         for (t in tiles) when (t.kind) {
-            HomeTile.Kind.SIDE -> {
-                if (t.chosen) { p.shader = LinearGradient(t.x, 0f, t.x + t.w, 0f, Glass.VIOLET, Glass.VIOLET_DEEP, Shader.TileMode.CLAMP); c.drawRoundRect(t.x, t.y, t.x + t.w, t.y + t.h, t.radius, t.radius, p); p.shader = null }
-                sign(c, p, t.x + 34f, t.cy, 12f, t.sign, if (t.chosen) Color.WHITE else Glass.TEXT)
-                text(c, t.label, t.x + 64f, t.cy + 8f, 22f, if (t.chosen) Color.WHITE else Glass.TEXT, t.chosen)
-                if (t.running > 0 && !t.chosen) dot(c, p, t.x + t.w - 18f, t.cy, 2)
-            }
-            HomeTile.Kind.HERO -> {
-                artwork(c, p, t.x, t.y, t.w, t.h, t.radius, t.color, t.item?.let(m.icon), t.sign, true, t.item?.kind == HomeItem.Kind.GAME, abs(t.label.hashCode()))
-                text(c, t.sub, t.x + 36f, t.y + 88f, 44f, Color.WHITE, true); text(c, t.label, t.x + 38f, t.y + 130f, 26f, 0xFFE4E6F2.toInt(), max = t.w * 0.5f)
-                val by = t.y + t.h - 96f
-                rr(c, p, t.x + 36f, by, 176f, 56f, 28f, 0x66FFFFFF, 0x70FFFFFF)
-                val tri = Path(); tri.moveTo(t.x + 70f, by + 17f); tri.lineTo(t.x + 88f, by + 28f); tri.lineTo(t.x + 70f, by + 39f); tri.close(); p.color = Color.WHITE; c.drawPath(tri, p)
-                text(c, if (t.sub == "Continue") "Resume" else "Open", t.x + 104f, by + 36f, 22f, Color.WHITE, true)
-                dot(c, p, t.x + t.w - 26f, t.y + 26f, t.running)
-            }
-            HomeTile.Kind.ART -> {
-                artwork(c, p, t.x, t.y, t.w, t.h, t.radius, t.color, t.item?.let(m.icon), t.sign, false, t.item?.kind == HomeItem.Kind.GAME, abs(t.label.hashCode()))
-                val small = t.w < 150f
-                if (t.sub.isNotEmpty()) { text(c, t.label, t.x + 12f, t.y + t.h - 32f, 17f, Color.WHITE, true, t.w - 34f); text(c, t.sub, t.x + 12f, t.y + t.h - 13f, 14f, 0xFFD0D4E4.toInt(), max = t.w - 34f) }
-                else {
-                    // a name of two words stands on two lines when it is too long for one
-                    val tp = TextPaint().apply { typeface = Type.bold; textSize = if (small) 16.5f else 18f }; val room = t.w - 32f
-                    val cut = t.label.indexOf(' ')
-                    if (tp.measureText(t.label) > room && cut > 0) { text(c, t.label.substring(0, cut), t.x + 12f, t.y + t.h - 33f, tp.textSize, Color.WHITE, true, room); text(c, t.label.substring(cut + 1), t.x + 12f, t.y + t.h - 13f, tp.textSize, Color.WHITE, true, room) }
-                    else text(c, t.label, t.x + 12f, t.y + t.h - 14f, tp.textSize, Color.WHITE, true, room)
-                }
-                dot(c, p, t.x + t.w - 16f, t.y + 16f, t.running)
-            }
-            HomeTile.Kind.PLAIN -> {
-                rr(c, p, t.x, t.y, t.w, t.h, t.radius, Glass.CARD, Glass.CARD_RIM)
-                sign(c, p, t.cx, t.cy - 14f, 14f, t.sign, Glass.TEXT); text(c, t.label, t.cx, t.y + t.h - 20f, 17f, Glass.TEXT, align = Paint.Align.CENTER)
-            }
-            HomeTile.Kind.ROUND -> {
-                rr(c, p, t.x + 12f, t.y, 72f, 72f, 36f, Glass.CARD, Glass.CARD_RIM)
-                sign(c, p, t.cx, t.y + 36f, 14f, t.sign, Glass.TEXT); text(c, t.label, t.cx, t.y + 96f, 16f, Glass.TEXT, align = Paint.Align.CENTER)
-            }
+            HomeTile.Kind.ROUND -> { sign(c, p, t.cx, t.cy, 15f, t.sign, Glass.TEXT); text(c, t.label, t.cx, 958f, 15f, Glass.SOFT, align = Paint.Align.CENTER) }
             HomeTile.Kind.ROOM -> {
-                pane(c, p, t.x, t.y, t.w, t.h, t.radius); text(c, "Room & MR", t.x + 24f, t.y + 40f, 23f, Glass.TEXT, true)
-                val ix = t.x + 24f; val iy = t.y + 58f; val iw = t.w - 48f; val ih = t.h - 146f
-                p.shader = LinearGradient(ix, iy, ix + iw, iy + ih, 0x664A3FA8, 0x66203060, Shader.TileMode.CLAMP); c.drawRoundRect(ix, iy, ix + iw, iy + ih, 18f, 18f, p); p.shader = null
-                rr(c, p, ix, iy, iw, ih, 18f, 0, Glass.CARD_RIM)
-                plan(c, p, m.room, ix + 22f, iy + 16f, iw - 44f, ih - 32f)
-                if (m.roomPlaced) { p.color = Glass.VIOLET; c.drawCircle(ix + iw - 22f, iy + 22f, 13f, p); p.style = Paint.Style.STROKE; p.strokeWidth = 2.6f; p.strokeCap = Paint.Cap.ROUND; p.color = Color.WHITE
-                    c.drawLine(ix + iw - 28f, iy + 22f, ix + iw - 23.5f, iy + 26.5f, p); c.drawLine(ix + iw - 23.5f, iy + 26.5f, ix + iw - 16f, iy + 17.5f, p); p.style = Paint.Style.FILL; p.strokeCap = Paint.Cap.BUTT }
-                text(c, t.label, t.x + 24f, t.y + t.h - 48f, 23f, Glass.TEXT, true); text(c, t.sub, t.x + 24f, t.y + t.h - 22f, 17f, Glass.SOFT)
+                glassPill(c, p, t.x, t.y, t.w, t.h)
+                p.color = if (m.roomPlaced) Glass.GREEN else if (m.room.isEmpty()) Glass.EMBER else Glass.VIOLET; p.maskFilter = BlurMaskFilter(5f, BlurMaskFilter.Blur.SOLID); c.drawCircle(t.x + 30f, t.cy, 5.5f, p); p.maskFilter = null
+                text(c, t.label, t.x + 50f, t.cy + 7f, 20f, Glass.TEXT, true)
+                text(c, t.sub, t.x + t.w - 24f, t.cy + 7f, 18f, Glass.SOFT, align = Paint.Align.RIGHT)
+            }
+            else -> {}
+        }
+        text(c, "Pinch or Select to open", W - 60f, 898f, 18f, Glass.FAINT, align = Paint.Align.RIGHT)
+        return b
+    }
+
+    /**
+     * One cover of the wall, as large as it is shown in the middle. In focus it has its rim of light, what a press
+     * does as a button, and whether it has a window.
+     */
+    fun cover(t: HomeTile, m: HomeModel, focused: Boolean): Bitmap {
+        val w = COVER_PX_W.toFloat(); val h = COVER_PX_H.toFloat(); val r = 38f
+        val b = Bitmap.createBitmap(COVER_PX_W, COVER_PX_H, Bitmap.Config.ARGB_8888); val c = Canvas(b); val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        if (t.kind == HomeTile.Kind.PLAIN) {
+            p.shader = LinearGradient(0f, 0f, w, h, 0x70968CFF, 0x30465AAA, Shader.TileMode.CLAMP); c.drawRoundRect(0f, 0f, w, h, r, r, p); p.shader = null
+            sign(c, p, w / 2, h * 0.42f, 34f, t.sign, Glass.TEXT); text(c, t.label, w / 2, h - 60f, 32f, Glass.TEXT, true, align = Paint.Align.CENTER)
+        } else {
+            artwork(c, p, 0f, 0f, w, h, r, t.color, t.item?.let(m.icon), t.sign, false, t.item?.kind == HomeItem.Kind.GAME, abs(t.label.hashCode()))
+            val base = if (focused) h - 132f else h - 62f
+            text(c, t.label, 28f, base, if (focused) 38f else 32f, Color.WHITE, true, w - 56f)
+            val second = if (focused && t.chosen) "Continue where you stopped" else t.sub
+            if (second.isNotEmpty()) text(c, second, 28f, base + 30f, 20f, 0xFFE0E4F2.toInt(), max = w - 56f)
+            if (focused) {
+                p.color = Color.WHITE; c.drawRoundRect(28f, h - 86f, 28f + 176f, h - 28f, 29f, 29f, p)
+                val tri = Path(); tri.moveTo(60f, h - 69f); tri.lineTo(78f, h - 57f); tri.lineTo(60f, h - 45f); tri.close(); p.color = 0xFF151528.toInt(); c.drawPath(tri, p)
+                text(c, if (t.running == 2 || t.action.startsWith("win:")) "Show" else if (t.running == 1 || t.chosen) "Resume" else "Open", 92f, h - 49f, 23f, 0xFF151528.toInt(), true)
+            }
+            if (t.running > 0) {
+                val word = if (t.running == 2) "Window open" else "Put away"; val tp = TextPaint().apply { typeface = Type.regular; textSize = 17f }; val bw = tp.measureText(word) + 46f
+                p.color = 0x70000000; c.drawRoundRect(w - bw - 20f, 20f, w - 20f, 54f, 17f, 17f, p); dot(c, p, w - bw - 2f, 37f, t.running); text(c, word, w - bw + 10f, 43f, 17f, Color.WHITE)
             }
         }
+        // the rim: a thin edge of light at rest; in focus white, with violet round it
+        p.style = Paint.Style.STROKE
+        if (focused) { p.color = Glass.VIOLET; p.strokeWidth = 9f; c.drawRoundRect(4.5f, 4.5f, w - 4.5f, h - 4.5f, r - 3f, r - 3f, p); p.color = Color.WHITE; p.strokeWidth = 3f; c.drawRoundRect(9f, 9f, w - 9f, h - 9f, r - 8f, r - 8f, p) }
+        else { p.color = 0x66FFFFFF; p.strokeWidth = 1.8f; c.drawRoundRect(1f, 1f, w - 1f, h - 1f, r, r, p) }
+        p.style = Paint.Style.FILL
+        return b
+    }
+
+    /** The light behind the cover in focus: violet in its middle, cyan towards its edge, gone at the edge. */
+    fun glow(): Bitmap {
+        val n = 256; val b = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888); val c = Canvas(b); val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.shader = RadialGradient(n / 2f, n / 2f, n / 2f, intArrayOf(0x967A6CFF.toInt(), 0x5A6E78FF, 0x2A5A96FF, 0x103CD2FF, 0x003CD2FF), floatArrayOf(0f, 0.3f, 0.55f, 0.8f, 1f), Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, n.toFloat(), n.toFloat(), p)
         return b
     }
 
