@@ -20,6 +20,12 @@ class RenderWindow(
     val id: Int, val yaw: Double, val pitch: Double, val distance: Double, val width: Double, val height: Double, val barHeight: Double,
     val focused: Boolean, val cursorU: Double, val cursorV: Double, val showCursor: Boolean, val pressed: Boolean,
     val bar: Bitmap?, val barVersion: Long, val headLocked: Boolean,
+    /** The line round the window is lit: the focus is on the window itself (not on its page or its handle). */
+    val outline: Boolean = focused,
+    /** The handle's words under the window in focus, [handleHeight] metres high; null for the others. */
+    val handle: Bitmap? = null, val handleVersion: Long = 0, val handleHeight: Double = 0.0,
+    /** The size of the page's picture, which follows the window's shape. */
+    val pixelW: Int = WebWindow.PIXEL_WIDTH, val pixelH: Int = WebWindow.PIXEL_HEIGHT,
 )
 
 class RenderFrame(val windows: List<RenderWindow>, val anchor: DoubleArray, val home: Bitmap?, val homeVersion: Long, val homeYaw: Double,
@@ -67,7 +73,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     /** Distance between the wearer's eyes, metres. */
     @Volatile var ipdM = 0.064
 
-    private class Tex(val oes: Int, val st: SurfaceTexture, val surface: Surface) { @Volatile var dirty = false; val m = FloatArray(16).also { Matrix.setIdentityM(it, 0) }; var bar = 0; var barVersion = -1L; var hasFrame = false; var tall = false; var sized = false }
+    private class Tex(val oes: Int, val st: SurfaceTexture, val surface: Surface) { @Volatile var dirty = false; val m = FloatArray(16).also { Matrix.setIdentityM(it, 0) }; var bar = 0; var barVersion = -1L; var handle = 0; var handleVersion = -1L; var hasFrame = false; var pw = 0; var ph = 0 }
     private val tex = HashMap<Int, Tex>()
     private var progOes = 0; private var prog2d = 0; private var progFlat = 0
     private var vao = 0
@@ -200,7 +206,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
             val c = if (w.headLocked) doubleArrayOf(0.0, 0.0, -w.distance) else Geometry.centre(f.anchor, w.yaw, w.pitch, w.distance)
             val yaw = if (w.headLocked) 0.0 else w.yaw; val pitch = if (w.headLocked) 0.0 else w.pitch
             val shade = if (w.focused) 1f else f.dim
-            if (w.focused && !w.headLocked) {   // a hairline of amber around the focused window
+            if (w.outline && !w.headLocked) {   // a hairline of amber around the window in focus
                 Geometry.modelMatrix(c, yaw, pitch, w.width + 0.005, w.height + 0.005, model)
                 draw(progFlat, 0, 0, matrix, ident, w.width + 0.005, w.height + 0.005, 0.0325, Ink.AMBER[0], Ink.AMBER[1], Ink.AMBER[2], 0.85f, 1f)
             }
@@ -214,6 +220,13 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
                 val bc = offset(c, yaw, pitch, 0.0, up)
                 Geometry.modelMatrix(bc, yaw, pitch, w.width, w.barHeight, model)
                 draw(prog2d, GLES30.GL_TEXTURE_2D, t.bar, matrix, ident, w.width, w.barHeight, 0.0, 1f, 1f, 1f, 1f, 1f)
+            }
+            if (!w.headLocked && w.handle != null) {   // the handle: move, size, pin, close, under the window in focus
+                if (t.handle == 0) t.handle = newTexture2d()
+                if (t.handleVersion != w.handleVersion) { upload(t.handle, w.handle); t.handleVersion = w.handleVersion }
+                val hc = offset(c, yaw, pitch, 0.0, -(w.height / 2 + HandleStrip.GAP + w.handleHeight / 2))
+                Geometry.modelMatrix(hc, yaw, pitch, w.width, w.handleHeight, model)
+                draw(prog2d, GLES30.GL_TEXTURE_2D, t.handle, matrix, ident, w.width, w.handleHeight, 0.0, 1f, 1f, 1f, 1f, 1f)
             }
             if (w.showCursor) {
                 val size = (w.distance * 0.018).coerceAtLeast(0.012)
@@ -254,7 +267,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     private fun syncTextures(f: RenderFrame) {
         val wanted = f.windows.map { it.id }.toSet()
         val gone = tex.keys.filter { it !in wanted }
-        for (id in gone) { val t = tex.remove(id) ?: continue; onSurface(id, null); t.surface.release(); t.st.release(); GLES30.glDeleteTextures(2, intArrayOf(t.oes, t.bar), 0) }
+        for (id in gone) { val t = tex.remove(id) ?: continue; onSurface(id, null); t.surface.release(); t.st.release(); GLES30.glDeleteTextures(3, intArrayOf(t.oes, t.bar, t.handle), 0) }
         for (w in f.windows) {
             var t = tex[w.id]
             if (t == null) {
@@ -270,9 +283,8 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
                 tex[w.id] = nt; t = nt
                 onSurface(w.id, nt.surface)
             }
-            // the picture's size follows the window's shape: upright windows are 720 x 1280, the others 1280 x 720
-            val tall = w.width < w.height * 0.8
-            if (t.tall != tall || !t.sized) { t.tall = tall; t.sized = true; t.st.setDefaultBufferSize(if (tall) WebWindow.PIXEL_HEIGHT else WebWindow.PIXEL_WIDTH, if (tall) WebWindow.PIXEL_WIDTH else WebWindow.PIXEL_HEIGHT) }
+            // the picture's size follows the window's shape: 1280 x 720 lying, 720 x 1280 upright, or what a free sizing gave it
+            if (t.pw != w.pixelW || t.ph != w.pixelH) { t.pw = w.pixelW; t.ph = w.pixelH; t.st.setDefaultBufferSize(w.pixelW, w.pixelH) }
             if (t.dirty) { t.dirty = false; try { t.st.updateTexImage(); t.st.getTransformMatrix(t.m); t.hasFrame = true } catch (_: Exception) {} }
         }
     }

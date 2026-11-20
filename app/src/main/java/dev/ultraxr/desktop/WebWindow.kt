@@ -35,9 +35,11 @@ import dev.ultraxr.tracking.Tracking
 class WebWindow(private val context: Context, val id: Int, private val kind: String, initialUrl: String, private val darkPages: Boolean, private val onChanged: (WebWindow) -> Unit) {
     var pixelWidth = PIXEL_WIDTH; private set
     var pixelHeight = PIXEL_HEIGHT; private set
-    /** Upright like a phone (720 x 1280) or lying like a screen (1280 x 720). The page or app inside is laid out anew. */
-    fun setTall(tall: Boolean) {
-        val pw = if (tall) PIXEL_HEIGHT else PIXEL_WIDTH; val ph = if (tall) PIXEL_WIDTH else PIXEL_HEIGHT
+    /**
+     * The window's shape as a picture of [pw] x [ph] pixels ([DesktopWindow.pixels]): lying like a screen (1280 x 720),
+     * upright like a phone (720 x 1280), or anything a free sizing left it at. The page or app inside is laid out anew.
+     */
+    fun setPixels(pw: Int, ph: Int) {
         if (pw == pixelWidth && ph == pixelHeight) return
         pixelWidth = pw; pixelHeight = ph
         try { display?.resize(pw, ph, DENSITY) } catch (e: Exception) { Tracking.log("desktop: window $id could not change shape: $e") }
@@ -175,6 +177,26 @@ class WebWindow(private val context: Context, val id: Int, private val kind: Str
     private inner class Page(c: Context, d: Display) : Presentation(c, d, android.R.style.Theme_Material_NoActionBar) {
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
+            // Some versions of Android take a presentation down when its display changes size, which a free sizing of
+            // the window does. The page itself is kept: it is shown again in a new presentation on the same display.
+            setOnDismissListener {
+                if (presentation === this) {
+                    presentation = null
+                    val d = this@WebWindow.display?.display
+                    if (d != null) try {
+                        Tracking.log("desktop: window $id's page was taken down when its shape changed; shown again")
+                        web?.let { (it.parent as? ViewGroup)?.removeView(it) }
+                        Page(this@WebWindow.context, d).also { it.show(); presentation = it }
+                    } catch (e: Exception) { lastError = e.toString(); Tracking.log("desktop: window $id could not be shown again: $e") }
+                }
+            }
+            val kept = web
+            if (kept != null) {
+                val root = FrameLayout(context)
+                root.addView(kept, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                setContentView(root)
+                return
+            }
             val w = WebView(context)
             w.settings.apply {
                 javaScriptEnabled = true

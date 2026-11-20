@@ -117,7 +117,14 @@ class PointerService : AccessibilityService() {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (!wanted()) return false
+        if (!wanted()) {
+            // No game is running. If the spatial desktop is showing and Android is giving the keys to an app in one of
+            // its windows instead of to the desktop's own screen, the keys of the focus (the directions, Select, Back,
+            // the shoulder keys) are handed to the desktop here. In every other case, and for every other key (the
+            // volume keys among them), nothing is taken.
+            val desktop = dev.ultraxr.desktop.DesktopSession.current
+            return desktop != null && desktop.keysElsewhere && desktop.key(event)
+        }
         val now = System.nanoTime()
         if (event.repeatCount == 0 && keysLogged++ < 6) Tracking.log("pointer: key " + event.keyCode + (if (event.action == KeyEvent.ACTION_DOWN) " down" else " up"))
         when (event.keyCode) {

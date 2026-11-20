@@ -29,6 +29,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import dev.ultraxr.desktop.DesktopRenderer
 import dev.ultraxr.desktop.DesktopSession
+import dev.ultraxr.desktop.Focus
+import dev.ultraxr.desktop.FocusKey
 import dev.ultraxr.desktop.HomeApps
 import dev.ultraxr.tracking.Tracking
 import dev.ultraxr.ui.Ui.add
@@ -55,7 +57,7 @@ class DesktopActivity : Activity() {
     private var preview: GLSurfaceView? = null
     private var previewRenderer: DesktopRenderer? = null
     private var glasses: StagePresentation? = null
-    private var moveMode = false
+    private val moveMode: Boolean get() = session.moving
     private var pocket: View? = null
     private var rootView: View? = null
     private var backPressedAt = 0L
@@ -270,7 +272,7 @@ class DesktopActivity : Activity() {
         val c2 = Ui.row(this)
         c2.add(small("Full") { session.desktop.focused?.let { session.toggleFullscreen(it.id) } }, 0, weight = 1f)
         c2.add(small("Close") { session.desktop.focused?.let { session.close(it.id) } }, 0, weight = 1f, startDp = 6)
-        moveButton = small("Move") { moveMode = !moveMode; refreshChips() }
+        moveButton = small("Move") { session.toggleMove(); refreshChips() }
         c2.add(moveButton, 0, weight = 1f, startDp = 6)
         c2.add(small("Gather") { session.gather() }, 0, weight = 1f, startDp = 6)
         c2.add(small("Tall") { session.toggleShape() }.apply { contentDescription = "Tall or wide" }, 0, weight = 1f, startDp = 6)
@@ -340,7 +342,8 @@ class DesktopActivity : Activity() {
         box("Swap left and right eye (if depth looks inside out)", session.swapEyes) { session.swapEyes = it }
         col.add(small("Recenter view") { session.recenter() }, topDp = 12)
         col.add(small("Close all windows") { session.resetLayout() }, topDp = 6)
-        AlertDialog.Builder(this).setTitle("Desktop settings").setView(col).setPositiveButton("Done", null).show()
+        session.dialogOpen = true      // its keys are its own
+        AlertDialog.Builder(this).setTitle("Desktop settings").setView(col).setPositiveButton("Done", null).setOnDismissListener { session.dialogOpen = false }.show()
     }
 
     // ---- pocket mode: the whole screen is a black touchpad that works by feel
@@ -378,6 +381,9 @@ class DesktopActivity : Activity() {
             if (now - backPressedAt < 1500) exitPocket() else { backPressedAt = now; tick(heavy = false) }
             return
         }
+        // Back as Android reports it when it does not send the key (a swipe from the edge on newer versions): the same
+        // Back of the one focus. Only from the shelf, where Back does nothing, does it leave this screen.
+        if (session.desktop.focus !is Focus.Shelf) { session.press(FocusKey.BACK); return }
         @Suppress("DEPRECATION") super.onBackPressed()
     }
 
@@ -386,19 +392,20 @@ class DesktopActivity : Activity() {
         v.performHapticFeedback(if (heavy) android.view.HapticFeedbackConstants.LONG_PRESS else android.view.HapticFeedbackConstants.KEYBOARD_TAP)
     }
 
-    /** Game controllers and keyboards reach the focused page, so the Gamepad API works there. */
+    /**
+     * Keys from the phone, a Bluetooth gamepad, a remote or a keyboard. The directions, Select (d-pad centre, Enter,
+     * A), Back (Back, Escape, B) and the shoulder keys move the one focus (docs/INTERFACE.md, DesktopSession.key);
+     * while a page is in use they go to the page. What the focus does not take goes on as before: a keyboard types
+     * into the focused window, the volume keys scroll it. Menu shows the main menu.
+     */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // A remote: the arrows step across the main menu's icons, or move the cursor in a window; OK selects; Menu
-        // shows the main menu. A full keyboard's arrows and a game controller's pad still reach the page in a window.
-        val arrows = when (event.keyCode) { KeyEvent.KEYCODE_DPAD_LEFT -> -1 to 0; KeyEvent.KEYCODE_DPAD_RIGHT -> 1 to 0; KeyEvent.KEYCODE_DPAD_UP -> 0 to -1; KeyEvent.KEYCODE_DPAD_DOWN -> 0 to 1; else -> null }
-        val ok = event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || event.keyCode == KeyEvent.KEYCODE_BUTTON_A
-        if (!urlBox.hasFocus() && pocket == null) {
-            val onHome = session.desktop.visible.isEmpty()
-            val fullKeyboard = event.device?.keyboardType == android.view.KeyCharacterMap.ALPHA
-            val gamepad = event.source and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD || event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
-            if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) session.showHome(); return true }
-            if (arrows != null && (onHome || (!fullKeyboard && !gamepad))) { if (event.action == KeyEvent.ACTION_DOWN) session.keyMove(arrows.first, arrows.second); return true }
-            if (ok && (onHome || (!fullKeyboard && !gamepad && event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER))) { if (event.action == KeyEvent.ACTION_UP) session.keySelect(); return true }
+        if (!urlBox.hasFocus()) {
+            if (event.keyCode == KeyEvent.KEYCODE_MENU && pocket == null) { if (event.action == KeyEvent.ACTION_UP) session.showHome(); return true }
+            // The phone's own Back key still leaves pocket mode (pressed twice) and, with the focus on the shelf, where
+            // Back does nothing, this screen. A gamepad's B and a keyboard's Escape never leave the screen.
+            val fromPad = event.source and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD || event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
+            val phoneBack = event.keyCode == KeyEvent.KEYCODE_BACK && !fromPad
+            if (!(phoneBack && (pocket != null || session.desktop.focus is Focus.Shelf)) && session.key(event)) return true
         }
         // A hardware keyboard types into the focused window, unless the address box is being used.
         if (!urlBox.hasFocus() && event.keyCode != KeyEvent.KEYCODE_BACK && !KeyEvent.isGamepadButton(event.keyCode)
@@ -407,14 +414,18 @@ class DesktopActivity : Activity() {
         // The volume keys scroll the focused window, so it can be done by feel with the glasses on.
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
             if (session.desktop.focused != null) {
-                if (event.action == KeyEvent.ACTION_DOWN) session.padScroll(0.0, if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) -0.22 else 0.22, false)
+                if (event.action == KeyEvent.ACTION_DOWN) session.padScroll(0.0, if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) -0.22 else 0.22)
                 return true
             }
         }
         val pad = event.source and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD || event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
-        if (pad && session.focusedWeb()?.forwardKey(event) == true) return true
+        // a controller's other keys (X, Y, the triggers, the sticks' clicks) belong to the page only while it is in use
+        if (pad && session.pageInUse && session.focusedWeb()?.forwardKey(event) == true) return true
         return super.dispatchKeyEvent(event)
     }
+
+    /** Whether this screen's window has the keys: when it has not, they may be going to an app in one of the windows. */
+    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); session.phoneFocus = hasFocus }
 
     private var mouseX = Float.NaN; private var mouseY = Float.NaN
 
@@ -423,14 +434,16 @@ class DesktopActivity : Activity() {
         if (event.source and InputDevice.SOURCE_MOUSE == InputDevice.SOURCE_MOUSE) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> {
-                    if (!mouseX.isNaN()) session.padMove(((event.x - mouseX) / 900f).toDouble(), ((event.y - mouseY) / 900f).toDouble(), moveMode)
+                    if (!mouseX.isNaN()) session.padMove(((event.x - mouseX) / 900f).toDouble(), ((event.y - mouseY) / 900f).toDouble())
                     mouseX = event.x; mouseY = event.y; return true
                 }
-                MotionEvent.ACTION_SCROLL -> { session.padScroll(0.0, (event.getAxisValue(MotionEvent.AXIS_VSCROLL) * 0.12).toDouble(), false); return true }
+                MotionEvent.ACTION_SCROLL -> { session.padScroll(0.0, (event.getAxisValue(MotionEvent.AXIS_VSCROLL) * 0.12).toDouble()); return true }
                 MotionEvent.ACTION_HOVER_EXIT, MotionEvent.ACTION_HOVER_ENTER -> { mouseX = Float.NaN; mouseY = Float.NaN }
             }
         }
-        if (event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK && session.focusedWeb()?.forwardMotion(event) == true) return true
+        // A controller's sticks and its d-pad (which many report as a stick) go to the page only while it is in use.
+        // Otherwise they are left alone, and Android turns them into the arrow keys that move the focus.
+        if (event.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK && session.pageInUse && session.focusedWeb()?.forwardMotion(event) == true) return true
         return super.dispatchGenericMotionEvent(event)
     }
 
@@ -447,7 +460,7 @@ class DesktopActivity : Activity() {
                 MotionEvent.ACTION_DOWN -> {
                     lx = e.x; ly = e.y; sx = e.x; sy = e.y; downAt = e.eventTime; moved = false; multi = false; maxPointers = 1
                     if (e.eventTime - lastTapAt < 320 && !moveMode) { dragging = true; session.padPress(true) }
-                    else if (pocketMode) { cancelLong(); longPress = Runnable { if (!moved && maxPointers == 1) { moveMode = !moveMode; refreshChips(); tick(heavy = true); moved = true } }.also { ui.postDelayed(it, 650) } }
+                    else if (pocketMode) { cancelLong(); longPress = Runnable { if (!moved && maxPointers == 1) { session.toggleMove(); refreshChips(); tick(heavy = true); moved = true } }.also { ui.postDelayed(it, 650) } }
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     multi = true; maxPointers = maxOf(maxPointers, e.pointerCount); if (dragging) { dragging = false; session.padPress(false) }; lx = cx(e); ly = cy(e); span = span(e); sx = lx; sy = ly
@@ -458,11 +471,11 @@ class DesktopActivity : Activity() {
                         val x = cx(e); val y = cy(e); val s = span(e)
                         if (!moved && hypot(x - sx, y - sy) < slop && (span <= 0 || abs(s / span - 1f) < 0.035f)) return true   // still a possible tap
                         if (span > 0 && s > 0 && abs(s / span - 1f) > 0.035f) { session.padPinch((s / span).toDouble()); span = s }
-                        else session.padScroll(((x - lx) / w).toDouble(), ((y - ly) / w).toDouble(), moveMode)
+                        else session.padScroll(((x - lx) / w).toDouble(), ((y - ly) / w).toDouble())
                         lx = x; ly = y; moved = true; cancelLong()
                     } else if (!multi) {
                         if (!moved && hypot(e.x - sx, e.y - sy) > slop) { moved = true; cancelLong() }
-                        if (moved) session.padMove(((e.x - lx) / w).toDouble(), ((e.y - ly) / w).toDouble(), moveMode)
+                        if (moved) session.padMove(((e.x - lx) / w).toDouble(), ((e.y - ly) / w).toDouble())
                         lx = e.x; ly = e.y
                     }
                 }
@@ -470,7 +483,7 @@ class DesktopActivity : Activity() {
                     cancelLong()
                     val quick = e.actionMasked == MotionEvent.ACTION_UP && e.eventTime - downAt < 320
                     if (dragging) { dragging = false; session.padPress(false) }
-                    else if (!moved && !multi && quick) { if (!moveMode) session.padTap(); lastTapAt = e.eventTime; if (pocketMode) tick(heavy = false) }
+                    else if (!moved && !multi && quick) { session.padTap(); lastTapAt = e.eventTime; if (pocketMode) tick(heavy = false) }
                     else if (pocketMode && !moved && quick && maxPointers == 2) { if (session.cycleFocus()) tick(heavy = false) }
                     else if (pocketMode && !moved && quick && maxPointers >= 3) { session.gather(); tick(heavy = true) }
                 }

@@ -45,6 +45,12 @@ class DesktopWindow(
     fun shownYaw(): Double = if (maximized) 0.0 else yaw
     fun shownPitch(): Double = if (maximized) 0.0 else pitch
     fun shownBarHeight(): Double = (shownWidth() * BAR_FRACTION).coerceIn(0.05, 0.11)
+    /** The handle's words under the window stand as high as the title bar. */
+    fun shownHandleHeight(): Double = shownBarHeight()
+    /** How far from a corner of the page, inwards and sideways, a pointer still has hold of that corner. */
+    fun shownCornerReach(): Double = (shownWidth() * 0.06).coerceIn(0.04, 0.09)
+    /** A game's page takes every key of a gamepad while it is in use (see [FocusModel]). */
+    val isGame: Boolean get() = kind == "xbox"
 
     fun toJson(): JSONObject = JSONObject().put("id", id).put("title", title).put("url", url).put("yaw", yaw).put("pitch", pitch)
         .put("distance", distance).put("width", width).put("aspect", aspect).put("follow", follow).put("minimized", minimized)
@@ -63,17 +69,36 @@ class DesktopWindow(
         const val MIN_DISTANCE = 0.6
         const val FAR_DISTANCE = 6.0
         val MAX_PITCH = Math.toRadians(60.0)
+        /** The shapes a window can be given: from two and a half times as high as wide to three times as wide as high. */
+        const val MIN_ASPECT = 0.4
+        const val MAX_ASPECT = 3.0
+
+        /**
+         * The picture a page is given for a window of this shape, (width, height) in pixels: always about as many
+         * pixels as 1280 x 720, which is what a lying window gets (and 720 x 1280 an upright one), sides in eights.
+         */
+        fun pixels(aspect: Double): IntArray {
+            val a = aspect.coerceIn(MIN_ASPECT, MAX_ASPECT); val area = 1280.0 * 720.0
+            return intArrayOf((Math.round(sqrt(area * a) / 8.0) * 8).toInt(), (Math.round(sqrt(area / a) / 8.0) * 8).toInt())
+        }
 
         fun fromJson(o: JSONObject): DesktopWindow = DesktopWindow(
             o.getInt("id"), o.optString("title", "Window"), o.optString("url", "about:blank"),
             o.optDouble("yaw", 0.0), o.optDouble("pitch", 0.0), o.optDouble("distance", DEFAULT_DISTANCE).coerceIn(MIN_DISTANCE, FAR_DISTANCE),
-            o.optDouble("width", DEFAULT_WIDTH).coerceIn(MIN_WIDTH, MAX_WIDTH), o.optDouble("aspect", 16.0 / 9.0).coerceIn(0.4, 3.0),
+            o.optDouble("width", DEFAULT_WIDTH).coerceIn(MIN_WIDTH, MAX_WIDTH), o.optDouble("aspect", 16.0 / 9.0).coerceIn(MIN_ASPECT, MAX_ASPECT),
             o.optBoolean("follow", false), o.optBoolean("minimized", false), o.optBoolean("maximized", false), o.optString("kind", "web"))
     }
 }
 
 /** Where a ray meets a window. [u], [v] run 0..1 across the content, left to right and top to bottom. */
-class WindowHit(val window: DesktopWindow, val u: Double, val v: Double, val onBar: Boolean, val barButton: BarButton?, val distance: Double)
+class WindowHit(val window: DesktopWindow, val u: Double, val v: Double, val onBar: Boolean, val barButton: BarButton?, val distance: Double,
+    /** Below the page, where the handle's words are (only the window in focus has them); [handleWord] is the word, null between them and the page. */
+    val onHandle: Boolean = false, val handleWord: HandleWord? = null,
+    /** The corner of the page the ray has hold of, for sizing by dragging: 0 top left, 1 top right, 2 bottom left, 3 bottom right, -1 none. */
+    val corner: Int = -1) {
+    /** On the page itself, where a press is a touch. */
+    val onPage: Boolean get() = !onBar && !onHandle && u in 0.0..1.0
+}
 
 enum class BarButton { FOLLOW, MINIMIZE, MAXIMIZE, CLOSE }
 
@@ -155,6 +180,13 @@ object Geometry {
 class Desktop {
     val windows = ArrayList<DesktopWindow>()
     var focusedId = -1
+    /** The one focus (see Focus.kt). On a window in any form, that window is also [focusedId]. */
+    var focus: Focus = Focus.Shelf(0); private set
+    /** The shelf's mark the focus was last on: where it returns to. */
+    var shelfIndex = 0; private set
+    /** How the window being moved or sized was before, to put it back. */
+    private class Before(val id: Int, val yaw: Double, val pitch: Double, val distance: Double, val width: Double, val aspect: Double, val maximized: Boolean)
+    private var before: Before? = null
     var fullscreenId = -1
     val followAnchor = FollowAnchor()
     private var nextId = 1
@@ -171,16 +203,154 @@ class Desktop {
         // Open in front of the user, then fan further windows out to the sides so they do not stack.
         val slot = SLOTS[windows.count { !it.minimized } % SLOTS.size]
         w.yaw = Geometry.wrap(headYaw + Math.toRadians(slot)); w.pitch = 0.0
-        windows += w; focusedId = w.id; touch()
+        windows += w; onWindow(w.id, Focus.Page(w.id)); touch()
         return w
     }
 
-    fun close(id: Int) { windows.removeAll { it.id == id }; if (focusedId == id) focusedId = windows.lastOrNull { !it.minimized }?.id ?: -1; if (fullscreenId == id) fullscreenId = -1; touch() }
-    fun focus(id: Int) { val w = windows.firstOrNull { it.id == id } ?: return; if (w.minimized) w.minimized = false; if (focusedId != id) { focusedId = id; touch() } else touch() }
-    fun minimize(id: Int) { val w = find(id) ?: return; w.minimized = true; w.maximized = false; if (fullscreenId == id) fullscreenId = -1; if (focusedId == id) focusedId = windows.lastOrNull { !it.minimized }?.id ?: -1; touch() }
-    fun restore(id: Int) { val w = find(id) ?: return; w.minimized = false; focusedId = id; touch() }
-    fun toggleMaximize(id: Int) { val w = find(id) ?: return; w.maximized = !w.maximized; w.minimized = false; focusedId = id; touch() }
-    fun toggleFullscreen(id: Int) { if (find(id) == null) return; fullscreenId = if (fullscreenId == id) -1 else id; focusedId = id; touch() }
+    // ---- the focus
+    /** The window whose handle shows: the one in focus, unless it fills the view. */
+    val handleId: Int get() = if (fullscreenId >= 0) -1 else focus.windowId ?: -1
+
+    private fun setFocus(f: Focus) {
+        if (f is Focus.Shelf) shelfIndex = f.index
+        f.windowId?.let { focusedId = it }
+        // a window that fills the view has no room for its handle or the shelf: going to either ends that
+        if (fullscreenId >= 0 && (f is Focus.Shelf || f is Focus.Handle)) fullscreenId = -1
+        focus = f
+    }
+    /** The focus goes to window [id] as [f], unless it is on that window already (then it keeps its place there). */
+    private fun onWindow(id: Int, f: Focus) { focusedId = id; if (focus.windowId != id) { before = null; setFocus(f) } }
+    /** The window in focus went away: the focus is on [focusedId] if that shows, else on the shelf. */
+    private fun offWindow() { before = null; setFocus(if (visible.any { it.id == focusedId }) Focus.Window(focusedId) else Focus.Shelf(shelfIndex)) }
+
+    fun scene(shelfCount: Int, headYaw: Double = 0.0) = FocusScene(shelfCount, visible.map { FocusWindow(it.id, worldYaw(it)) }, headYaw, shelfIndex)
+
+    /**
+     * A key of the d-pad. Moves the focus by the table, does what belongs to the windows themselves (moving, sizing,
+     * pinning, closing) and returns the action, so that the caller can do the rest (open an app, send a key to a page,
+     * let go of a closed window's page).
+     */
+    fun press(key: FocusKey, shelfCount: Int, headYaw: Double = 0.0): FocusAction {
+        val step = FocusModel.press(focus, key, scene(shelfCount, headYaw))
+        when (val a = step.action) {
+            is FocusAction.StartMove -> begin(a.id)
+            is FocusAction.StartSize -> begin(a.id)
+            is FocusAction.MoveStep -> moveStep(a.id, a.key)
+            is FocusAction.SizeStep -> sizeStep(a.id, a.key)
+            is FocusAction.PutDown -> before = null
+            is FocusAction.Cancel -> putBack()
+            is FocusAction.TogglePin -> toggleFollow(a.id)
+            is FocusAction.CloseWindow -> close(a.id)      // moves the focus itself: to the next window by direction, or the shelf
+            else -> {}
+        }
+        if (step.action !is FocusAction.CloseWindow) setFocus(step.focus)
+        touch()
+        return step.action
+    }
+
+    /**
+     * A pointer (a hand's ray, the touchpad's cursor, a look) came over [f]: the focus goes there. Not while a window
+     * is being moved or sized, which ends only by putting it down or back. Returns whether the focus changed.
+     */
+    fun point(f: Focus): Boolean {
+        if (focus is Focus.Moving || focus is Focus.Sizing || f == focus) return false
+        val id = f.windowId
+        if (id != null && visible.none { it.id == id }) return false
+        if (f is Focus.Shelf && f.index < 0) return false
+        setFocus(f); touch(); return true
+    }
+
+    /** A look rested on window [id]: the focus goes to that window, unless it is on it already. */
+    fun look(id: Int): Boolean = if (focus.windowId == id) false else point(Focus.Window(id))
+
+    /** What a pointer at ([u], [v]) of window [w] is over; v is below 0 on the title bar and above 1 on the handle. */
+    fun focusAt(w: DesktopWindow, u: Double, v: Double): Focus = when {
+        v < 0.0 -> Focus.Window(w.id)
+        v > 1.0 -> (if ((v - 1.0) * w.shownHeight() >= HandleStrip.GAP) HandleStrip.wordAt(u) else null)?.let { Focus.Handle(w.id, it) } ?: Focus.Window(w.id)
+        else -> Focus.Page(w.id)
+    }
+    fun focusAt(h: WindowHit): Focus = when {
+        h.handleWord != null -> Focus.Handle(h.window.id, h.handleWord)
+        h.onPage -> Focus.Page(h.window.id)
+        else -> Focus.Window(h.window.id)
+    }
+
+    // ---- moving and sizing, with something to go back to
+    private fun begin(id: Int) {
+        val w = find(id) ?: return
+        before = Before(id, w.yaw, w.pitch, w.distance, w.width, w.aspect, w.maximized)
+        w.maximized = false      // a maximized window has its place and size given: it is let go of first
+    }
+    fun startMove(id: Int) { if (visible.none { it.id == id } || id == fullscreenId) return; begin(id); setFocus(Focus.Moving(id)); touch() }
+    fun startSize(id: Int) { if (visible.none { it.id == id } || id == fullscreenId) return; begin(id); setFocus(Focus.Sizing(id)); touch() }
+    /** Sizing by dragging a corner: the same going back, without the focus leaving where it is. */
+    fun beginDrag(id: Int) { begin(id); touch() }
+    fun endDrag() { before = null; touch() }
+    /** The window that was being moved or sized is as it was before. */
+    fun putBack() {
+        val b = before ?: return; before = null
+        val w = find(b.id) ?: return
+        w.yaw = b.yaw; w.pitch = b.pitch; w.distance = b.distance; w.width = b.width; w.aspect = b.aspect; w.maximized = b.maximized; touch()
+    }
+
+    /** One press while moving: left and right round the wearer, up and down, nearer and further. */
+    fun moveStep(id: Int, key: FocusKey) {
+        when (key) {
+            FocusKey.LEFT -> move(id, MOVE_STEP, 0.0); FocusKey.RIGHT -> move(id, -MOVE_STEP, 0.0)
+            FocusKey.UP -> move(id, 0.0, MOVE_STEP); FocusKey.DOWN -> move(id, 0.0, -MOVE_STEP)
+            FocusKey.NEARER -> push(id, 1 / PUSH_STEP); FocusKey.FURTHER -> push(id, PUSH_STEP)
+            else -> {}
+        }
+    }
+
+    /** One press while sizing: left narrower, right wider, up shorter, down taller, [SIZE_STEP] each. The other side keeps its length. */
+    fun sizeStep(id: Int, key: FocusKey) {
+        val w = find(id) ?: return; val h = w.height
+        when (key) {
+            // the width stops where the shape would become narrower or wider than a window may be
+            FocusKey.LEFT -> sizeTo(id, maxOf(w.width / SIZE_STEP, h * DesktopWindow.MIN_ASPECT), h)
+            FocusKey.RIGHT -> sizeTo(id, minOf(w.width * SIZE_STEP, h * DesktopWindow.MAX_ASPECT), h)
+            FocusKey.UP -> sizeTo(id, w.width, h / SIZE_STEP)
+            FocusKey.DOWN -> sizeTo(id, w.width, h * SIZE_STEP)
+            else -> {}
+        }
+    }
+
+    /** Free sizing: the window becomes [width] by [height] metres, as far as the limits allow. */
+    fun sizeTo(id: Int, width: Double, height: Double) {
+        val w = find(id) ?: return; if (w.maximized) return
+        w.width = width.coerceIn(DesktopWindow.MIN_WIDTH, DesktopWindow.MAX_WIDTH)
+        w.aspect = (w.width / height.coerceAtLeast(1e-6)).coerceIn(DesktopWindow.MIN_ASPECT, DesktopWindow.MAX_ASPECT); touch()
+    }
+
+    /** Closes a window. If it was the one in focus, the focus goes to the next window by direction, or to the shelf. */
+    fun close(id: Int) {
+        if (find(id) == null) return
+        val next = FocusModel.neighbour(windows.filter { !it.minimized }.map { FocusWindow(it.id, worldYaw(it)) }, id, 1)
+        windows.removeAll { it.id == id }
+        if (before?.id == id) before = null
+        if (fullscreenId == id) fullscreenId = -1
+        if (focusedId == id) focusedId = next ?: -1
+        if (focus.windowId == id) offWindow()
+        touch()
+    }
+    /** The window is chosen to be used (its chip on the phone, opening it): its page is in focus. */
+    fun focus(id: Int) { val w = windows.firstOrNull { it.id == id } ?: return; if (w.minimized) w.minimized = false; onWindow(id, Focus.Page(id)); touch() }
+    fun minimize(id: Int) {
+        val w = find(id) ?: return; w.minimized = true; w.maximized = false; if (fullscreenId == id) fullscreenId = -1
+        if (before?.id == id) before = null
+        if (focusedId == id) focusedId = windows.lastOrNull { !it.minimized }?.id ?: -1
+        if (focus.windowId == id) offWindow()
+        touch()
+    }
+    fun restore(id: Int) { val w = find(id) ?: return; w.minimized = false; onWindow(id, Focus.Page(id)); touch() }
+    fun toggleMaximize(id: Int) { val w = find(id) ?: return; w.maximized = !w.maximized; w.minimized = false; onWindow(id, Focus.Page(id)); touch() }
+    fun toggleFullscreen(id: Int) {
+        if (find(id) == null) return; fullscreenId = if (fullscreenId == id) -1 else id; onWindow(id, Focus.Page(id))
+        // filling the view, a window has no handle: a focus on it goes to the window
+        if (fullscreenId == id && (focus is Focus.Handle || focus is Focus.Moving || focus is Focus.Sizing)) { before = null; setFocus(Focus.Window(id)) }
+        touch()
+    }
 
     /** Switches a window between following the head and staying in space without it jumping. */
     fun toggleFollow(id: Int) {
@@ -222,10 +392,16 @@ class Desktop {
             val h = Geometry.planeHit(origin, dir, c, yaw, pitch) ?: continue
             val ww = w.shownWidth(); val wh = w.shownHeight(); val bar = w.shownBarHeight()
             val x = h[0]; val y = h[1]
-            if (abs(x) > ww / 2 || y < -wh / 2 || y > wh / 2 + bar) continue
-            val onBar = y > wh / 2
+            // only the window in focus has its handle under it; a corner can be taken hold of a little beside the page too
+            val handle = if (w.id == handleId) HandleStrip.GAP + w.shownHandleHeight() else 0.0
+            val reach = if (w.id == fullscreenId) 0.0 else w.shownCornerReach()
+            if (abs(x) > ww / 2 + reach || y < -wh / 2 - handle || y > wh / 2 + bar) continue
+            val onBar = y > wh / 2; val onHandle = y < -wh / 2
+            val byCorner = !onBar && !onHandle && reach > 0 && abs(x) >= ww / 2 - reach && abs(y) >= wh / 2 - reach
+            if (abs(x) > ww / 2 && !byCorner) continue
             val u = x / ww + 0.5; val v = 0.5 - y / wh
-            val hitNow = WindowHit(w, u, v, onBar, if (onBar) barButtonAt(u) else null, h[2])
+            val hitNow = WindowHit(w, u, v, onBar, if (onBar) barButtonAt(u) else null, h[2], onHandle,
+                if (onHandle && y <= -wh / 2 - HandleStrip.GAP) HandleStrip.wordAt(u) else null, if (byCorner) (if (y > 0) 0 else 2) + (if (x > 0) 1 else 0) else -1)
             if (best == null || hitNow.distance < best.distance) best = hitNow
         }
         return best
@@ -240,11 +416,17 @@ class Desktop {
         for (i in 0 until minOf(a.length(), MAX_WINDOWS)) windows += DesktopWindow.fromJson(a.getJSONObject(i))
         nextId = maxOf(o.optInt("nextId", 1), (windows.maxOfOrNull { it.id } ?: 0) + 1)
         focusedId = o.optInt("focused", -1).let { f -> if (windows.any { it.id == f && !it.minimized }) f else windows.lastOrNull { !it.minimized }?.id ?: -1 }
-        fullscreenId = -1; touch()
+        fullscreenId = -1; before = null; shelfIndex = 0; focus = Focus.Shelf(0); touch()
     }
 
     companion object {
         const val MAX_WINDOWS = 6
+        /** One press of the d-pad while moving turns the window this far round the wearer, or up or down. */
+        val MOVE_STEP = Math.toRadians(4.0)
+        /** One press of a shoulder key brings it this much nearer or further. */
+        const val PUSH_STEP = 1.1
+        /** One press while sizing: 4 %. */
+        const val SIZE_STEP = 1.04
         /** Yaw offsets in degrees for the first, second, ... open window. */
         val SLOTS = doubleArrayOf(0.0, -40.0, 40.0, -80.0, 80.0, 0.0)
         /** Title-bar buttons occupy the right end of the bar; fractions of the bar's width. */
