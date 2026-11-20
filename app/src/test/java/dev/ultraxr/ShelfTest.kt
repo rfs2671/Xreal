@@ -36,7 +36,7 @@ class ShelfTest {
         for (n in 1..Shelf.IN_VIEW) {
             for (slot in 0 until n) {
                 val c = Shelf.markCentre(origin, 0.0, slot.toDouble(), n)
-                assertEquals("1.6 m away", 1.6, Math.sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]), 1e-9)
+                assertEquals("as far away as a new window", Shelf.DISTANCE, Math.sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]), 1e-9)
                 assertEquals(-8.0, deg(Geometry.pitchOf(c)), 1e-9)
             }
             assertEquals("the row is centred", 0.0, Shelf.yawOffset(0.0, n) + Shelf.yawOffset(n - 1.0, n), 1e-12)

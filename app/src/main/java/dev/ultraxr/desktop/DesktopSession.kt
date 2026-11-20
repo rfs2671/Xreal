@@ -44,6 +44,20 @@ class DesktopSession(private val activity: Activity) {
     private var handCorner: DoubleArray? = null; private var handSizeWindow = -1
     /** The window being moved was taken up by a hand's pinch on "move": it follows the hand's ray. */
     private var moveByHand = false
+    /** The hand as a pointer: the arm's ray and the measured pinch, as in the games ([HandPointer]). */
+    private val pointer by lazy { HandPointer(Tracking.handOptions.pressM, Tracking.handOptions.releaseM) }
+    /** A window pinched on its handle and carried: it follows the hand while the fingers hold, this far from the ray. */
+    private var handGrab = -1; private var grabYaw = 0.0; private var grabPitch = 0.0; private var handDownDir: DoubleArray? = null
+    private var handShown: RenderHand? = null; private var handLogNs = 0L; private var handSeenFrames = 0
+    /**
+     * Where the home and the dock stand in the room. They keep their place while the wearer moves about where they
+     * are (leaning in, shifting on a chair) and come along, gliding, when the wearer walks off.
+     */
+    private val stage = doubleArrayOf(0.0, 0.0, 0.0); private var stageMoving = false
+    /** The windows have been arranged around where the wearer is: once at the start, and again when the view is recentred. */
+    private var anchored = false
+    private var ringAnchor: DoubleArray = ZERO
+    private val anchorsShown = HashMap<Int, DoubleArray>()
     private var gazeDone = false
     private var loggedFocus: Focus? = null
     @Volatile private var surfaces = HashMap<Int, Surface>()
@@ -53,7 +67,7 @@ class DesktopSession(private val activity: Activity) {
     var statusLine = ""; private set
 
     // ---- settings (persisted)
-    var usePosition: Boolean get() = prefs.getBoolean("usePosition", false); set(v) { prefs.edit().putBoolean("usePosition", v).apply() }
+    var usePosition: Boolean get() = prefs.getBoolean("usePosition", true); set(v) { prefs.edit().putBoolean("usePosition", v).apply() }
     var gazeFocus: Boolean get() = prefs.getBoolean("gazeFocus", true); set(v) { prefs.edit().putBoolean("gazeFocus", v).apply() }
     var handGestures: Boolean get() = prefs.getBoolean("handGestures", true); set(v) { prefs.edit().putBoolean("handGestures", v).apply() }
     var dimUnfocused: Boolean get() = prefs.getBoolean("dim", true); set(v) { prefs.edit().putBoolean("dim", v).apply() }
@@ -342,7 +356,7 @@ class DesktopSession(private val activity: Activity) {
     fun toggleMaximize(id: Int) { desktop.toggleMaximize(id); changed() }
     fun toggleFullscreen(id: Int) { desktop.toggleFullscreen(id); changed() }
     fun toggleFollow(id: Int) { desktop.toggleFollow(id); changed() }
-    fun recenter() { Tracking.recenter(); desktop.gather(0.0); settle(); changed() }
+    fun recenter() { Tracking.recenter(); desktop.gather(0.0); settle(); anchored = false; changed() }
     fun gather() { desktop.gather(headYaw()); settle(); changed() }
     /** Windows brought back in front of the wearer stand clear of the shelf, as new ones do. */
     private fun settle() { for (w in desktop.windows) if (!w.follow && !w.maximized) w.pitch = clearPitch(w); desktop.touch() }
@@ -531,6 +545,9 @@ class DesktopSession(private val activity: Activity) {
     val moving: Boolean get() = desktop.focus is Focus.Moving
     /** The phone's Move button: takes up the window in focus, or puts down the one being carried. */
     fun toggleMove() { if (moving) press(FocusKey.SELECT) else desktop.focused?.let { desktop.startMove(it.id); changed() } }
+    val sizing: Boolean get() = desktop.focus is Focus.Sizing
+    /** The phone's Size button: the window in focus is sized by the touchpad or the d-pad until Select or the button again. */
+    fun toggleSize() { if (sizing) press(FocusKey.SELECT) else desktop.focused?.let { desktop.startSize(it.id); changed() } }
 
     fun padMove(dx: Double, dy: Double) {
         padTouchNs = System.nanoTime()
@@ -615,10 +632,23 @@ class DesktopSession(private val activity: Activity) {
         val head = Tracking.head.predict(nowNs)
         val tracked = head.mode != HeadTracker.Mode.NONE
         val forward = if (tracked) headForward(head) else Geometry.direction(renderers.firstOrNull()?.previewYaw ?: 0.0, renderers.firstOrNull()?.previewPitch ?: 0.0)
-        val positionOk = usePosition && head.mode == HeadTracker.Mode.SIX_DOF
-        // Without trusted position the windows are placed around the viewer; with it, around the world origin.
+        // The head's place in the room is used whenever there is a head: the tracker holds its last place while it
+        // has no fresh one, so the windows do not jump. (Until 20 November 2026 this was off unless switched on, and
+        // the desktop followed turning only.)
+        val positionOk = usePosition && tracked
         val origin = if (positionOk) head.pose.p else ZERO
-        val anchor = ZERO
+        desktop.positional = positionOk; desktop.here = origin
+        if (!positionOk) anchored = false
+        else {
+            if (!anchored) { anchored = true; desktop.anchorAll(); System.arraycopy(origin, 0, stage, 0, 3); stageMoving = false }
+            val dx = origin[0] - stage[0]; val dy = origin[1] - stage[1]; val dz = origin[2] - stage[2]
+            if (Math.hypot(dx, dz) > STAGE_REACH || Math.abs(dy) > STAGE_RISE) stageMoving = true
+            if (stageMoving) {
+                val k = 1 - Math.exp(-dt * 3.0); stage[0] += dx * k; stage[1] += dy * k; stage[2] += dz * k
+                if (Math.sqrt(dx * dx + dy * dy + dz * dz) < 0.04) stageMoving = false
+            }
+        }
+        val anchor = if (positionOk) stage else ZERO
         desktop.followAnchor.update(Geometry.yawOf(forward), dt)
         if (nowNs - stillCheckedNs > 1_000_000_000L) { stillCheckedNs = nowNs; still = Tracking.settings.reduceMotion || systemStill() }
 
@@ -644,7 +674,7 @@ class DesktopSession(private val activity: Activity) {
             if (id != gazeCandidate) { gazeCandidate = id; gazeSinceNs = nowNs; gazeDone = false }
             else if (id >= 0 && !gazeDone && nowNs - gazeSinceNs > 450_000_000L) { gazeDone = true; if (desktop.look(id)) changed() }
         }
-        if (handGestures && !full) hands(nowNs, head, origin, anchor, tracked) else if (handDown) releaseHand()
+        if (handGestures && Tracking.handsOn && !full) hands(nowNs, head, origin, anchor, tracked) else { handShown = null; if (handDown) releaseHand() }
         if (backHold.due(nowNs)) leaveGame()
 
         // Look-to-press: the shelf's marks and the handle's words. A look that has rested on one for a moment brings
@@ -656,6 +686,7 @@ class DesktopSession(private val activity: Activity) {
             else desktop.hit(origin, forward, anchor)?.let { g -> if (g.handleWord != null) { looked = "handle:${g.window.id}:${g.handleWord.name}"; lookedAt = Focus.Handle(g.window.id, g.handleWord); ringDistance = g.distance } }
         }
         val onShelf = lookedAt is Focus.Shelf
+        ringAnchor = if (onShelf) anchor else origin
         val timer = if (onShelf) shelfDwell else dwell
         (if (onShelf) dwell else shelfDwell).update(nowNs, null)
         val fire = timer.update(nowNs, looked)
@@ -687,30 +718,54 @@ class DesktopSession(private val activity: Activity) {
     private var lastPerfNs = 0L
 
     private fun hands(nowNs: Long, head: HeadTracker.State, origin: DoubleArray, anchor: DoubleArray, tracked: Boolean) {
-        val hand = if (tracked) Tracking.hands.filter { nowNs - it.timestampNs < 300_000_000L }.maxByOrNull { if (it.isRight) 1 else 0 } else null
-        if (hand == null) { lastHandRay = null; handTarget = null; handPinchWas = false; if (handDown) releaseHand(); return }
-        // Hand positions are in the app world. Without trusted position the view sits at the origin,
-        // so the hand ray is taken relative to the head instead.
-        val o = if (origin === ZERO) doubleArrayOf(hand.aimOrigin[0] - head.pose.p[0], hand.aimOrigin[1] - head.pose.p[1], hand.aimOrigin[2] - head.pose.p[2]) else hand.aimOrigin
-        lastHandRay = o to hand.aimDir
-        val pinchStarts = hand.pinching && !handPinchWas; handPinchWas = hand.pinching
+        val made = madeUpHand(nowNs, head)
+        val aim = if (tracked || made != null) pointer.update(nowNs, made ?: Tracking.handJoints, head.pose.p, head.pose.q) else null
+        if (nowNs - handLogNs > 5_000_000_000L) {      // every five seconds in which a hand was seen: what the pointer makes of it
+            if (handSeenFrames > 0) Tracking.log("desktop: a hand in $handSeenFrames frames, ${pointer.results} results and ${pointer.pinches} pinches so far" +
+                (aim?.let { String.format(Locale.US, ", %s hand, fingertips %.0f mm apart, %s, on %s", if (it.right) "right" else "left", it.gapM * 1000, if (it.pinching) "pinching" else "open", handTarget?.describe() ?: "nothing") } ?: ""))
+            handLogNs = nowNs; handSeenFrames = 0
+        }
+        if (aim == null) { handShown = null; lastHandRay = null; handTarget = null; if (handDown) releaseHand(); return }
+        handSeenFrames++
+        // Hand positions are in the app world. Without position the view sits at the origin, so the hand is taken relative to the head.
+        val sx = origin[0] - head.pose.p[0]; val sy = origin[1] - head.pose.p[1]; val sz = origin[2] - head.pose.p[2]
+        fun seen(p: DoubleArray) = doubleArrayOf(p[0] + sx, p[1] + sy, p[2] + sz)
+        val o = seen(aim.origin); val dir = aim.dir; val pinching = aim.pinching
+        lastHandRay = o to dir
+        // what the wearer is shown of the hand: its two fingertips, the ray, and where the ray lands
+        var reach = 0.0; var onYaw = 0.0; var onPitch = 0.0
+        fun show() { handShown = RenderHand(seen(aim.thumb), seen(aim.index), o, dir, origin, reach, onYaw, onPitch, pinching) }
         val f = desktop.focus
+        if (handGrab >= 0) {      // a window held by its handle follows the hand until the fingers part
+            val w = desktop.find(handGrab)
+            if (pinching && w != null) desktop.aim(w.id, Geometry.wrap(Geometry.yawOf(dir) + grabYaw), Geometry.pitchOf(dir) + grabPitch) else releaseHand()
+            show(); return
+        }
         if (f is Focus.Moving || f is Focus.Sizing) {
             // a window taken up by pinching "move" follows the hand's ray; a pinch is Select: it puts the window down
-            if (f is Focus.Moving && moveByHand && !hand.pinching) desktop.aim(f.id, Geometry.yawOf(hand.aimDir), Geometry.pitchOf(hand.aimDir))
-            if (pinchStarts) { press(FocusKey.SELECT); handDown = true; handDownHit = null; handTile = -1; handCorner = null }      // the rest of this pinch does nothing more
-            else if (!hand.pinching && handDown) releaseHand()
-            return
+            if (f is Focus.Moving && moveByHand && !pinching) desktop.aim(f.id, Geometry.yawOf(dir), Geometry.pitchOf(dir))
+            if (pinching && !handDown) { press(FocusKey.SELECT); handDown = true; handDownHit = null; handTile = -1; handCorner = null }      // the rest of this pinch does nothing more
+            else if (!pinching && handDown) releaseHand()
+            show(); return
         }
         if (handSizeWindow >= 0) {   // a corner is held: it follows the ray, and the window's middle stays where it is
             val w = desktop.find(handSizeWindow)
-            if (hand.pinching && w != null) planePoint(w, o, hand.aimDir, anchor)?.let { desktop.sizeTo(w.id, 2 * Math.abs(it[0]), 2 * Math.abs(it[1])) }
+            if (pinching && w != null) planePoint(w, o, dir, anchor)?.let { desktop.sizeTo(w.id, 2 * Math.abs(it[0]), 2 * Math.abs(it[1])) }
             else releaseHand()
-            return
+            show(); return
         }
         // a ray that is on a mark is on the shelf, whatever is behind the mark
-        val tile = shelfHit(o, hand.aimDir, anchor) ?: -1
-        val hit = if (tile >= 0) null else desktop.hit(o, hand.aimDir, anchor)
+        // The ray starts at the hand, lower than the eyes, so on its way to a window it can pass through the dock (and
+        // the other way about): of a mark and a window that both lie on it, the hand is on the nearer.
+        var tile = shelfHit(o, dir, anchor) ?: -1
+        var hit = desktop.hit(o, dir, anchor)
+        if (tile >= 0) {
+            val yaw = desktop.followAnchor.yaw; val pitch = if (panelShown) Home.PITCH else Shelf.PITCH; val far = if (panelShown) Home.DISTANCE else Shelf.DISTANCE
+            val t = Geometry.planeHit(o, dir, Geometry.centre(anchor, yaw, pitch, far), yaw, pitch)?.get(2) ?: 0.0
+            if (hit != null && hit.distance < t) tile = -1 else { hit = null; reach = t; onYaw = yaw; onPitch = pitch }
+        }
+        if (hit != null) { reach = hit.distance; onYaw = desktop.worldYaw(hit.window); onPitch = hit.window.shownPitch() }
+        show()
         val target: Focus? = if (hit != null) desktop.focusAt(hit) else if (tile >= 0) Focus.Shelf(tile) else null
         // the ray moves the focus when it comes over something new, not while it rests there: the d-pad may have moved on since
         if (target != handTarget) { handTarget = target; if (target != null && !handDown && desktop.point(target)) changed() }
@@ -718,21 +773,26 @@ class DesktopSession(private val activity: Activity) {
             cursors[hit.window.id] = doubleArrayOf(hit.u, hit.v)
             if (hit.window.kind == SETTINGS && !handDown && desktop.focus is Focus.Page) settings.point(hit.v)      // the row under the ray is the one in focus
         }
-        if (hand.pinching && !handDown) {
-            handDown = true; handDownHit = hit; handTile = tile; handCorner = null
+        if (pinching && !handDown) {
+            handDown = true; handDownHit = hit; handTile = tile; handCorner = null; handDownDir = dir.copyOf()
             if (target != null && desktop.point(target)) changed()
             if (hit != null) {
                 // on a corner it is decided when the hand moves: a drag sizes the window, a pinch let go where it began is a touch
                 if (hit.corner >= 0) handCorner = doubleArrayOf((hit.u - 0.5) * hit.window.shownWidth(), (0.5 - hit.v) * hit.window.shownHeight())
                 else if (hit.onPage) pageTouch(hit.window.id, MotionEvent.ACTION_DOWN, hit.u, hit.v)
             }
-        } else if (hand.pinching && handDown) {
-            val d = handDownHit; val start = handCorner
-            if (d != null && start != null) {
-                val p = planePoint(d.window, o, hand.aimDir, anchor)
-                if (p != null && Math.hypot(p[0] - start[0], p[1] - start[1]) > CORNER_DRAG_M) { handCorner = null; handSizeWindow = d.window.id; desktop.beginDrag(d.window.id) }
+        } else if (pinching && handDown) {
+            val d = handDownHit; val start = handCorner; val from = handDownDir
+            if (d != null && d.onHandle && from != null && Math.acos((from[0] * dir[0] + from[1] * dir[1] + from[2] * dir[2]).coerceIn(-1.0, 1.0)) > GRAB_ANGLE) {
+                // pinched on the handle and carried off: the window comes along, and stays where the fingers let it go
+                desktop.beginDrag(d.window.id); handGrab = d.window.id
+                grabYaw = Geometry.wrap(desktop.worldYaw(d.window) - Geometry.yawOf(dir)); grabPitch = d.window.pitch - Geometry.pitchOf(dir)
+                Tracking.log("desktop: window ${d.window.id} taken up by the hand")
+            } else if (d != null && start != null) {
+                val p = planePoint(d.window, o, dir, anchor)
+                if (p != null && Math.hypot(p[0] - start[0], p[1] - start[1]) > CORNER_DRAG_M) { handCorner = null; handSizeWindow = d.window.id; desktop.beginDrag(d.window.id); Tracking.log("desktop: window ${d.window.id} sized by the hand") }
             } else if (d != null && d.onPage && hit != null && hit.window.id == d.window.id) pageTouch(d.window.id, MotionEvent.ACTION_MOVE, hit.u.coerceIn(0.0, 1.0), hit.v.coerceIn(0.0, 1.0))
-        } else if (!hand.pinching && handDown) {
+        } else if (!pinching && handDown) {
             val d = handDownHit
             if (d != null && d.handleWord != null) {
                 // a pinch on a word of the handle is Select on that word, if the hand is still on it when it lets go
@@ -748,17 +808,49 @@ class DesktopSession(private val activity: Activity) {
         }
     }
 
+    /**
+     * Debug builds only: a made-up right hand, so that the hand's whole path through the desktop (ray, ring, pinch,
+     * carrying, sizing) can be tested on the phone without a hand. files/hand_sim.txt holds "yaw pitch gap": where its
+     * arm points, in degrees left of and above straight ahead in the world, and the millimetres between its fingertips.
+     */
+    private val madeUpFile: java.io.File? by lazy { if (activity.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) java.io.File(activity.filesDir, "hand_sim.txt") else null }
+    private var madeUp: DoubleArray? = null; private var madeUpNs = 0L
+    private fun madeUpHand(nowNs: Long, head: HeadTracker.State): List<dev.ultraxr.core.Hand>? {
+        val file = madeUpFile ?: return null
+        if (nowNs - madeUpNs > 100_000_000L) {
+            madeUpNs = nowNs
+            madeUp = try { if (file.isFile) file.readText().trim().split(" ").map { it.toDouble() }.toDoubleArray().takeIf { it.size >= 3 } else null } catch (_: Exception) { null }
+        }
+        val m = madeUp ?: return null
+        val hp = head.pose.p
+        var f = headForward(head); var fl = Math.hypot(f[0], f[2]); if (fl < 0.2) { f = doubleArrayOf(0.0, 0.0, -1.0); fl = 1.0 }
+        val fx = f[0] / fl; val fz = f[2] / fl
+        val sh = doubleArrayOf(hp[0] - fz * 0.17 - fx * 0.06, hp[1] - 0.22, hp[2] + fx * 0.17 - fz * 0.06)      // the right shoulder, as ArmRay takes it
+        val d = Geometry.direction(Math.toRadians(m[0]), Math.toRadians(m[1]))
+        val to = doubleArrayOf(hp[0] + d[0] * 2.0 - sh[0], hp[1] + d[1] * 2.0 - sh[1], hp[2] + d[2] * 2.0 - sh[2]); val n = Math.sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2])
+        val u = doubleArrayOf(to[0] / n, to[1] / n, to[2] / n); val side = doubleArrayOf(-u[2], 0.0, u[0])
+        val palm = doubleArrayOf(sh[0] + u[0] * 0.5, sh[1] + u[1] * 0.5, sh[2] + u[2] * 0.5)
+        val j = FloatArray(dev.ultraxr.core.Hand.JOINTS * 3)
+        fun put(i: Int, along: Double, across: Double, up: Double = 0.0) { j[i * 3] = (palm[0] + u[0] * along + side[0] * across).toFloat(); j[i * 3 + 1] = (palm[1] + u[1] * along + up).toFloat(); j[i * 3 + 2] = (palm[2] + u[2] * along + side[2] * across).toFloat() }
+        for (i in 0 until dev.ultraxr.core.Hand.JOINTS) put(i, 0.0, 0.0)
+        put(dev.ultraxr.core.Hand.WRIST, -0.04, 0.0); put(dev.ultraxr.core.Hand.LITTLE_MCP, 0.02, 0.02); put(dev.ultraxr.core.Hand.MIDDLE_MCP, 0.03, 0.0)
+        put(5, 0.02, -0.02); put(6, 0.045, -0.02); put(7, 0.065, -0.02); put(8, 0.085, -0.02)
+        put(dev.ultraxr.core.Hand.THUMB_TIP, 0.085, -0.02, -m[2] / 1000.0)
+        return listOf(dev.ultraxr.core.Hand(true, j, nowNs))
+    }
+
     /** Where a ray meets the plane of window [w]: metres to the right of and above its middle, also beyond its edges. */
     private fun planePoint(w: DesktopWindow, o: DoubleArray, dir: DoubleArray, anchor: DoubleArray): DoubleArray? {
         val yaw = desktop.worldYaw(w)
-        return Geometry.planeHit(o, dir, Geometry.centre(anchor, yaw, w.shownPitch(), w.shownDistance()), yaw, w.shownPitch())
+        return Geometry.planeHit(o, dir, Geometry.centre(desktop.anchorFor(w, anchor), yaw, w.shownPitch(), w.shownDistance()), yaw, w.shownPitch())
     }
 
     private fun releaseHand() {
         val d = handDownHit
         if (handDown && d != null && d.onPage && handCorner == null && handSizeWindow < 0) pageTouch(d.window.id, MotionEvent.ACTION_CANCEL, d.u, d.v)
         if (handSizeWindow >= 0) { desktop.endDrag(); applyShape(handSizeWindow) }      // the window keeps the size the hand gave it
-        handDown = false; handDownHit = null; handTile = -1; handCorner = null; handSizeWindow = -1
+        if (handGrab >= 0) { desktop.endDrag(); handGrab = -1 }      // and the place
+        handDown = false; handDownHit = null; handTile = -1; handCorner = null; handSizeWindow = -1; handDownDir = null
     }
 
     // ---- what moves (docs/INTERFACE.md, "Opening and closing"; Motion says for how long)
@@ -800,6 +892,7 @@ class DesktopSession(private val activity: Activity) {
         val moves = !still && full == lastFull; lastFull = full
         for (w in desktop.visible) {
             val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
+            anchorsShown[w.id] = desktop.anchorFor(w, anchor)
             val focused = w.id == desktop.focusedId
             if (w.kind != SETTINGS && !web.containsKey(w.id)) ensureWeb(w)      // a window put away before the desktop was started loads its page when it is brought back
             // the settings have no page of their own making the picture: its size follows the window's shape directly
@@ -845,7 +938,8 @@ class DesktopSession(private val activity: Activity) {
         shown = resting
 
         val frame = RenderFrame(list, anchor, if (full < 0) shelf(nowNs, fo, head) else null, positionOk, if (dimUnfocused) 0.55f else 1f, Tracking.settings.pictureBrightness,
-            dwellYaw = ringYaw, dwellPitch = ringPitch, dwellDistance = ringDistance, dwellProgress = ringProgress, dwellSize = ringSize)
+            dwellYaw = ringYaw, dwellPitch = ringPitch, dwellDistance = ringDistance, dwellProgress = ringProgress, dwellSize = ringSize,
+            anchors = HashMap(anchorsShown), hand = if (full < 0) handShown else null, dwellAnchor = ringAnchor)
         val sw = Tracking.link?.stereo
         val three = forceStereo || sw?.state == dev.ultraxr.glasses.StereoSwitch.State.ACTIVE
         val swap = swapEyes; val ipd = Tracking.settings.ipdMm / 1000.0
@@ -859,7 +953,7 @@ class DesktopSession(private val activity: Activity) {
         }
         statusLine = (when (head.mode) {
             HeadTracker.Mode.NONE -> "No glasses: preview"
-            HeadTracker.Mode.ORIENTATION_ONLY -> "Rotation tracking"
+            HeadTracker.Mode.ORIENTATION_ONLY -> if (positionOk) "Position held" else "Rotation tracking"
             HeadTracker.Mode.SIX_DOF -> if (positionOk) "Position tracking" else "Rotation tracking"
         }) + stereoNote
     }
@@ -999,6 +1093,10 @@ class DesktopSession(private val activity: Activity) {
         private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
         /** A pinch on a corner becomes a drag once the hand's ray has moved this far across the window, metres. */
         private const val CORNER_DRAG_M = 0.03
+        /** A pinch on a window's handle becomes carrying the window once the hand's ray has turned this far. */
+        private val GRAB_ANGLE = Math.toRadians(2.5)
+        /** The home and the dock stay put while the head is within this of where they were placed, along the floor and up or down, metres. */
+        private const val STAGE_REACH = 0.45; private const val STAGE_RISE = 0.30
         /** A slide this long on the touchpad (in pad widths) is one step of the focus on the home panel. */
         private const val PAD_STEP = 0.16
         /** The kind of the window the settings are in. */

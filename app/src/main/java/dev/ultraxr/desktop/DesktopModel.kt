@@ -38,6 +38,12 @@ class DesktopWindow(
     val height: Double get() = width / aspect
     /** The name of the mark of the shelf this window was opened from: that mark shows that it has a window, and brings it back when it was put away. */
     var origin: String = ""
+    /**
+     * The place in the room this window is arranged around: where the wearer's head was when it was opened, brought
+     * back or last moved. Its [yaw], [pitch] and [distance] are from there, so that it stays where it is in the room
+     * when the wearer walks. Not saved: a new session has a new world.
+     */
+    var ax = 0.0; var ay = 0.0; var az = 0.0
 
     /** Size and placement actually shown: a maximized window is large, centred and close. */
     fun shownWidth(): Double = if (maximized) MAXIMIZED_WIDTH else width
@@ -201,12 +207,38 @@ class Desktop {
     val focused: DesktopWindow? get() = windows.firstOrNull { it.id == focusedId }
     val visible: List<DesktopWindow> get() = if (fullscreenId >= 0) windows.filter { it.id == fullscreenId } else windows.filter { !it.minimized }
 
+    // ---- places in the room
+    /** Where the wearer's head is in the world. New, moved and gathered windows are arranged around it. */
+    var here = doubleArrayOf(0.0, 0.0, 0.0)
+    /** The head's position is tracked: windows have their own places ([DesktopWindow.ax]). Without it they are all arranged around one point. */
+    var positional = false
+    /** The point window [w] is arranged around: its own, or the wearer's head for one that follows. [fallback] without position. */
+    fun anchorFor(w: DesktopWindow, fallback: DoubleArray): DoubleArray = if (!positional) fallback else if (w.follow) here else doubleArrayOf(w.ax, w.ay, w.az)
+    private fun placeHere(w: DesktopWindow) { w.ax = here[0]; w.ay = here[1]; w.az = here[2] }
+    /** Every window is arranged around where the wearer is now: at the start, and when the view is recentred. */
+    fun anchorAll() { for (w in windows) placeHere(w); touch() }
+    /** The window stays where it is in the room and is from now on arranged around where the wearer is: it turns to face them. */
+    fun reanchor(w: DesktopWindow) {
+        if (!positional || w.follow || w.maximized) return
+        val c = Geometry.centre(doubleArrayOf(w.ax, w.ay, w.az), w.yaw, w.pitch, w.distance)
+        val d = doubleArrayOf(c[0] - here[0], c[1] - here[1], c[2] - here[2]); val n = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+        if (n > 0.2) { w.yaw = Geometry.yawOf(d); w.pitch = Geometry.pitchOf(d).coerceIn(-DesktopWindow.MAX_PITCH, DesktopWindow.MAX_PITCH); w.distance = n.coerceIn(DesktopWindow.MIN_DISTANCE, DesktopWindow.FAR_DISTANCE) }
+        placeHere(w)
+    }
+    /** Which way a window lies from where the wearer is now. */
+    fun seenYaw(w: DesktopWindow): Double {
+        if (!positional || w.follow) return worldYaw(w)
+        val c = Geometry.centre(doubleArrayOf(w.ax, w.ay, w.az), worldYaw(w), w.shownPitch(), w.shownDistance())
+        val dx = c[0] - here[0]; val dz = c[2] - here[2]
+        return if (dx * dx + dz * dz < 0.01) worldYaw(w) else atan2(-dx, -dz)
+    }
+
     fun add(title: String, url: String, kind: String = "web", headYaw: Double = 0.0): DesktopWindow? {
         if (windows.size >= MAX_WINDOWS) return null
-        val w = DesktopWindow(nextId++, title, url, kind = kind)
+        val w = DesktopWindow(nextId++, title, url, kind = kind); placeHere(w)
         // Straight ahead of where the wearer looks, unless a window stands there already: then the nearest place
         // beside it that is free, so that windows do not stack and a new one is never opened out of sight for nothing.
-        val there = windows.filter { !it.minimized }.map { worldYaw(it) }
+        val there = windows.filter { !it.minimized }.map { seenYaw(it) }
         val slot = SLOTS.firstOrNull { s -> there.none { Math.abs(Geometry.wrap(it - (headYaw + Math.toRadians(s)))) < Math.toRadians(SLOT_CLEAR) } } ?: SLOTS[there.size % SLOTS.size]
         w.yaw = Geometry.wrap(headYaw + Math.toRadians(slot)); w.pitch = 0.0
         windows += w; onWindow(w.id, Focus.Page(w.id)); touch()
@@ -229,7 +261,7 @@ class Desktop {
     /** The window in focus went away: the focus is on [focusedId] if that shows, else on the shelf. */
     private fun offWindow() { before = null; setFocus(if (visible.any { it.id == focusedId }) Focus.Window(focusedId) else Focus.Shelf(shelfIndex)) }
 
-    fun scene(shelfCount: Int, headYaw: Double = 0.0) = FocusScene(shelfCount, visible.map { FocusWindow(it.id, worldYaw(it)) }, headYaw, shelfIndex)
+    fun scene(shelfCount: Int, headYaw: Double = 0.0) = FocusScene(shelfCount, visible.map { FocusWindow(it.id, seenYaw(it)) }, headYaw, shelfIndex)
 
     /**
      * A key of the d-pad. Moves the focus by the table, does what belongs to the windows themselves (moving, sizing,
@@ -286,6 +318,7 @@ class Desktop {
     // ---- moving and sizing, with something to go back to
     private fun begin(id: Int) {
         val w = find(id) ?: return
+        reanchor(w)      // it is moved round where the wearer stands now, and does not jump when taken up
         before = Before(id, w.yaw, w.pitch, w.distance, w.width, w.aspect, w.maximized)
         w.maximized = false      // a maximized window has its place and size given: it is let go of first
     }
@@ -360,8 +393,11 @@ class Desktop {
      */
     fun bringFront(id: Int, headYaw: Double, pitch: Double) {
         val w = find(id) ?: return
-        if (w.maximized || Math.abs(Geometry.wrap(worldYaw(w) - headYaw)) < Math.toRadians(11.0) && Math.abs(w.pitch - pitch) < Math.toRadians(5.0)) return
-        val there = windows.filter { !it.minimized && it.id != id }.map { worldYaw(it) }
+        if (w.maximized) return
+        reanchor(w)
+        if (Math.abs(Geometry.wrap(worldYaw(w) - headYaw)) < Math.toRadians(11.0) && Math.abs(w.pitch - pitch) < Math.toRadians(5.0) && w.distance <= DesktopWindow.DEFAULT_DISTANCE * 1.5) return
+        if (positional && w.distance > DesktopWindow.DEFAULT_DISTANCE * 1.5) w.distance = DesktopWindow.DEFAULT_DISTANCE      // it was left behind in the room: it comes within reach
+        val there = windows.filter { !it.minimized && it.id != id }.map { seenYaw(it) }
         val slot = SLOTS.firstOrNull { s -> there.none { Math.abs(Geometry.wrap(it - (headYaw + Math.toRadians(s)))) < Math.toRadians(SLOT_CLEAR) } } ?: 0.0
         val to = Geometry.wrap(headYaw + Math.toRadians(slot))
         w.yaw = if (w.follow) Geometry.wrap(to - followAnchor.yaw) else to; w.pitch = pitch; touch()
@@ -378,6 +414,7 @@ class Desktop {
     fun toggleFollow(id: Int) {
         val w = find(id) ?: return
         w.yaw = if (w.follow) Geometry.wrap(w.yaw + followAnchor.yaw) else Geometry.wrap(w.yaw - followAnchor.yaw)
+        if (w.follow) placeHere(w)      // let go, it stays where it was seen
         w.follow = !w.follow; touch()
     }
 
@@ -397,7 +434,7 @@ class Desktop {
         val vis = windows.filter { !it.minimized && !it.follow }
         if (vis.isNotEmpty()) {
             val mean = atan2(vis.sumOf { sin(it.yaw) }, vis.sumOf { cos(it.yaw) })
-            for (w in vis) { w.yaw = Geometry.wrap(w.yaw - mean + headYaw); w.pitch = 0.0 }
+            for (w in vis) { w.yaw = Geometry.wrap(w.yaw - mean + headYaw); w.pitch = 0.0; placeHere(w); if (positional && !w.maximized) w.distance = w.distance.coerceAtMost(DesktopWindow.DEFAULT_DISTANCE * 1.5) }
         }
         followAnchor.yaw = headYaw; touch()
     }
@@ -410,7 +447,7 @@ class Desktop {
         var best: WindowHit? = null
         for (w in visible) {
             val yaw = worldYaw(w); val pitch = w.shownPitch()
-            val c = Geometry.centre(anchor, yaw, pitch, w.shownDistance())
+            val c = Geometry.centre(anchorFor(w, anchor), yaw, pitch, w.shownDistance())
             val h = Geometry.planeHit(origin, dir, c, yaw, pitch) ?: continue
             val ww = w.shownWidth(); val wh = w.shownHeight(); val gap = w.shownHandleGap()
             val x = h[0]; val y = h[1]

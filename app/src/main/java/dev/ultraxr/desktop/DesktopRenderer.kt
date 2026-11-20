@@ -54,7 +54,21 @@ class RenderFrame(val windows: List<RenderWindow>, val anchor: DoubleArray, val 
     /** Everything the glasses are shown is multiplied by this (the picture brightness of the settings). */
     val brightness: Float = 1f,
     /** Look-to-press progress ring: world direction, distance, 0..1 (0 hides it), and how large it is, metres (0: as large as suits the distance). */
-    val dwellYaw: Double = 0.0, val dwellPitch: Double = 0.0, val dwellDistance: Double = 2.0, val dwellProgress: Double = 0.0, val dwellSize: Double = 0.0)
+    val dwellYaw: Double = 0.0, val dwellPitch: Double = 0.0, val dwellDistance: Double = 2.0, val dwellProgress: Double = 0.0, val dwellSize: Double = 0.0,
+    /** The point each window is arranged around, by its id: its own place in the room. A window not named is arranged around [anchor]. */
+    val anchors: Map<Int, DoubleArray> = emptyMap(),
+    /** The hand that points, or null. */
+    val hand: RenderHand? = null,
+    /** The point the look-to-press ring's direction is from; [anchor] when null. */
+    val dwellAnchor: DoubleArray? = null)
+
+/**
+ * The pointing hand as the wearer is shown it: the tips of thumb and index finger, the ray ([from], [dir]) and how far
+ * along it the thing it is on lies ([reach], 0 for nothing), which faces [yaw], [pitch]. [head] is where the wearer's
+ * head is, so that the dots face it.
+ */
+class RenderHand(val thumb: DoubleArray, val index: DoubleArray, val from: DoubleArray, val dir: DoubleArray, val head: DoubleArray,
+    val reach: Double, val yaw: Double, val pitch: Double, val pinching: Boolean)
 
 /**
  * The interface is drawn with light on nothing: black is see-through on the glasses. These six are all its colours
@@ -251,8 +265,48 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         if (!shelfDrawn) drawShelf(f)
         if (f.dwellProgress > 0.0) {   // look-to-press: a ring that closes as the hold completes
             val size = if (f.dwellSize > 0.0) f.dwellSize else f.dwellDistance * 0.05
-            Geometry.modelMatrix(Geometry.centre(f.anchor, f.dwellYaw, f.dwellPitch, f.dwellDistance * 0.985), f.dwellYaw, f.dwellPitch, size, size, model)
+            Geometry.modelMatrix(Geometry.centre(f.dwellAnchor ?: f.anchor, f.dwellYaw, f.dwellPitch, f.dwellDistance * 0.985), f.dwellYaw, f.dwellPitch, size, size, model)
             draw(progFlat, 0, 0, vp, ident, size, size, size / 2, Ink.AMBER, 1f, ring = (0.92 - 0.9 * f.dwellProgress).toFloat().coerceIn(0.02f, 0.92f))
+        }
+        f.hand?.let { drawHand(it) }
+    }
+
+    /**
+     * The pointing hand: a dot of light on the tip of the thumb and of the index finger (they lie on the real fingers,
+     * and say that the hand is seen), a short ray from the palm that fades, and a ring where the ray lands. Pinching,
+     * the dots and the ring turn violet and the ring fills.
+     */
+    private fun drawHand(h: RenderHand) {
+        val rgb = if (h.pinching) Ink.AMBER else Ink.WHITE
+        for (tip in arrayOf(h.thumb, h.index)) {
+            val d = doubleArrayOf(tip[0] - h.head[0], tip[1] - h.head[1], tip[2] - h.head[2]); val yaw = Geometry.yawOf(d); val pitch = Geometry.pitchOf(d)
+            val halo = 0.036; Geometry.modelMatrix(tip, yaw, pitch, halo, halo, model); draw(progFlat, 0, 0, vp, ident, halo, halo, halo / 2, rgb, 0.5f, glow = (halo / 2).toFloat())
+            val dot = 0.010; Geometry.modelMatrix(tip, yaw, pitch, dot, dot, model); draw(progFlat, 0, 0, vp, ident, dot, dot, dot / 2, rgb, 0.95f)
+        }
+        val end = if (h.reach > RAY_FROM) minOf(h.reach, RAY_TO) else RAY_TO
+        val parts = 12; val thick = 0.0022
+        for (i in 0 until parts) {
+            val a = RAY_FROM + (end - RAY_FROM) * i / parts; val b = RAY_FROM + (end - RAY_FROM) * (i + 1) / parts; val m = (a + b) / 2; val len = b - a
+            val c = doubleArrayOf(h.from[0] + h.dir[0] * m, h.from[1] + h.dir[1] * m, h.from[2] + h.dir[2] * m)
+            // a strip along the ray, turned to face the head
+            val v = doubleArrayOf(c[0] - h.head[0], c[1] - h.head[1], c[2] - h.head[2])
+            var sx = h.dir[1] * v[2] - h.dir[2] * v[1]; var sy = h.dir[2] * v[0] - h.dir[0] * v[2]; var sz = h.dir[0] * v[1] - h.dir[1] * v[0]
+            val sn = Math.sqrt(sx * sx + sy * sy + sz * sz); if (sn < 1e-6) continue
+            sx /= sn; sy /= sn; sz /= sn
+            val nx = h.dir[1] * sz - h.dir[2] * sy; val ny = h.dir[2] * sx - h.dir[0] * sz; val nz = h.dir[0] * sy - h.dir[1] * sx
+            model[0] = (h.dir[0] * len).toFloat(); model[1] = (h.dir[1] * len).toFloat(); model[2] = (h.dir[2] * len).toFloat(); model[3] = 0f
+            model[4] = (sx * thick).toFloat(); model[5] = (sy * thick).toFloat(); model[6] = (sz * thick).toFloat(); model[7] = 0f
+            model[8] = nx.toFloat(); model[9] = ny.toFloat(); model[10] = nz.toFloat(); model[11] = 0f
+            model[12] = c[0].toFloat(); model[13] = c[1].toFloat(); model[14] = c[2].toFloat(); model[15] = 1f
+            draw(progFlat, 0, 0, vp, ident, len, thick, 0.0, rgb, 0.7f * (1f - i / parts.toFloat()) * (1f - i / parts.toFloat()))
+        }
+        if (h.reach > 0.0) {
+            val t = h.reach * 0.985
+            val c = doubleArrayOf(h.from[0] + h.dir[0] * t, h.from[1] + h.dir[1] * t, h.from[2] + h.dir[2] * t)
+            val far = Math.sqrt((c[0] - h.head[0]) * (c[0] - h.head[0]) + (c[1] - h.head[1]) * (c[1] - h.head[1]) + (c[2] - h.head[2]) * (c[2] - h.head[2]))
+            val size = (far * 0.02).coerceAtLeast(0.012)
+            Geometry.modelMatrix(c, h.yaw, h.pitch, size, size, model)
+            draw(progFlat, 0, 0, vp, ident, size, size, size / 2, Ink.AMBER, 1f, ring = if (h.pinching) 0.01f else 0.55f)
         }
     }
 
@@ -310,7 +364,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     private fun drawWindow(f: RenderFrame, w: RenderWindow) {
         val t = tex[w.id] ?: return
         val matrix = if (w.headLocked) projHead else vp
-        val c = if (w.headLocked) doubleArrayOf(0.0, 0.0, -w.distance) else Geometry.centre(f.anchor, w.yaw, w.pitch, w.distance)
+        val c = if (w.headLocked) doubleArrayOf(0.0, 0.0, -w.distance) else Geometry.centre(f.anchors[w.id] ?: f.anchor, w.yaw, w.pitch, w.distance)
         val yaw = if (w.headLocked) 0.0 else w.yaw; val pitch = if (w.headLocked) 0.0 else w.pitch
         val shade = if (w.focused) 1f else f.dim
         val hair = Sight.metres(Sight.LINE, w.distance)
@@ -450,6 +504,8 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
 
     companion object {
         private const val NEAR = 0.08
+        /** The hand's ray is drawn from this far in front of the palm to this far, metres: it says which way the hand points, and the ring says where it lands. */
+        private const val RAY_FROM = 0.10; private const val RAY_TO = 0.55
         private val UNIFORM_NAMES = arrayOf("uMvp", "uTex", "uSize", "uRadius", "uTint", "uRing", "uGlow", "uSampler", "uEdge")
         /** The cool veil a pane of glass is ([Glass.PANE]), as light. */
         private val PANE = floatArrayOf(0.55f, 0.59f, 0.78f)

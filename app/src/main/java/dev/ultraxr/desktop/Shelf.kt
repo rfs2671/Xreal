@@ -47,7 +47,7 @@ object Sight {
  * [markCentre]. The shelf faces the heading the followed windows are placed against ([FollowAnchor]).
  */
 object Shelf {
-    const val DISTANCE = 1.6
+    const val DISTANCE = 2.0
     val PITCH = Math.toRadians(-8.0)
     /** From one mark to the next round the wearer: seven marks span 30 degrees of the 46 an eye sees. */
     val SPACING = Math.toRadians(5.0)

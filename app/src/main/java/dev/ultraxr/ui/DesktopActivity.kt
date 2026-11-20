@@ -80,7 +80,7 @@ class DesktopActivity : Activity() {
             if (!active) return
             session.tick(System.nanoTime())
             // the state in words: what the session says of tracking, and what the keys do at this moment
-            val words = session.statusLine + (if (session.moving) " · moving a window" else if (session.pageInUse) " · keys go to the page" else "")
+            val words = session.statusLine + (if (session.moving) " · moving a window" else if (session.sizing) " · sizing a window" else if (session.pageInUse) " · keys go to the page" else "")
             if (status.text.toString() != words) status.text = words
             // Machine-readable state for UI automation and accessibility tools.
             val d = session.debugState(); if (status.contentDescription != d) status.contentDescription = d
@@ -292,6 +292,9 @@ class DesktopActivity : Activity() {
         left.add(side("keys", "Keys: type into the page in focus") { tick(heavy = false); if (keysOpen) closeKeys() else openKeys() }, h = 0, weight = 1f)
         right.add(side("home", "Home: put the windows away and show the shelf") { tick(heavy = false); session.showHome() }, h = 0, weight = 1f)
         right.add(side("more", "More: everything else, as a list") { tick(heavy = false); openSheet() }, h = 0, weight = 1f)
+        // moving and sizing the window in focus are a press away, not behind "more": slide the touchpad or use the d-pad, then press again (or Select)
+        left.add(side("move", "Move the window in focus: slide or use the d-pad, two fingers for nearer and further; press again to put it down") { tick(heavy = false); session.toggleMove() }, h = 0, weight = 1f)
+        right.add(side("size", "Size the window in focus: slide or use the d-pad; press again when it is right") { tick(heavy = false); session.toggleSize() }, h = 0, weight = 1f)
         low.add(left, Ui.dp(this, 76), ViewGroup.LayoutParams.MATCH_PARENT)
         low.add(dpad, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
         low.add(right, Ui.dp(this, 76), ViewGroup.LayoutParams.MATCH_PARENT)
@@ -432,7 +435,7 @@ class DesktopActivity : Activity() {
         onOff("Hand gestures", "Pinch to select; pinch \"move\" to carry a window.", { session.handGestures }) { session.handGestures = it }
         onOff("Dim other windows", "Windows that are not in focus are drawn fainter.", { session.dimUnfocused }) { session.dimUnfocused = it }
         onOff("Dark pages", "Easier on see-through glasses. Applies to windows opened from now on.", { session.darkPages }) { session.darkPages = it }
-        onOff("Position tracking", "Experimental. Off: the windows follow turning only.", { session.usePosition }) { session.usePosition = it }
+        onOff("Windows stay in the room", "Walk about and lean in: they keep their place. Off: they follow turning only.", { session.usePosition }) { session.usePosition = it }
         onOff("Hand tracking", "Off: the touchpad, the d-pad and looking only.", { Tracking.settings.handTracking }) { Tracking.setHandTracking(it) }
         onOff("3D depth", "Each eye gets half the sharpness across. Goes back to 2D by itself if the link fails.", { session.depth3d }) {
             session.depth3d = it; Tracking.link?.stereo?.reset(); Tracking.stereoWant("desktop", it)
