@@ -31,62 +31,30 @@ with its full field of view rendered into its half of the picture (the glasses s
 The glasses' optics focus at about 4 m, so the views are converged there: a window 2 m away is
 seen 19 pixels apart between the halves at 64 mm (`Stereo` in DesktopModel.kt).
 
-## How it is designed, and why
+## How it is designed, and how it is used
 
-The glasses are see-through: black is not a colour there, it is nothing, and a large bright
-area is glare. So the interface is drawn with light on nothing. There are no panels.
+The design is in [INTERFACE.md](INTERFACE.md) (20 November 2026); this replaces the rail, the dock and the
+title-bar buttons described here before. In short:
 
-- **The rail.** One thin line around you just below eye level. Windows sit above it; the
-  stretch under the focused window turns amber. It is the only permanent thing.
-- **The dock** hangs under the rail. Tip your head down and the apps are there; rest your gaze
-  on one for about a second and it opens (a ring closes as you hold).
-- **Focus** is a hairline of amber around a window and its title in white; other windows'
-  titles are grey and they carry no buttons.
-- **Pages are shown dark** by default, so a white web page is not a bright slab.
-- **Type:** Atkinson Hyperlegible throughout, a face drawn for low-acuity reading.
-- New windows take about three quarters of the view's width and controls stay near the middle,
-  because the edges of these optics are the least sharp.
-
-What other systems get wrong, from reviews and forum reports (2026), and the answer here:
-XREAL's app leaves the display stuck after mode switches (this never switches the glasses'
-mode); its screens wander in a moving vehicle (Gather, or a three-finger tap in pocket mode,
-brings everything back at once); Android XR's hand tracking misses grabs and has no eye
-tracking (hands are optional here and everything also works by looking or by touch);
-Viture's edges are too blurred to read (content and controls are kept central); and every
-phone-tethered system makes you look at the phone (pocket mode).
-
-## Without looking at the phone
-
-- **Pocket mode** (button on the phone): the screen goes black and becomes one touchpad that
-  works by feel, with a haptic tick for each action. Slide = pointer, tap = click, double-tap
-  and hold = drag, two fingers = scroll, pinch = resize, two-finger tap = next window, long
-  press = Move on/off, three-finger tap = bring everything in front of you. Leave with a
-  three-finger long press or Back twice. The phone must stay on: it is the computer.
-- **Look to press:** dock apps and the focused window's title-bar buttons.
-- **Keyboard and mouse** (Bluetooth or USB): keys type into the focused window, the mouse moves
-  its pointer, the wheel scrolls.
-
-## Using it
-
-- **Open:** YouTube, Xbox Cloud, Browser, 3D web, or type an address or a search and press Go.
-  Up to six windows.
-- **Touchpad (phone):** slide to move the pointer in the focused window, tap to click,
-  double-tap and hold to drag, two fingers to scroll, pinch to resize the window.
-  The **volume keys** scroll too, so it can be done by feel.
-- **Focus:** look at a window for half a second, or tap its chip on the phone.
-- **Window buttons:** Back, Reload, Locked/Following, Min, Max, Full, Close. A minimized window
-  keeps its chip; tap the chip to bring it back.
-- **Move:** turn on Move, then slide on the touchpad to carry the focused window around you;
-  two fingers up/down push it away or pull it closer. **Gather** brings everything back in front.
-- **Follow head / Lock in space:** a locked window stays where it is in the room. A following
-  window stays in front of you: it lets you look across it, and catches up once you have turned
-  more than about 30 degrees.
-- **Typing:** type in the box on the phone and press Type; it is entered into the page's focused
-  field followed by Enter.
-- **Hands:** point at a window and pinch to click; pinch a title bar and move to carry the
-  window; pinch a title-bar button (follow, minimize, maximize, close).
-- **More:** gaze focus, hand gestures, dimming, position tracking, recenter, close all.
-- The layout (windows, sizes, places, pages) is saved and comes back next time.
+- **Light on nothing.** Black is the room. Nothing is a filled panel except a window's page.
+- **The shelf:** one row of marks 8 degrees under the line of sight: YouTube, Xbox Cloud, Browser, 3D web, All
+  apps, Settings, then the games. A Tide dot under a mark says it has a window (hollow: put away).
+- **Windows** (up to six) have a bracket at each corner, a title when in focus, and a handle of four words under
+  them: move, size, pin, close. A new one opens straight ahead, or in the nearest free place beside what stands
+  there. They are where they were left the next time.
+- **One focus**, lit in amber, moved the same way by a hand's ray, the phone's touchpad, a look, or a d-pad (the
+  phone's, a Bluetooth gamepad's, a keyboard's arrows): see the table in INTERFACE.md. Select opens or does; Back
+  goes page -> window -> shelf.
+- **Sizing:** on "size", the lower right corner follows the keys (right wider, down taller, 4 % a press); Select
+  keeps it, Back puts it back. **Moving:** on "move", the directions carry the window round the wearer and up
+  and down, the shoulder keys nearer and further.
+- **The phone** is a touchpad over a d-pad, with back, home, keys and more. "home" puts every window away;
+  "more" lists the windows, quick sizes, reload, the address line, pocket mode and settings.
+- **Pocket mode:** the screen goes black and is one touchpad that works by feel. The phone must stay on: it is
+  the computer.
+- **Settings** are a window like any other, opened from the shelf, straight ahead and nearer than the others.
+- When something asked for cannot be done, the status line says why for five seconds, in Ember ("Six windows are
+  open: close one first"). Nothing else interrupts.
 
 ## Tracking
 
@@ -100,6 +68,11 @@ When the app leaves the foreground while the glasses are streaming, tracking mov
 foreground service (a notification says so) and stops when the glasses are unplugged.
 
 ## What has been verified, and how
+
+**20 November 2026:** the paragraphs below describe the interface before its redesign; their checks of the rail,
+the dock and the title-bar buttons no longer apply. What holds now is in INTERFACE.md, "What is built, and what
+was seen": `tools/ui-automation/desktop_test.py` drives the new interface with d-pad keys on the S21 Ultra and
+saves the picture one eye would get at each step.
 
 Automated, on an Android 14 emulator (`tools/ui-automation/desktop_test.py`, 39 checks, and
 `stereo_test.py`, 10 checks) and by unit tests (83, among them `DesktopTest`, `RailTest`,

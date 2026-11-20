@@ -143,8 +143,7 @@ class DesktopActivity : Activity() {
         if (intent.getIntExtra("home_page", 0) != 0) window.decorView.postDelayed({ session.showHomePage(intent.getIntExtra("home_page", 0)) }, 2000)
         // "--es open_app package" (through the launcher): that app in a window, for a test without hands on the phone
         intent.getStringExtra("open_app")?.let { pkg -> window.decorView.postDelayed({ dev.ultraxr.shell.AppShell.componentOf(this, pkg)?.let { session.openApp(pkg.substringAfterLast('.'), it) } ?: Tracking.log("apps: $pkg is not installed") }, 4000) }
-        // The home view opens on its main menu; windows from last time are put away, not closed (the phone lists them).
-        session.showHome()
+        // Windows from last time are where they were left (docs/INTERFACE.md: things stay where they are put).
         // A mark of the shelf on the main screen was tapped: that app opens as soon as this screen is up. (A moment
         // later, so that the helper that runs Android apps in windows has had time to answer.)
         HomeApps.all.getOrNull(intent.getIntExtra(EXTRA_OPEN_SHELF, -1))?.let { a -> window.decorView.postDelayed({ if (!isFinishing && !isDestroyed) session.open(a) }, 800) }
@@ -208,6 +207,7 @@ class DesktopActivity : Activity() {
         previewHost.visibility = View.VISIBLE
         if (preview != null) { preview?.onResume(); return }
         val r = DesktopRenderer(true) { id, s -> session.onSurface(id, s) }
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) r.eyeCapture = java.io.File(filesDir, "eye_capture.png")
         val v = GLSurfaceView(this).apply { setEGLContextClientVersion(3); setRenderer(r); renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY }
         var lx = 0f; var ly = 0f
         v.setOnTouchListener { view, e ->
@@ -313,8 +313,15 @@ class DesktopActivity : Activity() {
         col.add(sheetList)
         sheet = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(Ui.GROUND); isClickable = true; visibility = View.GONE; addView(col) }
         all.addView(sheet, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        setContentView(all)
+        setContentView(all); focusGate()
     }
+
+    /**
+     * Android gives the first d-pad key after a touch to one of the screen's own buttons (it "leaves touch mode") and the
+     * key is lost to the desktop. Nothing on this screen is worked with a d-pad: the keys belong to the one focus in the
+     * glasses. So the screen's views take no key focus, except while the list or the line to type on is open.
+     */
+    private fun focusGate() { (window.decorView as ViewGroup).descendantFocusability = if (sheetOpen || keysOpen) ViewGroup.FOCUS_AFTER_DESCENDANTS else ViewGroup.FOCUS_BLOCK_DESCENDANTS }
 
     /** One of the four words beside the d-pad. It fills its quarter of the side, so the thumb finds it without a look; its letters shrink before they would be cut. */
     private fun side(label: String, says: String, onClick: () -> Unit): TextView = Ui.word(this, label, onClick).apply {
@@ -344,16 +351,16 @@ class DesktopActivity : Activity() {
     // ---- "keys": Android's keyboard for the page in focus
     private fun openKeys() {
         if (session.desktop.focused == null) { toast("No window is in focus: open one first"); return }
-        keysBar.visibility = View.VISIBLE; keysBox.requestFocus()
+        keysBar.visibility = View.VISIBLE; focusGate(); keysBox.requestFocus()
         (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(keysBox, 0)
     }
-    private fun closeKeys() { hideKeyboard(); keysBar.visibility = View.GONE }
+    private fun closeKeys() { hideKeyboard(); keysBar.visibility = View.GONE; window.decorView.clearFocus(); focusGate() }
     /** What was typed goes to the page in focus, followed by Enter (an empty line is Enter alone). */
     private fun typeKeys() { session.type(keysBox.text.toString(), true); keysBox.setText(""); closeKeys() }
 
     // ---- "more": the list
-    private fun openSheet() { if (keysOpen) closeKeys(); fillSheet(); sheet.scrollTo(0, 0); sheet.visibility = View.VISIBLE }
-    private fun closeSheet() { hideKeyboard(); sheet.visibility = View.GONE }
+    private fun openSheet() { if (keysOpen) closeKeys(); fillSheet(); sheet.scrollTo(0, 0); sheet.visibility = View.VISIBLE; focusGate() }
+    private fun closeSheet() { hideKeyboard(); sheet.visibility = View.GONE; window.decorView.clearFocus(); focusGate() }
 
     /** Called whenever the windows change. The list behind "more" shows them, so it is written again if it is open. */
     private fun refreshChips() {
@@ -393,7 +400,7 @@ class DesktopActivity : Activity() {
         }
 
         group("Open")
-        for (a in HomeApps.all) act(a.title, "") { if (!session.open(a)) toast("Six windows is the limit: close one first") }.lead(MarkView(this, a.color, false, a.title.take(1)), 40)
+        for (a in HomeApps.all) act(a.title, "") { if (!session.open(a)) toast("Six windows is the limit: close one first") }.lead(MarkView(this, a.color, false, dev.ultraxr.desktop.HomeIcon.sign(a.title, a.kind)), 40)
 
         group("The window in focus")
         if (f == null) l.add(Ui.text(this, "No window is in focus, so these do nothing yet.", 15f, Ui.DUSK), topDp = 12)

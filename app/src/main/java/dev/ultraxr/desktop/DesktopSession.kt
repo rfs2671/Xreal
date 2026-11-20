@@ -74,13 +74,17 @@ class DesktopSession(private val activity: Activity) {
     private val shelfDwell = Dwell(holdNs = 1_700_000_000L, armNs = 300_000_000L)
 
     // ---- the shelf: what it offers
-    /** WebXR games that are not known to be broken, the web apps, the phone's apps, what the desktop does itself, and last the settings. */
+    /**
+     * What is used most comes first, so that it is in view without sliding the row: the web apps (YouTube, Xbox Cloud,
+     * the browser), the phone's apps and the settings; then the WebXR games that are not known to be broken; last
+     * what the desktop does itself.
+     */
     private val firstPage: List<HomeItem> = run {
         val games = try { dev.ultraxr.core.GameLibrary.parse(activity.assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { emptyList() }
-        games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
-            HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, TINTS[i % TINTS.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
-        } + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) } +
-            nav("All apps", "nav:apps") + nav("System", "nav:system") + nav("Settings", "nav:settings")
+        HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) } + nav("All apps", "nav:apps") + nav("Settings", "nav:settings") +
+            games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
+                HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, TINTS[i % TINTS.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
+            } + nav("System", "nav:system")
     }
     /** A mark that is no app has no colour of its own: its ring is Chalk. */
     private fun nav(title: String, what: String) = HomeItem(title, HomeItem.Kind.NAV, what, Ink.CHALK_INT)
@@ -170,7 +174,8 @@ class DesktopSession(private val activity: Activity) {
 
     fun start() {
         try { prefs.getString("layout", null)?.let { desktop.load(JSONObject(it)) } } catch (e: Exception) { Tracking.log("desktop: saved layout ignored: $e") }
-        for (w in desktop.windows) if (w.kind != SETTINGS) ensureWeb(w)
+        // Windows are where they were left, and as they were left: open ones open, the ones put away put away.
+        for (w in desktop.windows) { if (w.kind != SETTINGS && !w.minimized) ensureWeb(w); if (w.origin.isNotEmpty()) fromMark[w.id] = w.origin }
         // Windows kept from before the shelf stood 8 degrees under the line of sight are lifted clear of it, once.
         if (!prefs.getBoolean("clearOfShelf", false)) { settle(); prefs.edit().putBoolean("clearOfShelf", true).apply() }
         savedRevision = desktop.revision
@@ -223,14 +228,23 @@ class DesktopSession(private val activity: Activity) {
         return open(title, address, "app")
     }
     fun open(title: String, url: String, kind: String = "web"): Boolean {
-        val w = desktop.add(title, url, kind, headYaw()) ?: return false
+        // The same thing, put away earlier, comes back as it was. A window that is put away cannot be seen in the
+        // glasses, so it must never be the reason a new one does not open: the one put away longest makes room.
+        val from = openingFrom ?: title
+        desktop.windows.firstOrNull { it.minimized && it.kind == kind && (it.origin == from || it.url == url) }?.let { old -> desktop.restore(old.id); changed(); return true }
+        if (desktop.windows.size >= Desktop.MAX_WINDOWS) desktop.windows.firstOrNull { it.minimized }?.let { close(it.id) }
+        val w = desktop.add(title, url, kind, headYaw())
+        if (w == null) { say("Six windows are open: close one first"); return false }
         if (w.follow) w.yaw = 0.0
         // A new window opens at the distance of the settings, as large to the eye at any distance, and as high as
         // keeps all of it in view between the status line and the shelf.
         val d = Tracking.settings.windowDistanceM.toDouble().coerceIn(DesktopWindow.MIN_DISTANCE, DesktopWindow.FAR_DISTANCE)
         w.distance = d; w.width = (DesktopWindow.DEFAULT_WIDTH * d / DesktopWindow.DEFAULT_DISTANCE).coerceIn(DesktopWindow.MIN_WIDTH, DesktopWindow.MAX_WIDTH)
+        // The settings are asked for to be used now: they open straight ahead whatever stands there, nearer than the
+        // windows, so that they are in front of them.
+        if (kind == SETTINGS) { val near = (d * 0.7).coerceAtLeast(DesktopWindow.MIN_DISTANCE); w.width = w.width * near / d; w.distance = near; w.yaw = if (w.follow) 0.0 else headYaw() }
         w.pitch = clearPitch(w)
-        fromMark[w.id] = openingFrom ?: title
+        w.origin = from; fromMark[w.id] = from
         if (kind != SETTINGS) ensureWeb(w)
         // on the settings the cursor begins on the row in focus, so that the two are never apart
         cursors[w.id] = if (kind == SETTINGS) doubleArrayOf(0.3, settings.rowCentre(settings.index).coerceIn(0.0, 1.0)) else doubleArrayOf(0.5, 0.5)
@@ -279,9 +293,9 @@ class DesktopSession(private val activity: Activity) {
     private fun changed() { onChanged?.invoke() }
 
     /** One line per window: id;title;follow;minimized;maximized;fullscreen;focused;yaw deg;pitch deg;width;distance. */
-    fun debugState(): String = desktop.windows.joinToString("|") { w ->
-        String.format(java.util.Locale.US, "%d;%s;%b;%b;%b;%b;%b;%.1f;%.1f;%.2f;%.2f", w.id, w.title.replace(';', ' ').replace('|', ' '), w.follow, w.minimized, w.maximized,
-            desktop.fullscreenId == w.id, desktop.focusedId == w.id, Math.toDegrees(desktop.worldYaw(w)), Math.toDegrees(w.shownPitch()), w.shownWidth(), w.shownDistance())
+    fun debugState(): String = "focus;" + desktop.focus.describe() + ";" + homeItems.getOrNull(desktop.shelfIndex)?.title + "|" + desktop.windows.joinToString("|") { w ->
+        String.format(java.util.Locale.US, "%d;%s;%b;%b;%b;%b;%b;%.1f;%.1f;%.2f;%.2f;%.2f;%s", w.id, w.title.replace(';', ' ').replace('|', ' '), w.follow, w.minimized, w.maximized,
+            desktop.fullscreenId == w.id, desktop.focusedId == w.id, Math.toDegrees(desktop.worldYaw(w)), Math.toDegrees(w.shownPitch()), w.shownWidth(), w.shownDistance(), w.shownHeight(), w.kind)
     }
 
     // ---- the one focus (desktop.focus): keys from a d-pad, and what follows from a press
@@ -690,6 +704,7 @@ class DesktopSession(private val activity: Activity) {
         for (w in desktop.visible) {
             val c = cursors.getOrPut(w.id) { doubleArrayOf(0.5, 0.5) }
             val focused = w.id == desktop.focusedId
+            if (w.kind != SETTINGS && !web.containsKey(w.id)) ensureWeb(w)      // a window put away before the desktop was started loads its page when it is brought back
             // the settings have no page of their own making the picture: its size follows the window's shape directly
             val shape = if (w.kind == SETTINGS) DesktopWindow.pixels(w.aspect) else null
             val pw = shape?.get(0) ?: web[w.id]?.pixelWidth ?: WebWindow.PIXEL_WIDTH; val ph = shape?.get(1) ?: web[w.id]?.pixelHeight ?: WebWindow.PIXEL_HEIGHT
@@ -766,7 +781,9 @@ class DesktopSession(private val activity: Activity) {
             // a mark sliding out of the row fades as it goes, and the one sliding in comes up
             val alpha = (if (slot < 0) 1 + slot else if (slot > n - 1) n - slot else 1.0).toFloat()
             val at = Geometry.wrap(yaw + Shelf.yawOffset(slot, n))
-            marks += RenderMark(at, 1 + (Shelf.FOCUS_SCALE - 1) * swell, markPicture(item, i == on), alpha)
+            // a mark that has a window says so: a Tide dot under it, hollow while the window is put away
+            val has = desktop.windows.filter { it.origin == item.title }; val running = if (has.isEmpty()) 0 else if (has.any { !it.minimized }) 2 else 1
+            marks += RenderMark(at, 1 + (Shelf.FOCUS_SCALE - 1) * swell, markPicture(item, i == on, running), alpha)
             if (i == on) { name = namePicture(item.title); nameYaw = at }
         }
         val more = n - 0.4      // a dot a little past the last mark where the row goes on
@@ -777,10 +794,15 @@ class DesktopSession(private val activity: Activity) {
     // ---- pictures drawn with the 2D canvas. Everything is light on a transparent ground: on the glasses black is
     // see-through, so there is no panel behind anything. Text is sized by its x-height, as an angle (Sight).
     /** A mark: a ring in the app's colour with its letter or sign, in a picture half as large again as the mark so that the halo of the one in focus has room. */
-    private fun markPicture(item: HomeItem, lit: Boolean): Sprite = picture("mark|${item.title}|${item.color}|${item.kind}|${item.verified}|$lit") {
+    private fun markPicture(item: HomeItem, lit: Boolean, running: Int = 0): Sprite = picture("mark|${item.title}|${item.color}|${item.kind}|${item.verified}|$lit|$running") {
         val side = MARK_PX * 3; val b = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
-        val sign = if (item.kind == HomeItem.Kind.NAV) (when (item.url) { "nav:home" -> "⌂"; "nav:apps", "nav:next" -> "⋯"; "nav:settings" -> "≡"; else -> item.title.take(1) }) else item.title.take(1)
-        HomeIcon.draw(Canvas(b), Paint(Paint.ANTI_ALIAS_FLAG), side / 2f, side / 2f, MARK_PX.toFloat(), item.color, item.kind == HomeItem.Kind.GAME, sign, item.verified, lit)
+        val sign = HomeIcon.sign(item.title, if (item.kind == HomeItem.Kind.NAV) item.url else if (item.kind == HomeItem.Kind.WEB) item.webKind else "")
+        val c = Canvas(b); val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        HomeIcon.draw(c, p, side / 2f, side / 2f, MARK_PX.toFloat(), item.color, item.kind == HomeItem.Kind.GAME, sign, item.verified, lit)
+        if (running > 0) {
+            p.color = Ink.TIDE_INT; p.style = if (running == 2) Paint.Style.FILL else Paint.Style.STROKE; p.strokeWidth = MARK_PX * 0.035f
+            c.drawCircle(side / 2f, side / 2f + MARK_PX * 1.3f, MARK_PX * 0.075f, p); p.style = Paint.Style.FILL
+        }
         b
     }
 
@@ -830,6 +852,8 @@ class DesktopSession(private val activity: Activity) {
 
     /** The status line: the time, the phone's battery, and one word for tracking. Dusk; nothing to press. Its words are looked up once a second. */
     private fun statusPicture(nowNs: Long, head: HeadTracker.State): Sprite {
+        val said = notice
+        if (said.isNotEmpty() && nowNs < noticeUntilNs) return picture("notice|$said") { Type.label(said, TEXT_PX, Ink.EMBER_INT, Type.regular) }
         if (statusText.isEmpty() || nowNs - statusNs > 1_000_000_000L) {
             statusNs = nowNs
             val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
@@ -837,12 +861,20 @@ class DesktopSession(private val activity: Activity) {
             // position is what the room is found by. With a room marked, it is found when the marked walls are placed in
             // the world; with none marked, when the cameras hold their position.
             val tracking = when { head.mode != HeadTracker.Mode.SIX_DOF -> "no position"; Tracking.roomPlanPlaced || Tracking.roomPlanCorners == 0 -> "room found"; else -> "finding the room" }
-            statusText = time + (if (battery in 0..100) "      $battery %" else "") + "      " + tracking
+            // a step of the set-up that has come undone is said here, in a few words; the phone's main screen offers the step that puts it right
+            val undone = if (!dev.ultraxr.xr.PointerService.enabled(activity)) "      pointer off: see the phone" else ""
+            statusText = time + (if (battery in 0..100) "      $battery %" else "") + "      " + tracking + undone
         }
         val text = statusText
         return picture("status|$text") { Type.label(text, TEXT_PX, Ink.DUSK_INT, Type.regular) }
     }
     private var statusText = ""; private var statusNs = 0L
+    /**
+     * One line that takes the status line's place for a few seconds, in Ember: something that was asked for did not
+     * happen, and what to do. It is the only way the glasses ever interrupt.
+     */
+    fun say(text: String) { notice = text; noticeUntilNs = System.nanoTime() + 5_000_000_000L; Tracking.log("desktop: said \"$text\"") }
+    @Volatile private var notice = ""; @Volatile private var noticeUntilNs = 0L
 
     companion object {
         private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)

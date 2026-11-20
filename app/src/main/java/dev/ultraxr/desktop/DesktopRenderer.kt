@@ -97,6 +97,12 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     @Volatile var swapEyes = false
     /** Distance between the wearer's eyes, metres. */
     @Volatile var ipdM = 0.064
+    /**
+     * For checking the look without the glasses on (debuggable builds only; set by the activity): when a file
+     * "eye_capture.req" appears beside this one, the picture one eye of the glasses would get, with the glasses' own
+     * field of view at 1920 x 1080, is written here once.
+     */
+    @Volatile var eyeCapture: java.io.File? = null
 
     private class Tex(val oes: Int, val st: SurfaceTexture, val surface: Surface) { @Volatile var dirty = false; val m = FloatArray(16).also { Matrix.setIdentityM(it, 0) }; var hasFrame = false; var pw = 0; var ph = 0 }
     private val tex = HashMap<Int, Tex>()
@@ -126,11 +132,11 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
                 uniform vec2 uSize; uniform float uRadius; uniform vec4 uTint;
                 float sdf(vec2 l){ vec2 p = abs(l) * uSize - (uSize * 0.5 - vec2(uRadius)); return length(max(p, 0.0)) + min(max(p.x, p.y), 0.0) - uRadius; }
                 float mask(vec2 l){ float d = sdf(l); float w = fwidth(d) + 1e-5; return 1.0 - smoothstep(-w, w, d); }"""
-            progOes = program(vs, "#version 300 es\n#extension GL_OES_EGL_image_external_essl3 : require\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform samplerExternalOES uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vUv); o = vec4(c.rgb * uTint.rgb, uTint.a) * mask(vLocal); }")
-            prog2d = program(vs, "#version 300 es\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform sampler2D uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vec2(vUv.x, 1.0 - vUv.y)); o = vec4(c.rgb * uTint.rgb, c.a * uTint.a) * mask(vLocal); }")
+            progOes = program(vs, "#version 300 es\n#extension GL_OES_EGL_image_external_essl3 : require\nprecision highp float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform samplerExternalOES uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vUv); o = vec4(c.rgb * uTint.rgb, uTint.a) * mask(vLocal); }")
+            prog2d = program(vs, "#version 300 es\nprecision highp float; in vec2 vUv; in vec2 vLocal; out vec4 o; uniform sampler2D uSampler;$shape\nvoid main(){ vec4 c = texture(uSampler, vec2(vUv.x, 1.0 - vUv.y)); o = vec4(c.rgb * uTint.rgb, c.a * uTint.a) * mask(vLocal); }")
             // uRing: a ring instead of the shape (the cursor, the look-to-press ring). uGlow: a halo instead of the shape, nothing
             // at the quad's edge and full that far inside it: the light a lit line spills.
-            progFlat = program(vs, "#version 300 es\nprecision mediump float; in vec2 vUv; in vec2 vLocal; out vec4 o;$shape\nuniform float uRing; uniform float uGlow;\nvoid main(){ float m = mask(vLocal); if (uGlow > 0.0) { float g = clamp(-sdf(vLocal) / uGlow, 0.0, 1.0); m = g * g; } if (uRing > 0.0) { float r = length(vLocal) * 2.0; m = smoothstep(uRing - 0.12, uRing, r) * (1.0 - smoothstep(0.88, 1.0, r)); } o = uTint * m; }")
+            progFlat = program(vs, "#version 300 es\nprecision highp float; in vec2 vUv; in vec2 vLocal; out vec4 o;$shape\nuniform float uRing; uniform float uGlow;\nvoid main(){ float m = mask(vLocal); if (uGlow > 0.0) { float g = clamp(-sdf(vLocal) / uGlow, 0.0, 1.0); m = g * g; } if (uRing > 0.0) { float r = length(vLocal) * 2.0; m = smoothstep(uRing - 0.12, uRing, r) * (1.0 - smoothstep(0.88, 1.0, r)); } o = uTint * m; }")
             val ids = IntArray(1); GLES30.glGenVertexArrays(1, ids, 0); vao = ids[0]; GLES30.glBindVertexArray(vao)
             GLES30.glGenBuffers(1, ids, 0); GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, ids[0])
             val q = floatArrayOf(-0.5f, -0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f)
@@ -197,8 +203,35 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
             Matrix.multiplyMM(projHead, 0, proj, 0, shiftM, 0)
             drawScene(f, q)
         }
+        eyeCapture?.let { out -> if (frames % 15 == 0L) { val req = java.io.File(out.parentFile, "eye_capture.req"); if (req.exists()) { req.delete(); captureEye(f, q, p, out) } } }
         GLES30.glDisable(GLES30.GL_BLEND)
         avgCpuMs = avgCpuMs * 0.95 + (System.nanoTime() - now) / 1e6 * 0.05
+    }
+
+    /** The scene once more, as one eye of the glasses gets it, into a picture of its own and from there into [out]. */
+    private fun captureEye(f: RenderFrame, q: DoubleArray, p: DoubleArray, out: java.io.File) {
+        val w = 1920; val h = 1080; val ids = IntArray(1)
+        try {
+            GLES30.glGenTextures(1, ids, 0); val t = ids[0]; GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, w, h, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR); GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glGenFramebuffers(1, ids, 0); val fb = ids[0]; GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fb)
+            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, t, 0)
+            GLES30.glViewport(0, 0, w, h); GLES30.glClearColor(0f, 0f, 0f, 1f); GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            val tanH = Tracking.displayTanH; val tanV = Tracking.displayTanV
+            Q.toMatrix(q, p, headM); Matrix.invertM(view, 0, headM, 0)
+            Matrix.frustumM(proj, 0, (-tanH * NEAR).toFloat(), (tanH * NEAR).toFloat(), (-tanV * NEAR).toFloat(), (tanV * NEAR).toFloat(), NEAR.toFloat(), 80f)
+            Matrix.multiplyMM(vp, 0, proj, 0, view, 0); System.arraycopy(proj, 0, projHead, 0, 16)
+            boundProgram = 0; drawScene(f, q)
+            val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
+            GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0); GLES30.glDeleteFramebuffers(1, intArrayOf(fb), 0); GLES30.glDeleteTextures(1, intArrayOf(t), 0)
+            val up = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); buf.position(0); up.copyPixelsFromBuffer(buf)
+            val m = android.graphics.Matrix().apply { postScale(1f, -1f) }      // GL's first row is the bottom one
+            val b = Bitmap.createBitmap(up, 0, 0, w, h, m, false)
+            val tmp = java.io.File(out.parentFile, out.name + ".tmp")
+            tmp.outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }; tmp.renameTo(out); up.recycle(); b.recycle()
+        } catch (e: Throwable) { Tracking.noteGraphics("eye capture failed: $e"); GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0) }
     }
 
     /** Everything in the scene, once, with the current [vp] (world) and [projHead] (head-fixed) matrices. */

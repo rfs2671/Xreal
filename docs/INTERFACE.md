@@ -59,17 +59,23 @@ the same; the name under the focused mark 0.7. Sentence case everywhere. No all-
 ```
 
 - **Shelf.** Home is a single row of marks on an arc 1.6 m away. At most seven are in view; the row slides when
-  focus passes its end. The focused mark is larger by a quarter. No grid, no dock of coloured circles.
+  focus passes its end. The focused mark is larger by a quarter. No grid, no dock of coloured circles. What is
+  used most comes first: YouTube, Xbox Cloud, Browser, 3D web, All apps, Settings, then the games, then System.
+  Inside a mark's ring is a small drawing (a screen, a game pad, a globe, a cube, dots, sliders) or the name's
+  initials, so that no two marks look alike; a game has a play mark at the foot of its ring. A Tide dot under a
+  mark says that it has a window; the dot is hollow while that window is put away, and Select brings it back.
 - **Status line.** Time, the phone's battery, and one word for tracking ("room found", "finding the room",
   "no position"). Dusk. It is not focusable.
 - **Windows.** Up to six. Each is a page (YouTube, Xbox cloud gaming, a web address, another Android app) on a
-  rectangle in the room. Corner brackets only; the title appears above the top-left bracket when the window is in
+  rectangle in the room. A new one opens straight ahead of where the wearer looks, or, when a window stands there,
+  in the nearest free place beside it (28 degrees apart). The next time the desktop is opened they are where they
+  were left. A window that is put away never counts against a new one: the one put away longest makes room. Corner brackets only; the title appears above the top-left bracket when the window is in
   focus. A pinned window has a Tide pin by its title.
 - **Handle.** Under the focused window: move, size, pin, close. Words, not icons. Close is Ember when focused.
 - **Moving.** With "move" chosen the window follows the pointer, or steps with the d-pad (left and right round
   the wearer, up and down, and nearer or further with the shoulder keys or a two-finger slide). Select puts it down.
-- **Sizing.** Free, not steps: with "size" chosen, left and right make it narrower and wider and up and down
-  shorter and taller, 4 % a press, or a drag of a corner bracket with a pinch or the touchpad. Between 0.4 and 3.2 m
+- **Sizing.** Free, not steps: with "size" chosen, the lower right corner follows the keys: left and right make
+  it narrower and wider, up and down shorter and taller, 4 % a press, or a drag of a corner bracket with a pinch or the touchpad. Between 0.4 and 3.2 m
   wide. "Min", "Max" and "Full" remain as quick sizes on the phone.
 - **Opening and closing.** A window grows from its mark in 180 ms and shrinks back into it in 140 ms; the brackets
   draw themselves last. Focus moves in 90 ms. Nothing else moves by itself. With "reduce motion" on in Android,
@@ -139,6 +145,11 @@ Afterwards the app never shows these again; if one of them is undone (the servic
 line says so in one line and the phone's screen offers the one step that puts it right. The app never answers
 Android's questions for the owner.
 
+## When something cannot be done
+
+The status line gives its place, for five seconds, to one line in Ember that says what did not happen and what to
+do ("Six windows are open: close one first"). Nothing else in the glasses interrupts, and nothing asks a question.
+
 ## What is built, and what was seen
 
 (Kept up to date as the work goes.)
@@ -166,5 +177,27 @@ Android's questions for the owner.
     the icon's colour and a letter); the status line does not yet report an undone set-up step.
   - Known to be broken by this: `tools/ui-automation/desktop_test.py` (it taps buttons that are now behind "more").
   - The app's own helper for other apps' windows asks Android for USB debugging ("Allow USB debugging?"); that
-    question came up on the phone during this check. It is the owner's to answer, and it is one of the questions
-    the set-up must bring down to once.
+    question came up on the phone during this check, and the owner answered it.
+- 20 November 2026: seen at full size, and put right.
+  - How it is seen without the glasses: a debug build writes, on request, the picture one eye of the glasses would
+    get (1920 x 1080, the glasses' own field of view) to a file (`DesktopRenderer.eyeCapture`,
+    `tools/ui-automation/eye.sh`). It is the rendered picture, not what the optics make of it.
+  - What the first pictures showed, and what was done: seven game marks all alike, ahead of YouTube and Xbox (the
+    order and the drawings above); the lit bracket's halo a hard box and the row's end dot a square (the line
+    shader worked in half precision: now full); a window not opening at all with nothing said, because six
+    windows of earlier days were put away out of sight (the rules above, and the line in Ember); the first press
+    of a d-pad after touching the phone lost, because Android gave it to one of the phone screen's buttons (the
+    screen's views now take no key focus unless its list or its line to type on is open); every window put away
+    at each start (now they are as they were left); the settings opening 28 degrees to the side (now straight
+    ahead and nearer); the second window 40 degrees to the side, out of sight (now 28).
+  - `tools/ui-automation/desktop_test.py` is written anew: it drives the desktop with d-pad keys on the phone and
+    checks the focus and each window's place and size, and saves an eye's picture at each step.
+  - The status line now says "pointer off: see the phone" when the accessibility service is switched off.
+  - **Still not seen:** anything through the glasses themselves (sharpness at the edges, brightness in a lit
+    room, whether 0.55 degrees of x-height reads); a hand's pinch on the handle and the corners; a real
+    gamepad; the set-up sequence from a fresh install; whether Android or Samsung shows any message of its own
+    when the glasses are plugged in (the USB default for the glasses is set on the S21 Ultra, so the app's own
+    question should not come).
+  - Known limits: the helper that puts other Android apps in windows is started over the phone's own debugging
+    port, which a restart of the phone closes until it is opened again from the laptop; "mark the room" is still
+    started from the phone.

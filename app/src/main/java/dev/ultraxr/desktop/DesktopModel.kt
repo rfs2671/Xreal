@@ -36,6 +36,8 @@ class DesktopWindow(
     val kind: String = "web",
 ) {
     val height: Double get() = width / aspect
+    /** The name of the mark of the shelf this window was opened from: that mark shows that it has a window, and brings it back when it was put away. */
+    var origin: String = ""
 
     /** Size and placement actually shown: a maximized window is large, centred and close. */
     fun shownWidth(): Double = if (maximized) MAXIMIZED_WIDTH else width
@@ -58,7 +60,7 @@ class DesktopWindow(
 
     fun toJson(): JSONObject = JSONObject().put("id", id).put("title", title).put("url", url).put("yaw", yaw).put("pitch", pitch)
         .put("distance", distance).put("width", width).put("aspect", aspect).put("follow", follow).put("minimized", minimized)
-        .put("maximized", maximized).put("kind", kind)
+        .put("maximized", maximized).put("kind", kind).put("origin", origin)
 
     companion object {
         const val MIN_WIDTH = 0.4
@@ -90,7 +92,7 @@ class DesktopWindow(
             o.getInt("id"), o.optString("title", "Window"), o.optString("url", "about:blank"),
             o.optDouble("yaw", 0.0), o.optDouble("pitch", 0.0), o.optDouble("distance", DEFAULT_DISTANCE).coerceIn(MIN_DISTANCE, FAR_DISTANCE),
             o.optDouble("width", DEFAULT_WIDTH).coerceIn(MIN_WIDTH, MAX_WIDTH), o.optDouble("aspect", 16.0 / 9.0).coerceIn(MIN_ASPECT, MAX_ASPECT),
-            o.optBoolean("follow", false), o.optBoolean("minimized", false), o.optBoolean("maximized", false), o.optString("kind", "web"))
+            o.optBoolean("follow", false), o.optBoolean("minimized", false), o.optBoolean("maximized", false), o.optString("kind", "web")).also { it.origin = o.optString("origin", "") }
     }
 }
 
@@ -202,8 +204,10 @@ class Desktop {
     fun add(title: String, url: String, kind: String = "web", headYaw: Double = 0.0): DesktopWindow? {
         if (windows.size >= MAX_WINDOWS) return null
         val w = DesktopWindow(nextId++, title, url, kind = kind)
-        // Open in front of the user, then fan further windows out to the sides so they do not stack.
-        val slot = SLOTS[windows.count { !it.minimized } % SLOTS.size]
+        // Straight ahead of where the wearer looks, unless a window stands there already: then the nearest place
+        // beside it that is free, so that windows do not stack and a new one is never opened out of sight for nothing.
+        val there = windows.filter { !it.minimized }.map { worldYaw(it) }
+        val slot = SLOTS.firstOrNull { s -> there.none { Math.abs(Geometry.wrap(it - (headYaw + Math.toRadians(s)))) < Math.toRadians(SLOT_CLEAR) } } ?: SLOTS[there.size % SLOTS.size]
         w.yaw = Geometry.wrap(headYaw + Math.toRadians(slot)); w.pitch = 0.0
         windows += w; onWindow(w.id, Focus.Page(w.id)); touch()
         return w
@@ -431,8 +435,13 @@ class Desktop {
         const val PUSH_STEP = 1.1
         /** One press while sizing: 4 %. */
         const val SIZE_STEP = 1.04
-        /** Yaw offsets in degrees for the first, second, ... open window. */
-        val SLOTS = doubleArrayOf(0.0, -40.0, 40.0, -80.0, 80.0, 0.0)
+        /**
+         * Yaw offsets in degrees for the first, second, ... open window. A new window is 24 degrees wide: 28 degrees
+         * apart they stand side by side with a hand's breadth between them, and a glance to the side shows the next.
+         */
+        val SLOTS = doubleArrayOf(0.0, -28.0, 28.0, -56.0, 56.0, 84.0)
+        /** A place is free when no window's middle is within this many degrees of it. */
+        const val SLOT_CLEAR = 22.0
     }
 }
 

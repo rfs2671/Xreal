@@ -159,9 +159,9 @@ class LauncherActivity : Activity(), Tracking.Observer {
         // last one is the settings, as on the shelf there.
         val shelf = Ui.row(this).apply { gravity = Gravity.TOP }
         HomeApps.all.forEachIndexed { i, a ->
-            shelf.add(mark(a.title, MarkView(this, a.color, false, a.title.take(1)), "Open ${a.title} in the glasses") { startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_OPEN_SHELF, i)) }, 0, weight = 1f)
+            shelf.add(mark(a.title, MarkView(this, a.color, false, dev.ultraxr.desktop.HomeIcon.sign(a.title, a.kind)), "Open ${a.title} in the glasses") { startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_OPEN_SHELF, i)) }, 0, weight = 1f)
         }
-        shelf.add(mark("Settings", MarkView(this, 0xFF607D8B.toInt(), false, "S"), "Settings") { startActivity(Intent(this, SettingsActivity::class.java)) }, 0, weight = 1f)
+        shelf.add(mark("Settings", MarkView(this, 0xFF607D8B.toInt(), false, "#sliders"), "Settings") { startActivity(Intent(this, SettingsActivity::class.java)) }, 0, weight = 1f)
         root.add(shelf, topDp = 30)
 
         // The one large action. The home view in the glasses is the main way in; the lists below do the same things.
@@ -283,7 +283,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
             }
             val r = ListRow(this).set((if (fav) "★ " else "") + g.name.substringBefore(" (").trim(), "", caption)
             if (blocked) r.name.setTextColor(Ui.DUSK)
-            r.lead(MarkView(this, tint, true, g.name.take(1), g.state == dev.ultraxr.core.WebGame.State.VERIFIED, blocked), 44)
+            r.lead(MarkView(this, tint, true, dev.ultraxr.desktop.HomeIcon.sign(g.name.substringBefore(" (").trim()), g.state == dev.ultraxr.core.WebGame.State.VERIFIED, blocked), 44)
             r.contentDescription = "Play ${g.name}. $caption" + (if (fav) ". Kept first" else "")
             r.onTap {
                 library.edit().putString("recent", dev.ultraxr.core.GameLibrary.played(recent(), g.url).joinToString("\u0001")).apply()
