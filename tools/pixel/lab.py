@@ -43,6 +43,10 @@ RUNS = {
     "h_tiles0":  ("", "tiles=0" + chr(10)), "h_tiles0b": ("", "tiles=0" + chr(10)),
     "h_tiles3":  ("", "tiles=3" + chr(10)), "h_tiles3b": ("", "tiles=3" + chr(10)),
     "h_tiles6":  ("", "tiles=6" + chr(10)),
+    # upstream's rules (no tiles, a hand dropped as soon as one camera is unsure) against the library as it now is, each twice
+    "h_up":  ("", "tiles=0" + chr(10) + "keep=0" + chr(10)), "h_upb": ("", "tiles=0" + chr(10) + "keep=0" + chr(10)),
+    "h_now": ("", ""), "h_nowb": ("", ""),
+    "h_keep": ("", "tiles=0" + chr(10) + "keep=1" + chr(10)),
     "h_tiles3c7": ("", "tiles=3" + chr(10) + "tiles_min_conf=0.7" + chr(10)),
     "hold3":  ("", ""),      # with the estimator restarted when it wanders while the glasses lie still
     "hold4":  ("", ""),

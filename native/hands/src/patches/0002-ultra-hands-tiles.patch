@@ -1,6 +1,6 @@
 --- a/src/xrt/tracking/hand/mercury/hg_model.cpp
 +++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
-@@ -946,6 +946,212 @@
+@@ -946,6 +946,315 @@
  	}
  }
  
@@ -131,6 +131,97 @@
 +
 +static void xr_run_hand_detection_pass(hand_detection_run_info *info, bool mirror_horizontal, hand_region_of_interest outputs[2]);
 +
++// A second look at what a tile found. The detector takes dark things of the right shape for hands through a tile
++// (the stands beside the wearer's laptop, at 0.92), and the keypoint model then agrees with it; a higher confidence
++// does not tell them from hands. Looking again does: four views aimed straight at the find (70 and 95 degrees wide,
++// and 70 turned 25 degrees either way) all say "hand" over 0.5 for 123 of 237 real finds in the wearer's recording
++// and for 1 of 170 false ones (tools/tracking/hand_bench_verify.py). A find that fails is left alone for half a
++// second, so that a thing that keeps being found does not cost four runs of the detector every frame.
++//   ULTRA_HANDS_VERIFY=0         no second looks
++//   ULTRA_HANDS_VERIFY_MIN=0.5   what each second look has to say at least
++static float
++ultra_second_look(hand_detection_run_info *info, const cv::Mat &whole, float px, float py, float fov_deg, float roll_deg, int hand)
++{
++	ht_view *view = info->view;
++	float dx = 0, dy = 0, dz = 1;
++	if (!t_camera_models_unproject(&view->hgdist, px, py, &dx, &dy, &dz)) {
++		return 0.0f;
++	}
++	const float a = atan2f(dx, dz), b = atan2f(dy, sqrtf(dx * dx + dz * dz));
++	const float ca = cosf(a), sa = sinf(a), cb = cosf(b), sb = sinf(b);
++	const float R[9] = {ca, -sa * sb, sa * cb, 0.0f, cb, sb, -sa, -ca * sb, ca * cb};
++	const float f = (float)kUltraTile / 2.0f / tanf(fov_deg * (float)M_PI / 360.0f);
++	const float cr = cosf(roll_deg * (float)M_PI / 180.0f), sr = sinf(roll_deg * (float)M_PI / 180.0f);
++	cv::Mat map_x(kUltraTile, kUltraTile, CV_32FC1), map_y(kUltraTile, kUltraTile, CV_32FC1);
++	for (int v = 0; v < kUltraTile; v++) {
++		for (int u = 0; u < kUltraTile; u++) {
++			const float x0 = ((float)u + 0.5f - kUltraTile / 2.0f) / f, y0 = ((float)v + 0.5f - kUltraTile / 2.0f) / f;
++			const float x = cr * x0 - sr * y0, y = sr * x0 + cr * y0;
++			float qx = -1.0f, qy = -1.0f;
++			t_camera_models_project(&view->hgdist, R[0] * x + R[1] * y + R[2], R[3] * x + R[4] * y + R[5],
++			                        R[6] * x + R[7] * y + R[8], &qx, &qy);
++			if (!std::isfinite(qx) || !std::isfinite(qy)) {
++				qx = -1.0f;
++				qy = -1.0f;
++			}
++			map_x.at<float>(v, u) = qx;
++			map_y.at<float>(v, u) = qy;
++		}
++	}
++	cv::Mat tile;
++	cv::remap(whole, tile, map_x, map_y, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
++	hand_region_of_interest out[2] = {};
++	view->run_model_on_this = tile;
++	try {
++		xr_run_hand_detection_pass(info, false, out);
++	} catch (...) {
++		view->run_model_on_this = whole;
++		throw;
++	}
++	view->run_model_on_this = whole;
++	return out[hand].xr_raw_hand_exists;
++}
++
++static bool
++ultra_verify(hand_detection_run_info *info, const cv::Mat &whole, float px, float py, int hand)
++{
++	static const bool on = []() {
++		const char *e = std::getenv("ULTRA_HANDS_VERIFY");
++		return e == nullptr || e[0] != '0';
++	}();
++	static const float least = []() {
++		const char *e = std::getenv("ULTRA_HANDS_VERIFY_MIN");
++		return (e != nullptr && e[0] != '\0') ? (float)std::atof(e) : 0.5f;
++	}();
++	if (!on) {
++		return true;
++	}
++	const float looks[4][2] = {{70.0f, 0.0f}, {95.0f, 0.0f}, {70.0f, 25.0f}, {70.0f, -25.0f}};
++	static const bool say = std::getenv("ULTRA_HANDS_DEBUG") != nullptr;
++	bool ok = true;
++	float got[4] = {-1, -1, -1, -1};
++	for (int i = 0; i < 4; i++) {
++		got[i] = ultra_second_look(info, whole, px, py, looks[i][0], looks[i][1], hand);
++		if (got[i] < least) {
++			ok = false;
++			if (!say) {
++				break;
++			}
++		}
++	}
++	if (say) {
++		fprintf(stderr, "ultra verify: view %d hand %d at %.0f,%.0f looks %.2f %.2f %.2f %.2f -> %d\n", info->view->view, hand, px, py, got[0], got[1], got[2], got[3], ok ? 1 : 0);
++	}
++	return ok;
++}
++
++// Where a find last failed its second looks, for each view and hand, and until which run of the detector it is left alone.
++static struct
++{
++	float x = 0, y = 0;
++	int until = 0;
++} ultra_failed[2][2];
++
 +static void
 +ultra_tiles_pass(hand_detection_run_info *info)
 +{
@@ -162,7 +253,9 @@
 +	const float min_conf = ultra_tiles_min_conf();
 +	float best[2] = {0.0f, 0.0f};
 +	for (int k = 0; k < per_call; k++) {
-+		UltraTile &t = T.tiles[T.order[T.next++ % T.order.size()]];
++		// Both views look through the same tiles in a frame (the detector's counter is the frame's), so that a hand
++		// both cameras see is found in both at once: a detection has to be, to begin a hand with two views.
++		UltraTile &t = T.tiles[T.order[((size_t)hgt->detection_counter * (size_t)per_call + (size_t)k) % T.order.size()]];
 +		cv::Mat tile;
 +		cv::remap(whole, tile, t.map_x, t.map_y, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
 +		hand_region_of_interest out[2] = {};
@@ -200,6 +293,16 @@
 +			if (!(px >= 0.0f && px < (float)whole.cols && py >= 0.0f && py < (float)whole.rows)) {
 +				continue;
 +			}
++			auto &failed = ultra_failed[view->view & 1][h];
++			if (hgt->detection_counter < failed.until && fabsf(px - failed.x) < 45.0f && fabsf(py - failed.y) < 45.0f) {
++				continue;
++			}
++			if (!ultra_verify(info, whole, px, py, h)) {
++				failed.x = px;
++				failed.y = py;
++				failed.until = hgt->detection_counter + 15;
++				continue;
++			}
 +			out[h].center_px.x = px;
 +			out[h].center_px.y = py;
 +			// As many pixels to an angle as the fisheye picture has there (it is near enough equidistant).
@@ -213,7 +316,7 @@
  static void
  run_hand_detection_unsafe(hand_detection_run_info *info)
  {
-@@ -956,6 +1162,7 @@
+@@ -956,6 +1265,7 @@
  		const bool mirror_horizontal =
  		    xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_MIRROR_HORIZONTAL");
  		xr_run_hand_detection_pass(info, mirror_horizontal, info->outputs);
@@ -221,3 +324,11 @@
  		if (xr_detector_swap_slots) {
  			std::swap(info->outputs[0], info->outputs[1]);
  		}
+@@ -1530,6 +1840,7 @@
+ 	}
+ 
+ 	this_output.active = is_hand;
++	hgt->views[view_idx].ultra_is_hand[hand_idx] = is_hand_explicit;
+ 	if (hgt->xr_tracking_diag.enabled()) {
+ 		auto &diag = hgt->xr_tracking_diag.frame.hands[hand_idx].views[view_idx];
+ 		diag.is_hand_probability = is_hand_explicit;

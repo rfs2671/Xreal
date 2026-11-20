@@ -1,0 +1,76 @@
+--- a/src/xrt/tracking/hand/mercury/hg_sync.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+@@ -1622,17 +1622,51 @@
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
+ 
+ 
+-		for (int view_idx = 0; view_idx < 2; view_idx++) {
+-			if (!hgt->views[view_idx].regions_of_interest_this_frame[hand_idx].found) {
+-				// to the next view
+-				continue;
++		// libultra_hands: upstream drops the whole hand as soon as the keypoint model is less than 0.97 sure of
++		// it in any one view. Low in the fisheye picture one camera's crop dips under that for a frame while
++		// the other camera and the fit are fine (the wearer's recording, 18.2 s: 0.87 in one view, 1.00 in
++		// the other, the hand gone for good). A hand that has been tracked for a while keeps going on the
++		// view that is sure; the unsure view sits this frame out and is given a new region from the fit.
++		// ULTRA_HANDS_KEEP=0 is upstream's rule.
++		{
++			static const bool keep_on = []() {
++				const char *e = std::getenv("ULTRA_HANDS_KEEP");
++				return e == nullptr || e[0] != '0';
++			}();
++			static const float keep_floor = []() {
++				const char *e = std::getenv("ULTRA_HANDS_KEEP_FLOOR");
++				return (e != nullptr && e[0] != '\0') ? (float)std::atof(e) : 0.30f;
++			}();
++			int n_roi = 0, n_sure = 0;
++			float least = 1.0f;
++			for (int view_idx = 0; view_idx < 2; view_idx++) {
++				if (!hgt->views[view_idx].regions_of_interest_this_frame[hand_idx].found) {
++					continue;
++				}
++				n_roi++;
++				if (hgt->keypoint_outputs[hand_idx].views[view_idx].active) {
++					n_sure++;
++				} else {
++					least = fminf(least, hgt->views[view_idx].ultra_is_hand[hand_idx]);
++				}
+ 			}
+-
+-			if (!hgt->keypoint_outputs[hand_idx].views[view_idx].active) {
+-				HG_DEBUG(hgt, "Removing hand %d because keypoint estimator said to!", hand_idx);
+-				hgt->this_frame_hand_detected[hand_idx] = false;
+-				if (hgt->xr_tracking_diag.enabled()) {
+-					hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::keypoint_rejected);
++			const bool tracked_a_while = hgt->last_frame_hand_detected[hand_idx] &&
++			                             hgt->hand_tracked_for_num_frames[hand_idx] >= 8;
++			if (n_sure < n_roi) {
++				if (keep_on && n_sure >= 1 && tracked_a_while && least >= keep_floor) {
++					for (int view_idx = 0; view_idx < 2; view_idx++) {
++						if (hgt->views[view_idx].regions_of_interest_this_frame[hand_idx].found &&
++						    !hgt->keypoint_outputs[hand_idx].views[view_idx].active) {
++							hgt->views[view_idx].regions_of_interest_this_frame[hand_idx].found = false;
++						}
++					}
++				} else {
++					HG_DEBUG(hgt, "Removing hand %d because keypoint estimator said to!", hand_idx);
++					hgt->this_frame_hand_detected[hand_idx] = false;
++					if (hgt->xr_tracking_diag.enabled()) {
++						hgt->xr_tracking_diag.frame.hands[hand_idx].reject(
++						    xr_mercury_diag::keypoint_rejected);
++					}
+ 				}
+ 			}
+ 		}
+--- a/src/xrt/tracking/hand/mercury/hg_sync.hpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+@@ -224,6 +224,9 @@
+ 
+ 	struct hand_region_of_interest regions_of_interest_this_frame[2]; // left, right
+ 
++	// libultra_hands: the keypoint model's "this is a hand" (0..1) for each hand in this view, this frame.
++	float ultra_is_hand[2] = {0.0f, 0.0f};
++
+ 	struct keypoint_estimation_run_info run_info[2];
+ };
+ 

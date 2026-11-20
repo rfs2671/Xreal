@@ -163,6 +163,80 @@ it takes next: to see, frame by frame, why a hand the detector found is dropped 
 log); then tracking from one camera with the distance held from the last two-camera fit, as Frametop does; then
 the question of speed.
 
+## Where a low hand is lost, traced (20 November 2026, later)
+
+**The tool.** `native/hands/test/ultra_hands_replay.c` runs a file of recorded stereo pairs
+(`tools/tracking/hand_pairs_export.py`) through the library on the phone over adb, every pair in order, with
+Mercury's own per-frame logs switched on (`MERCURY_XR_TRACKING_DEBUG_CSV`, `MERCURY_XR_DETECTOR_DEBUG_CSV`);
+`tools/tracking/hand_trace.py` prints them a line a frame. Two runs with the same settings report the same hands in
+every one of 1341 pairs, which the replays through the app do not (they run at recorded speed and drop different
+frames each time: the same settings gave a right hand in 47 % and in 61 % of results on the 19 November recording).
+All numbers below are from this tool.
+
+**What the trace shows, second 18 of the 17 November recording (the right hand coming down in front of the chest).**
+
+1. Up to 18.18 s the hand is tracked in both cameras, the fit is good (reprojection error 0.1 to 0.5 against a limit
+   of 15), the keypoint model says "a hand" at 1.00 in both.
+2. At 18.21 s the keypoint model says 0.87 in the right camera and 1.00 in the left. Upstream's rule
+   (`hg_model.cpp`, "North Star seemed to need 0.97") makes that view inactive, and `hg_sync.cpp` then removes the
+   whole hand ("because keypoint estimator said to"): rejection bit 4, `keypoint_rejected`. One camera, one frame.
+3. It does not come back: the whole-picture detector does not see it there, and what a tile finds in one camera
+   fails the detection gate, which (while the detector runs in both views) needs the hand found in both views in the
+   same frame; the two cameras' tiles went round independently.
+4. Seen at full size, the hand is at the very bottom edge of both pictures by 18.3 s and out of them by about
+   18.4 s. The label "plainly in both pictures" for second 18 is true only of its first third.
+
+**Seconds 19 to 28, the left hand.** It grips the phone at the left edge of the left camera's picture and is in the
+other camera not at all. The detector finds it through a tile, its second looks (below) reject it
+(0.31, 0.02, 0.00, 0.86), and nothing starts a hand from one camera. Not tracked, before or after.
+
+**What was changed** (`native/hands/src/patches/0002-ultra-hands-tiles.patch`, `0003-ultra-hands-keep.patch`):
+
+- **A tracked hand goes on with one camera** when the other is under 0.97 for a frame (and not under 0.30), if it
+  has been tracked for eight frames; the unsure view sits that frame out and gets a new region from the fit.
+  `keep=0` in `hand_options.txt` is upstream's rule.
+- **Both cameras look through the same tiles in a frame**, so that a hand both see passes the gate.
+- **A second look at what a tile found**, before it is believed: four views aimed at the find (70 and 95 degrees
+  wide, 70 turned 25 degrees either way) must all say "hand" over 0.5; a find that fails is left alone for half a
+  second. Without it the tiles start a hand on the dark stands beside the laptop (the keypoint model says 0.99 in
+  both cameras) and keep it for seconds. `verify=0` switches it off.
+
+**Measured, every pair of both recordings, on the S21 Ultra:**
+
+| 17 November, 1341 pairs | hand plainly in both pictures: tracked | hand in neither picture: reported | ms a pair in the tool |
+|---|---|---|---|
+| upstream (no tiles, upstream's rule) | 787 of 900 (87 %) | 7 of 861 (1 %) | 56 |
+| the same again | 787 of 900 (87 %) | 7 of 861 (1 %) | 55 |
+| keep only | 803 of 900 (89 %) | 6 of 861 (1 %) | 57 |
+| as it is now (tiles, second look, keep) | 846 of 900 (94 %) | 8 of 861 (1 %) | 87 |
+| tiles without the second look | 831 of 900 (92 %) | 400 of 861 (46 %) | 77 |
+
+| 19 November, 2100 pairs, hands held up, not labelled | left hand reported | right hand reported | ms |
+|---|---|---|---|
+| upstream | 46 % | 46 % | 64 |
+| keep only | 51 % | 66 % | 60 |
+| as it is now | 53 % | 75 % | 76 |
+| tiles without the second look | 96 % | 95 % | 51 |
+
+- **Gained:** a hand that is in both pictures is tracked more of the time (87 to 94 %; in seconds 7 and 8 the right
+  hand goes from 0 to 2 of 9 pairs to 9 of 9), with as few false hands as before. On the unlabelled recording
+  the hands are reported more often, most of it from the keep rule; without labels that cannot be called right or
+  wrong.
+- **Second 18:** 0 of 9 pairs before, 2 of 9 now: the hand is followed until both cameras lose it at the edge.
+- **Not gained: hands at chest height that stay in view, and hands in one camera.** These recordings have next to
+  none of the first (the hand passes through in a third of a second) and only the phone-gripping hand of the
+  second. Starting a hand from one camera is not built: there is nothing here to tune it on or to measure false
+  hands with, and the stands show how easily a false one starts.
+- **Cost:** in the tool a pair takes half as long again while a hand is missing (tiles and second looks run for the
+  missing hand). Through the app, with its own threads, results took 27 ms with either library.
+- **The 96 % of tiles without the second look** on 19 November may be right (the hands are held up throughout) or
+  may be full of false hands; on 17 November that setting reports a hand where there is none 46 % of the time, so
+  it is not used.
+
+**What is needed next:** one recording of the case itself: hands at chest and keyboard height, staying in view,
+moving and pinching, one at a time and together, for forty seconds
+(`adb shell am start -n dev.ultraxr/.ui.LauncherActivity --ei record_seconds 40` with the glasses on).
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,
