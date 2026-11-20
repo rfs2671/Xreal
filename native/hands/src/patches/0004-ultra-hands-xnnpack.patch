@@ -1,0 +1,41 @@
+--- a/src/xrt/auxiliary/onnx/onnx_wrapper.cpp
++++ b/src/xrt/auxiliary/onnx/onnx_wrapper.cpp
+@@ -14,6 +14,9 @@
+ 
+ #include "ultra_hands_config.h"
+ 
++#include <cstdio>
++#include <cstdlib>
++
+ 
+ namespace xrt::auxiliary::onnx {
+ 
+@@ -33,6 +36,28 @@
+ 	if (!ultra_hands_cfg_ort_allow_spinning()) {
+ 		ORT_SAFE(*this, AddSessionConfigEntry(opts, "session.intra_op.allow_spinning", "0"));
+ 	}
++	// libultra_hands: the models run on XNNPACK, the optimised CPU kernels that are in the same ONNX Runtime library.
++	// Measured on the S21 Ultra with native/hands/test/ort_bench.c, one thread each: the detector 2.8 ms a run against
++	// 5.2 with the plain CPU kernels, the keypoint model 5.5 against 8.9, the same outputs to five figures. NNAPI was
++	// slower than either (10.5 and 22 ms) and cannot put these models on the GPU or the DSP at all.
++	// Inside the tracker (two views at once) one thread each gains nothing; two bring a pair with a hand tracked from
++	// 60 ms to 34 and a pair with none from 13.5 to 9.7 (the test tool, every pair of the 20 November recording).
++	//   ULTRA_HANDS_XNNPACK   XNNPACK's threads for each model (default 2; 0: the plain CPU kernels)
++	{
++		const char *e = std::getenv("ULTRA_HANDS_XNNPACK");
++		int n = (e != nullptr && e[0] != 0) ? std::atoi(e) : 2;
++		if (n > 0) {
++			char num[8];
++			std::snprintf(num, sizeof(num), "%d", n > 8 ? 8 : n);
++			const char *keys[] = {"intra_op_num_threads"};
++			const char *vals[] = {num};
++			OrtStatus *st = this->api->SessionOptionsAppendExecutionProvider(opts, "XNNPACK", keys, vals, 1);
++			if (st != nullptr) {
++				// Not in this build of ONNX Runtime: the plain CPU kernels, as before.
++				this->api->ReleaseStatus(st);
++			}
++		}
++	}
+ 
+ 	ORT_SAFE(*this, CreateEnv(ORT_LOGGING_LEVEL_FATAL, env_name.c_str(), &this->env));
+ 

@@ -46,6 +46,10 @@ RUNS = {
     # upstream's rules (no tiles, a hand dropped as soon as one camera is unsure) against the library as it now is, each twice
     "h_up":  ("", "tiles=0" + chr(10) + "keep=0" + chr(10)), "h_upb": ("", "tiles=0" + chr(10) + "keep=0" + chr(10)),
     "h_now": ("", ""), "h_nowb": ("", ""),
+    # the plain CPU kernels against XNNPACK (the default), and what the time gained buys: three tiles a run
+    "h_nox": ("", "xnnpack=0" + chr(10)), "h_noxb": ("", "xnnpack=0" + chr(10)),
+    "h_t3": ("", "tiles=3" + chr(10)), "h_t3b": ("", "tiles=3" + chr(10)),
+    "h_upx": ("", "tiles=0" + chr(10) + "keep=0" + chr(10)),      # upstream's rules on XNNPACK
     "h_keep": ("", "tiles=0" + chr(10) + "keep=1" + chr(10)),
     "h_tiles3c7": ("", "tiles=3" + chr(10) + "tiles_min_conf=0.7" + chr(10)),
     "hold3":  ("", ""),      # with the estimator restarted when it wanders while the glasses lie still
@@ -122,6 +126,8 @@ def replay(dev, name, out, runs):
         while time.time() - t0 < 420:
             time.sleep(15)
             log = sh(dev, "logcat -d | grep -E 'UltraXR *: (replay finished|replayed|replay stopped|hand options|6DoF settings changed)' | tail -4")
+            # a start request that arrives twice is answered "a replay is already running": that is not the end of the run
+            log = chr(10).join(l for l in log.splitlines() if "already running" not in l)
             if "replay finished" in log or "replay stopped" in log: done = log; break
         print("%s: %s" % (tag, (done.splitlines()[-1].split("UltraXR :")[-1].strip() if done else "no end message after 7 minutes")), flush=True)
         for kind in ("vio.csv", "hands.csv", "app.csv", "joints.csv", "room.csv", "notes.txt"):

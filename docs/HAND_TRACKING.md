@@ -393,6 +393,55 @@ The library was not changed by this; what is installed is still the build of the
   pass for a real low hand only about one time in four, so the rule needs care not to drop real hands, and there
   is one recording with such a thing in it.
 
+## Faster models: XNNPACK, not the GPU (20 November 2026, late)
+
+**Measured first, each model by itself on the phone** (`native/hands/test/ort_bench.c`, 200 runs, a fixed input,
+median; the output is the same to five figures in every row):
+
+| | detector, ms a run | keypoint model, ms a run |
+|---|---|---|
+| plain CPU kernels, 1 thread (as it was) | 5.2 | 8.9 |
+| plain CPU kernels, 2 threads, no spinning | 9.5 | 15.3 |
+| XNNPACK, 1 thread | 2.8 | 5.5 |
+| XNNPACK, 2 threads | 2.0 | 3.9 |
+| XNNPACK, 4 threads | 1.5 | 2.7 |
+| NNAPI | 10.5 | 22.0 |
+| NNAPI with its CPU fallback off | does not run: no GPU or DSP device takes the model | |
+
+XNNPACK is in the same ONNX Runtime library the app already ships; nothing is added. NNAPI, the way to the GPU and
+the DSP, is slower than the plain kernels here and cannot place these models on either. A GPU or NPU would take
+another runtime (Qualcomm's QNN) and probably another form of the models; not tried.
+
+**In the tracker** (`native/hands/src/patches/0004-ultra-hands-xnnpack.patch`; `xnnpack=0` in `hand_options.txt` is
+the plain kernels): one XNNPACK thread a model gains nothing there (two views run at once), two do: in the test
+tool a pair with a hand tracked takes 34 ms against 60, a pair with none 9.7 against 13.5. With the tiles and the
+rest unchanged the hands reported are the same in 1195 of 1199 pairs.
+
+**In the app, at the cameras' speed:**
+
+| 20 November | hand plainly in both pictures: tracked | where there is none | results a second | ms a result |
+|---|---|---|---|---|
+| plain kernels | 67 %, 72 % | 0 of 822, 0 of 816 | 27.9, 26.5 | 26.9, 28.5 |
+| XNNPACK (**as it is now**) | 71 %, 67 % | 0 of 840, 0 of 840 | 28.6, 29.5 | 22.2, 21.0 |
+| XNNPACK and three tiles a run | 83 %, 83 % | 0 of 838, 0 of 836 | 26.6, 26.2 | 31.2, 31.7 |
+
+| 17 November | tracked | where there is none | results a second |
+|---|---|---|---|
+| upstream, plain kernels (from the section above) | 86 %, 80 % | 1 %; 6 % and a hand on the stands | 27.9, 26.4 |
+| XNNPACK (as it is now) | 94 %, 93 % | 4 %, 3 % (the edges of the labels); nothing on the stands | 28.1, 27.3 |
+| XNNPACK and three tiles a run | 92 %, 92 % | 9 %, 9 %: a right hand on the stands from second 18 to 28, in both runs | 24.3, 24.6 |
+
+- **Three tiles a run is not taken**, although the time is there for it and it tracks more of the low hands of
+  20 November (the left hand in seconds 25 to 28): on 17 November it puts a hand on the stands beside the laptop in
+  both runs. One tile does not, in either.
+- So what the faster models buy for now is time: 21 ms a result in place of 27, the tracker keeping up with the
+  cameras, and on 17 November the hand found again at once in seconds 7 and 8.
+- The low hands at the cameras' speed are as before: tracked in part. What stands between them and three tiles is
+  the hand on the stands, which is the same thing upstream does by itself in one run of two: a tracked or newly
+  found hand nothing confirms. That is the next thing to build.
+- `tools/pixel/lab.py`: a start request that arrives twice is no longer taken for the end of a run (the first run
+  after a restart was being cut short).
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,
