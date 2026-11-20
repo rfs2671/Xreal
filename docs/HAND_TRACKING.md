@@ -315,6 +315,46 @@ one view and the assumed hand size. Once it has been, it goes on through a camer
   second camera that never sees it: by design it is not reported); pinches and fingertip steadiness at chest
   height; how far reported hands are from true ones; the 19 November recording with this build.
 
+## In the app, at the speed of the cameras (20 November 2026, evening): what the numbers above leave out
+
+The tool above gives the tracker every pair however long a pair takes. The app does not: a pair that arrives while
+the tracker is busy is dropped. Three things came out of timing the new library in the app.
+
+**1. The replays through the app before this evening compared nothing.** The library read its switches once for the
+life of the process, and `tools/pixel/lab.py` did not end the process between runs ("am kill" leaves a process that
+holds a service), so a run kept the switches of the run before it. That, not chance, is why those replays showed no
+difference between settings. Put right: the library reads its switches each time, the app sets or clears every one
+of them at each start of tracking, and `lab.py` ends the process (as the app itself, not a force-stop). The numbers
+from the tool are not touched by this. With it put right, two runs of the same setting agree (upstream: 58 of 269
+and 58 of 271).
+
+**2. With three tiles a run the library was worse in the app than upstream.** 39 ms a result against 15, 23 results
+a second against 30, and fewer hands tracked than upstream (16 and 36 of about 180 against 57 of 270): the work for
+a hand that is missing took the time the hands that are there needed. In the tool it had looked best.
+
+**3. With one tile a run** (and the second looks' views worked out at every fourth pixel) it is better than
+upstream in the app as well. The 20 November recording through the app, upstream and now, twice each:
+
+| in the app, 40 s | hand plainly in both pictures: tracked | reported where there is none | results a second | ms a result: no hand / with a hand |
+|---|---|---|---|---|
+| upstream | 58 of 269 (22 %) | 0 of 840 | 30.0 | 14.5 / 28.9 |
+| upstream, again | 58 of 271 (21 %) | 0 of 830 | 29.9 | 14.5 / 28.9 |
+| now | 141 of 229 (62 %) | 0 of 818 | 28.0 | 21.4 / 37.4 |
+| now, again | 152 of 217 (70 %) | 0 of 815 | 28.1 | 21.9 / 36.9 |
+
+- The raised hand of seconds 7 to 11 is held throughout (upstream loses it after two seconds).
+- **The low hands are tracked only in part at this speed:** the right hand in second 27 and in seconds 33 to 36
+  (one run), 33 and 34 (the other). Given every pair, the same library tracks it from 26 to 35. So what the tool
+  shows is what the library can do, not what the wearer gets; the difference is time.
+- It costs 7 ms a result, and two results a second.
+- With one tile the tool itself gives 215 of 270 (80 %) on 20 November, none false, and 846 of 900 on 17 November
+  as before.
+
+**Where the time goes is not settled.** The tool's own timings moved between runs by more than the settings did
+(the phone had been at it for an hour; a pair with no hand took from 11 to 80 ms within one run), so they are not
+used. Second looks are few (0 to 7 sets a second) and are not it. A candidate that lies on the hand already tracked
+is now left out before its second looks; that changed nothing measurable.
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,

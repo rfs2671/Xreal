@@ -396,12 +396,16 @@ object Tracking : GlassesLink.Listener {
         handsOn = settings.handTracking
         try {
             handOptions = dev.ultraxr.core.HandOptions.parse(try { File(app.getExternalFilesDir(null), "hand_options.txt").takeIf { it.isFile }?.readText() } catch (_: Exception) { null })
-            handOptions.qualityFilter?.let { try { android.system.Os.setenv("MERCURY_XR_QUALITY_FILTER", if (it) "1" else "0", true) } catch (_: Throwable) {} }
-            handOptions.tiles?.let { try { android.system.Os.setenv("ULTRA_HANDS_TILES", it.toString(), true) } catch (_: Throwable) {} }
-            handOptions.keep?.let { try { android.system.Os.setenv("ULTRA_HANDS_KEEP", if (it) "1" else "0", true) } catch (_: Throwable) {} }
-            handOptions.oneView?.let { try { android.system.Os.setenv("ULTRA_HANDS_ONE_VIEW", if (it) "1" else "0", true) } catch (_: Throwable) {} }
-            handOptions.verify?.let { try { android.system.Os.setenv("ULTRA_HANDS_VERIFY", if (it) "1" else "0", true) } catch (_: Throwable) {} }
-            handOptions.tilesMinConf?.let { try { android.system.Os.setenv("ULTRA_HANDS_TILES_MIN_CONF", it.toString(), true) } catch (_: Throwable) {} }
+            // Each switch is set or cleared every time tracking starts: the process outlives one start, and a switch
+            // set for one replay must not stay for the next.
+            fun env(name: String, value: String?) { try { if (value == null) android.system.Os.unsetenv(name) else android.system.Os.setenv(name, value, true) } catch (_: Throwable) {} }
+            fun onOff(b: Boolean?) = b?.let { if (it) "1" else "0" }
+            env("MERCURY_XR_QUALITY_FILTER", onOff(handOptions.qualityFilter))
+            env("ULTRA_HANDS_TILES", handOptions.tiles?.toString())
+            env("ULTRA_HANDS_TILES_MIN_CONF", handOptions.tilesMinConf?.toString())
+            env("ULTRA_HANDS_KEEP", onOff(handOptions.keep))
+            env("ULTRA_HANDS_VERIFY", onOff(handOptions.verify))
+            env("ULTRA_HANDS_ONE_VIEW", onOff(handOptions.oneView))
             log("hand options: $handOptions")
             val dir = File(app.filesDir, "hand-models").apply { mkdirs() }
             for (name in app.assets.list("hand-models").orEmpty()) {

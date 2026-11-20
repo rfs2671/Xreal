@@ -11,7 +11,7 @@
 +		// twice may begin the hand from its one view; the other view gets a region from the fit.
 +		// ULTRA_HANDS_ONE_VIEW=0 is the gate as it was.
 +		{
-+			static const bool one_view_on = []() {
++			const bool one_view_on = []() {
 +				const char *e = std::getenv("ULTRA_HANDS_ONE_VIEW");
 +				return e == nullptr || e[0] != '0';
 +			}();
@@ -40,11 +40,11 @@
 +		// view that is sure; the unsure view sits this frame out and is given a new region from the fit.
 +		// ULTRA_HANDS_KEEP=0 is upstream's rule.
 +		{
-+			static const bool keep_on = []() {
++			const bool keep_on = []() {
 +				const char *e = std::getenv("ULTRA_HANDS_KEEP");
 +				return e == nullptr || e[0] != '0';
 +			}();
-+			static const float keep_floor = []() {
++			const float keep_floor = []() {
 +				const char *e = std::getenv("ULTRA_HANDS_KEEP_FLOOR");
 +				return (e != nullptr && e[0] != '\0') ? (float)std::atof(e) : 0.30f;
 +			}();

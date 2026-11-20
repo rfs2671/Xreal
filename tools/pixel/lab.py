@@ -95,6 +95,9 @@ def restart_app(dev):
     app's accessibility service (the touchpad) whenever the app is force-stopped, and the owner then has to switch
     it on again by hand. Going Home and killing the background process leaves the service enabled; Android restarts it."""
     sh(dev, "input keyevent KEYCODE_HOME"); time.sleep(1); sh(dev, "am kill " + PKG); time.sleep(2)
+    # "am kill" leaves a process that holds a service. A debug build's process can be ended as the app itself, which is
+    # an ordinary death of the process (Android starts its services again), not a force-stop.
+    sh(dev, "run-as %s sh -c 'kill $(pidof %s)' 2>/dev/null" % (PKG, PKG)); time.sleep(3)
 
 def glasses_attached(dev): return "Air 2 Ultra" in sh(dev, "dumpsys display | grep -c 'Air 2 Ultra' ; dumpsys display | grep -m1 'Air 2 Ultra'")
 

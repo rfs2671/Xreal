@@ -1,6 +1,6 @@
 --- a/src/xrt/tracking/hand/mercury/hg_model.cpp
 +++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
-@@ -946,6 +946,343 @@
+@@ -946,6 +946,368 @@
  	}
  }
  
@@ -13,7 +13,9 @@
 +// and up, three ahead and down, three at chest height, the low and the side ones oftener. What a tile finds is put
 +// back into the fisheye picture's pixels and goes on as any detection does: the keypoint model and the fit decide
 +// whether it is a hand.
-+//   ULTRA_HANDS_TILES            tiles looked through each time the detector runs on a view (default 3, 0 = off)
++//   ULTRA_HANDS_TILES            tiles looked through each time the detector runs on a view (default 1, 0 = off).
++//                                Three found hands sooner in a test that took every frame however long it took, and
++//                                cost so much in the app that frames were dropped and fewer hands were tracked.
 +//   ULTRA_HANDS_TILES_MIN_CONF   the least confidence a tile's detection needs (default 0.5)
 +namespace {
 +
@@ -42,10 +44,10 @@
 +int
 +ultra_tiles_per_call()
 +{
-+	static int n = -1;
++	int n = -1; // read each time: see ultra_verify
 +	if (n < 0) {
 +		const char *e = std::getenv("ULTRA_HANDS_TILES");
-+		n = (e != nullptr && e[0] != '\0') ? std::atoi(e) : 3;
++		n = (e != nullptr && e[0] != '\0') ? std::atoi(e) : 1;
 +		n = std::max(0, std::min(12, n));
 +	}
 +	return n;
@@ -54,7 +56,7 @@
 +float
 +ultra_tiles_min_conf()
 +{
-+	static float c = -1.0f;
++	float c = -1.0f;
 +	if (c < 0.0f) {
 +		const char *e = std::getenv("ULTRA_HANDS_TILES_MIN_CONF");
 +		c = (e != nullptr && e[0] != '\0') ? (float)std::atof(e) : 0.5f;
@@ -155,10 +157,13 @@
 +	const float R[9] = {ca, -sa * sb, sa * cb, 0.0f, cb, sb, -sa, -ca * sb, ca * cb};
 +	const float f = (float)kUltraTile / 2.0f / tanf(fov_deg * (float)M_PI / 360.0f);
 +	const float cr = cosf(roll_deg * (float)M_PI / 180.0f), sr = sinf(roll_deg * (float)M_PI / 180.0f);
-+	cv::Mat map_x(kUltraTile, kUltraTile, CV_32FC1), map_y(kUltraTile, kUltraTile, CV_32FC1);
-+	for (int v = 0; v < kUltraTile; v++) {
-+		for (int u = 0; u < kUltraTile; u++) {
-+			const float x0 = ((float)u + 0.5f - kUltraTile / 2.0f) / f, y0 = ((float)v + 0.5f - kUltraTile / 2.0f) / f;
++	// Worked out at every fourth pixel and filled in between: the mapping is smooth, and this is a sixteenth of the
++	// work (it was most of what a second look cost).
++	constexpr int kStep = 4, kGrid = kUltraTile / kStep + 1;
++	cv::Mat grid_x(kGrid, kGrid, CV_32FC1), grid_y(kGrid, kGrid, CV_32FC1);
++	for (int v = 0; v < kGrid; v++) {
++		for (int u = 0; u < kGrid; u++) {
++			const float x0 = ((float)(u * kStep) - kUltraTile / 2.0f) / f, y0 = ((float)(v * kStep) - kUltraTile / 2.0f) / f;
 +			const float x = cr * x0 - sr * y0, y = sr * x0 + cr * y0;
 +			float qx = -1.0f, qy = -1.0f;
 +			t_camera_models_project(&view->hgdist, R[0] * x + R[1] * y + R[2], R[3] * x + R[4] * y + R[5],
@@ -167,12 +172,16 @@
 +				qx = -1.0f;
 +				qy = -1.0f;
 +			}
-+			map_x.at<float>(v, u) = qx;
-+			map_y.at<float>(v, u) = qy;
++			grid_x.at<float>(v, u) = qx;
++			grid_y.at<float>(v, u) = qy;
 +		}
 +	}
++	cv::Mat map_x, map_y;
++	cv::resize(grid_x, map_x, cv::Size(kUltraTile + kStep, kUltraTile + kStep), 0, 0, cv::INTER_LINEAR);
++	cv::resize(grid_y, map_y, cv::Size(kUltraTile + kStep, kUltraTile + kStep), 0, 0, cv::INTER_LINEAR);
 +	cv::Mat tile;
-+	cv::remap(whole, tile, map_x, map_y, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
++	cv::remap(whole, tile, map_x(cv::Rect(kStep / 2, kStep / 2, kUltraTile, kUltraTile)), map_y(cv::Rect(kStep / 2, kStep / 2, kUltraTile, kUltraTile)),
++	          cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
 +	hand_region_of_interest out[2] = {};
 +	view->run_model_on_this = tile;
 +	try {
@@ -188,11 +197,11 @@
 +static bool
 +ultra_verify(hand_detection_run_info *info, const cv::Mat &whole, float px, float py, int hand)
 +{
-+	static const bool on = []() {
++	const bool on = []() {
 +		const char *e = std::getenv("ULTRA_HANDS_VERIFY");
 +		return e == nullptr || e[0] != '0';
 +	}();
-+	static const float least = []() {
++	const float least = []() {
 +		const char *e = std::getenv("ULTRA_HANDS_VERIFY_MIN");
 +		return (e != nullptr && e[0] != '\0') ? (float)std::atof(e) : 0.5f;
 +	}();
@@ -200,9 +209,9 @@
 +		return true;
 +	}
 +	const float looks[4][2] = {{70.0f, 0.0f}, {95.0f, 0.0f}, {70.0f, 25.0f}, {70.0f, -25.0f}};
-+	static const bool say = std::getenv("ULTRA_HANDS_DEBUG") != nullptr;
++	const bool say = std::getenv("ULTRA_HANDS_DEBUG") != nullptr;
 +	// How many of the four have to agree (ULTRA_HANDS_VERIFY_NEED).
-+	static const int need = []() {
++	const int need = []() {
 +		const char *e = std::getenv("ULTRA_HANDS_VERIFY_NEED");
 +		int n = (e != nullptr && e[0] != 0) ? std::atoi(e) : 3;
 +		return std::max(1, std::min(4, n));
@@ -311,7 +320,20 @@
 +			if (!(px >= 0.0f && px < (float)whole.cols && py >= 0.0f && py < (float)whole.rows)) {
 +				continue;
 +			}
++			// The other hand, if it is being tracked, is found through the tiles too, and often as this one.
++			// The gate would turn that away as an overlap, after four second looks had been spent on it in
++			// every frame (it was most of what a frame cost while one hand was tracked). It is left out here.
++			{
++				const hand_region_of_interest &other = view->regions_of_interest_this_frame[!h];
++				if (hgt->last_frame_hand_detected[!h] && other.found && other.size_px > 0.0f &&
++				    fabsf(px - other.center_px.x) < other.size_px * 0.75f && fabsf(py - other.center_px.y) < other.size_px * 0.75f) {
++					continue;
++				}
++			}
 +			auto &failed = ultra_failed[view->view & 1][h];
++			if (failed.until - hgt->detection_counter > 15) {
++				failed.until = 0;
++			}
 +			if (hgt->detection_counter < failed.until && fabsf(px - failed.x) < 45.0f && fabsf(py - failed.y) < 45.0f) {
 +				continue;
 +			}
@@ -321,12 +343,15 @@
 +				failed.until = hgt->detection_counter + 15;
 +				continue;
 +			}
-+			// Passed twice in the same place within twelve runs of the detector: in the wearer's recordings that
++			// Passed twice in the same place within thirty runs of the detector (a second): in the wearer's recordings that
 +			// happens for hands (20 times in the eight seconds of low hands) and never where there is none
 +			// (the stands beside the laptop: 42 finds, none passed once). Such a find may begin a hand from
 +			// this one camera (hg_sync.cpp, the detection gate).
 +			auto &passed = ultra_passed[view->view & 1][h];
-+			out[h].ultra_twice = hgt->detection_counter - passed.at <= 12 && hgt->detection_counter != passed.at &&
++			if (passed.at > hgt->detection_counter) {
++				passed.at = -1000;
++			}
++			out[h].ultra_twice = hgt->detection_counter - passed.at <= 30 && hgt->detection_counter != passed.at &&
 +			                     fabsf(px - passed.x) < 50.0f && fabsf(py - passed.y) < 50.0f;
 +			passed.x = px;
 +			passed.y = py;
@@ -344,7 +369,7 @@
  static void
  run_hand_detection_unsafe(hand_detection_run_info *info)
  {
-@@ -956,6 +1293,7 @@
+@@ -956,6 +1318,7 @@
  		const bool mirror_horizontal =
  		    xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_MIRROR_HORIZONTAL");
  		xr_run_hand_detection_pass(info, mirror_horizontal, info->outputs);
@@ -352,7 +377,7 @@
  		if (xr_detector_swap_slots) {
  			std::swap(info->outputs[0], info->outputs[1]);
  		}
-@@ -1530,6 +1868,7 @@
+@@ -1530,6 +1893,7 @@
  	}
  
  	this_output.active = is_hand;
