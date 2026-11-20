@@ -75,6 +75,51 @@ From the wearer's own recordings, replayed through the tracker on the phone (`do
 - Another tracker made for wide fisheye headset cameras, for example Meta's open UmeTrack.
 - Camera exposure and gain: whether they can be set on these glasses has not been established.
 
+## Wider detection: what was measured first (20 November 2026)
+
+The owner asked for hands to be tracked from face to chest height and across all the cameras see. Before changing
+the tracker, two things were checked on his recording of 17 November (45 s, 227 stereo pairs, hands raised, lowered
+and held low; `tools/tracking/hand_bench.py`, `hand_bench_report.py`, `hand_bench_stereo.py`; pictures and results
+stay under `C:\uvio\hands_bench`, outside the repository).
+
+**Do the cameras see chest height? Yes.** From the calibration (kb4, focal length 240 pixels, 480 x 640 upright) a
+camera sees about 75 degrees above and below its axis and about 55 to each side. In the recorded pictures the
+wearer's own chest and forearms are in the lower part of both pictures, a hand over the keyboard in front of the
+chest is in both, and a hand held low at the side is in one camera's picture, at its edge. The display's 46 by 27
+degrees is a small part of that. So it is the detector that does not find low hands, not the cameras.
+
+**The same detector on fisheye-corrected tiles.** Mercury's detection model was run in Python exactly as Mercury
+feeds it (letterboxed to 160 x 160, its normalisation, its 0.3 confidence), once on each camera's whole picture
+(what is done now) and once on nine ordinary views of 70 degrees cut out of the fisheye picture (three ahead and up,
+three ahead and down, three at chest height). Each second of the recording was labelled by eye: which hand is
+plainly in which camera's picture; hands that could not be judged (at the very edge, holding the phone) are counted
+neither way.
+
+| | whole picture (now) | nine tiles |
+|---|---|---|
+| a hand plainly in a camera's picture is found | 117 of 320 (37 %) | 237 of 320 (74 %) |
+| a hand plainly in both pictures is found in both (what the 3D fit needs) | 6 of 160 (4 %) | 99 of 160 (62 %) |
+| a hand is "found" where there is none | 0 of 427 | 170 of 427 (40 %) |
+| time for a camera's picture, on the laptop | 2 ms | 18 ms |
+
+- The tiles also find, in nine of every nine pairs, the left hand held low at the picture's edge from second 19 to
+  28, which the whole-picture detector never finds. That hand is one of those not counted (it holds the phone).
+- More than half of the false finds are one thing: dark stands beside the laptop, taken for a right hand at 0.92
+  confidence in one tile, in both cameras. A higher confidence does not separate them (at 0.9: 25 % found, 12 %
+  false).
+- Pairing the two cameras' finds and keeping only what lies between 12 and 85 cm away is not enough by itself: the
+  detector's middle of a hand is rough (the two rays pass 1 to 7 cm apart for real hands), so this keeps only 44 of
+  160 real hands and still 20 of 152 false ones.
+- Mercury's own per-frame detection is worse in this replica (4 %) than Mercury's tracking on the phone (a hand in
+  23 % of its results on this recording), because Mercury follows a hand once found. The numbers above are about
+  finding, not following.
+
+**What follows from it.** Tiles roughly double what the detector finds and reach low hands, but they cannot be used
+by themselves: what tells a hand from a lamp stand is Mercury's next stages (keypoints, the fit, its quality
+filter). So the change belongs inside Mercury's detection step, with its later stages as the judge, and the measure
+is the replay of these recordings on the phone, before and after. Not done yet. Also not measured yet: the second
+recording (19 November), speed on the phone, and anything about one-camera tracking or pinch.
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,
