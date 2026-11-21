@@ -48,6 +48,8 @@ class DesktopSession(private val activity: Activity) {
     private val pointer by lazy { HandPointer(Tracking.handOptions.pressM, Tracking.handOptions.releaseM) }
     /** A window pinched on its handle and carried: it follows the hand while the fingers hold, this far from the ray. */
     private var handGrab = -1; private var grabYaw = 0.0; private var grabPitch = 0.0; private var handDownDir: DoubleArray? = null
+    /** How far the hand was from the head when it took the window up, and how far the window stood then (asked for 21 November 2026: push a held window away, pull it nearer). */
+    private var grabReach = -1.0; private var grabDistance = 0.0
     private var handShown: RenderHand? = null; private var handLogNs = 0L; private var handSeenFrames = 0
     /**
      * Where the home and the dock stand in the room. They keep their place while the wearer moves about where they
@@ -840,7 +842,19 @@ class DesktopSession(private val activity: Activity) {
         val f = desktop.focus
         if (handGrab >= 0) {      // a window held by its handle follows the hand until the fingers part
             val w = desktop.find(handGrab)
-            if (pinching && w != null) desktop.aim(w.id, Geometry.wrap(Geometry.yawOf(dir) + grabYaw), Geometry.pitchOf(dir) + grabPitch) else releaseHand()
+            if (pinching && w != null) {
+                desktop.aim(w.id, Geometry.wrap(Geometry.yawOf(dir) + grabYaw), Geometry.pitchOf(dir) + grabPitch)
+                // The held hand pushed away or drawn in carries the window further or nearer: 10 cm of the hand is half
+                // as far again (or two thirds as far). The first 3 cm either way do nothing, so that carrying a window
+                // sideways does not also push it, and the window follows smoothly: the hand's depth is the noisiest
+                // thing the tracker reports.
+                val hp = head.pose.p; val reach = Math.sqrt((aim.origin[0] - hp[0]) * (aim.origin[0] - hp[0]) + (aim.origin[1] - hp[1]) * (aim.origin[1] - hp[1]) + (aim.origin[2] - hp[2]) * (aim.origin[2] - hp[2]))
+                if (grabReach < 0) { grabReach = reach; grabDistance = w.distance }
+                val d = reach - grabReach; val past = if (Math.abs(d) < PUSH_FREE_M) 0.0 else d - Math.signum(d) * PUSH_FREE_M
+                val to = (grabDistance * Math.exp(past * PUSH_GAIN)).coerceIn(DesktopWindow.MIN_DISTANCE, DesktopWindow.FAR_DISTANCE)
+                val next = w.distance + (to - w.distance) * 0.2
+                if (Math.abs(next - w.distance) > 0.002) desktop.push(w.id, next / w.distance)
+            } else releaseHand()
             show(); return
         }
         if (f is Focus.Moving || f is Focus.Sizing) {
@@ -887,7 +901,7 @@ class DesktopSession(private val activity: Activity) {
             val d = handDownHit; val start = handCorner; val from = handDownDir
             if (d != null && d.onHandle && from != null && Math.acos((from[0] * dir[0] + from[1] * dir[1] + from[2] * dir[2]).coerceIn(-1.0, 1.0)) > GRAB_ANGLE) {
                 // pinched on the handle and carried off: the window comes along, and stays where the fingers let it go
-                desktop.beginDrag(d.window.id); handGrab = d.window.id
+                desktop.beginDrag(d.window.id); handGrab = d.window.id; grabReach = -1.0
                 grabYaw = Geometry.wrap(desktop.worldYaw(d.window) - Geometry.yawOf(dir)); grabPitch = d.window.pitch - Geometry.pitchOf(dir)
                 Tracking.log("desktop: window ${d.window.id} taken up by the hand")
             } else if (d != null && start != null) {
@@ -931,7 +945,8 @@ class DesktopSession(private val activity: Activity) {
         val d = Geometry.direction(Math.toRadians(m[0]), Math.toRadians(m[1]))
         val to = doubleArrayOf(hp[0] + d[0] * 2.0 - sh[0], hp[1] + d[1] * 2.0 - sh[1], hp[2] + d[2] * 2.0 - sh[2]); val n = Math.sqrt(to[0] * to[0] + to[1] * to[1] + to[2] * to[2])
         val u = doubleArrayOf(to[0] / n, to[1] / n, to[2] / n); val side = doubleArrayOf(-u[2], 0.0, u[0])
-        val palm = doubleArrayOf(sh[0] + u[0] * 0.5, sh[1] + u[1] * 0.5, sh[2] + u[2] * 0.5)
+        val far = if (m.size >= 4) m[3] else 0.5
+        val palm = doubleArrayOf(sh[0] + u[0] * far, sh[1] + u[1] * far, sh[2] + u[2] * far)
         val j = FloatArray(dev.ultraxr.core.Hand.JOINTS * 3)
         fun put(i: Int, along: Double, across: Double, up: Double = 0.0) { j[i * 3] = (palm[0] + u[0] * along + side[0] * across).toFloat(); j[i * 3 + 1] = (palm[1] + u[1] * along + up).toFloat(); j[i * 3 + 2] = (palm[2] + u[2] * along + side[2] * across).toFloat() }
         for (i in 0 until dev.ultraxr.core.Hand.JOINTS) put(i, 0.0, 0.0)
@@ -951,7 +966,7 @@ class DesktopSession(private val activity: Activity) {
         val d = handDownHit
         if (handDown && d != null && d.onPage && handCorner == null && handSizeWindow < 0) pageTouch(d.window.id, MotionEvent.ACTION_CANCEL, d.u, d.v)
         if (handSizeWindow >= 0) { desktop.endDrag(); applyShape(handSizeWindow) }      // the window keeps the size the hand gave it
-        if (handGrab >= 0) { desktop.endDrag(); handGrab = -1 }      // and the place
+        if (handGrab >= 0) { desktop.find(handGrab)?.let { Tracking.log(String.format(Locale.US, "desktop: window %d put down by the hand at %.1f degrees left, %.1f up, %.2f m away (it was taken up at %.2f m)", it.id, Math.toDegrees(desktop.worldYaw(it)), Math.toDegrees(it.pitch), it.distance, grabDistance)) }; desktop.endDrag(); handGrab = -1 }      // and the place
         handDown = false; handDownHit = null; handTile = -1; handCorner = null; handSizeWindow = -1; handDownDir = null
     }
 
@@ -1223,6 +1238,8 @@ class DesktopSession(private val activity: Activity) {
         private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
         /** A pinch on a corner becomes a drag once the hand's ray has moved this far across the window, metres. */
         private const val CORNER_DRAG_M = 0.03
+        private const val PUSH_FREE_M = 0.03
+        private const val PUSH_GAIN = 4.0
         /** A pinch on a window's handle becomes carrying the window once the hand's ray has turned this far. */
         private val GRAB_ANGLE = Math.toRadians(2.5)
         /** The home and the dock stay put while the head is within this of where they were placed, along the floor and up or down, metres. */

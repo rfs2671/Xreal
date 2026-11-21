@@ -424,6 +424,8 @@ object Tracking : GlassesLink.Listener {
                     testLight = lines.firstOrNull { it.startsWith("test_light=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: 1.0
                     testNoise = lines.firstOrNull { it.startsWith("test_blind_noise=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: 0
                     starveOn = lines.none { it.replace(" ", "") == "starve=0" }
+                    handTone = lines.firstOrNull { it.startsWith("hand_tone=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: HAND_TONE
+                    handToneLut = handTone.takeIf { it > 0 }?.let { tau -> ByteArray(256) { i -> (255.0 * (1 - Math.exp(-i / tau)) / (1 - Math.exp(-255.0 / tau))).toInt().coerceIn(0, 255).toByte() } }
                     if (testBlind != null || testLight != 1.0) log("test: " + (testBlind?.let { "the cameras see nothing from " + it[0] + " to " + it[1] + " s of a replay; " } ?: "") + (if (testLight != 1.0) "pictures at $testLight of their brightness" else ""))
                 } catch (_: Exception) { testBlind = null; testLight = 1.0 }
                 slamRig = slamRigOf(calib)
@@ -572,6 +574,7 @@ object Tracking : GlassesLink.Listener {
     //   starve=0             the loss is not told from the landmarks (the build of the morning of 21 November)
     @Volatile private var testNoise = 0
     @Volatile private var starveOn = true
+    @Volatile private var handTone = HAND_TONE; @Volatile private var handToneLut: ByteArray? = null
     private val testRandom = java.util.Random(7)
     private fun testPictures(left: ByteArray, right: ByteArray) {
         val l = link ?: return; if (!l.replaying) return
@@ -968,6 +971,8 @@ object Tracking : GlassesLink.Listener {
             }
         }
     }
+    /** The hand tracker's pictures as they come until the tone curve is measured through the whole tracker. */
+    private const val HAND_TONE = 0.0
     private const val MAP_MIN_PLACES = 8
 
     /** One room picture and the estimator's pose for it go to the map; what the map has found since is taken up. */
@@ -1434,6 +1439,10 @@ object Tracking : GlassesLink.Listener {
             val h = handsHandle
             if (h == 0L) continue
             val t0 = System.nanoTime()
+            // A hand in front of a bright window (worn, 21 November 2026: the arm stretched out before a doorway full of
+            // daylight) is a dark shape whose fingers the models do not make out. The hand tracker's own copies of the
+            // pictures are lifted in the dark and pressed together in the bright ("hand_tone=TAU", 0: as they come).
+            handToneLut?.let { lut -> for (a in arrayOf(l, r)) for (i in a.indices) a[i] = lut[a[i].toInt() and 0xff] }
             val mask = try { Native.handsProcess(h, t, l, r, 480, 640, out, out26) } catch (e: Throwable) { handsError = e.toString(); -1 }
             handsProcessMs = (System.nanoTime() - t0) / 1e6
             handsFrames++

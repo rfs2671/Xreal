@@ -128,6 +128,10 @@ RUNS = {
     "h_n20": ("room_map=find" + chr(10) + "starve=0" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
     "h_n50": ("room_map=find" + chr(10) + "starve=0" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=50" + chr(10), "", ""),
     "h_n120": ("room_map=find" + chr(10) + "starve=0" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=120" + chr(10), "", ""),
+    # the hand tracker's pictures lifted in the dark (a hand before a bright window, worn 21 November)
+    "t_off": ("room_map=off" + chr(10) + "hand_tone=0" + chr(10), "", ""), "t_offb": ("room_map=off" + chr(10) + "hand_tone=0" + chr(10), "", ""),
+    "t_55": ("room_map=off" + chr(10) + "hand_tone=55" + chr(10), "", ""), "t_55b": ("room_map=off" + chr(10) + "hand_tone=55" + chr(10), "", ""),
+    "t_30": ("room_map=off" + chr(10) + "hand_tone=30" + chr(10), "", ""), "t_90": ("room_map=off" + chr(10) + "hand_tone=90" + chr(10), "", ""),
     "h_plain": ("room_map=find" + chr(10), "", ""), "h_plain_old": ("room_map=find" + chr(10) + "starve=0" + chr(10), "", ""),
     "v_plain": ("room_map=find" + chr(10), "", ""), "v_plain_old": ("room_map=find" + chr(10) + "recovery=0" + chr(10), "", ""),      # nothing goes wrong: is anything lost by the new way?
     "x_blind15": ("room_map=find" + chr(10) + "map_glide=1" + chr(10) + "test_blind=30,45" + chr(10), "", ""),

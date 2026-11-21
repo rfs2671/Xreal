@@ -442,6 +442,28 @@ rest unchanged the hands reported are the same in 1195 of 1199 pairs.
 - `tools/pixel/lab.py`: a start request that arrives twice is no longer taken for the end of a run (the first run
   after a restart was being cut short).
 
+## Worn in the desktop, 21 November 2026: why "no pinch" (`C:/uvio/rec/live1121.uxrec`, `C:/uvio/vio_bench/hands1121`, `tone1`)
+
+The owner used a hand in the desktop for 95 s; the app counted 2 pinches. The raw pictures of that stretch show the
+arm stretched out in the middle of both cameras' views. Two causes, both measured on that recording:
+
+- **The cameras gave fewer pictures once the desktop was open.** 58 frames a second before, 37 to 41 from the second
+  the desktop with six windows was shown, 55 after. With frames missing at random a pair has both pictures less
+  often still: replayed, the tracker gets 8 pairs a second in that stretch (20 to 29 before it). Not mended: it needs
+  the glasses plugged in to measure (the camera reader against the desktop's load).
+- **The hand stood before a doorway full of daylight.** Offline, Mercury's detector on the whole picture finds a hand
+  in both cameras in 2 of 37 pairs; on the tiles, 30 of 37; on tiles of pictures lifted in the dark
+  (`out = 255 (1 - exp(-in / 55))`, scaled), 35 or 36 of 37. Through the whole tracker on the phone
+  (`hand_tone=55` in `vio_options.txt`, runs `t_off`, `t_55`, twice each, the same both times): a hand in 66 % of
+  results against 57 %, in 60 of 78 seconds against 52, the longest stretch without one 6 s against 10; 6 ms a
+  result dearer. On the recording of 17 November, in ordinary light, it is not better: the right hand in 447 results
+  against 424, the left in 248 against 352. So it is NOT adopted (`HAND_TONE = 0`); a curve that acts only when part
+  of the picture is burnt out is the thing to try.
+
+A window held by a pinch on its handle now also goes further and nearer as the hand is pushed away and drawn in
+(`DesktopSession`, `PUSH_GAIN`): with the made-up hand a window was carried 5 degrees and pushed from 2.00 to 3.23 m
+by 20 cm of the hand. Drawing nearer is the same code and was not seen. No real hand has done either.
+
 ## Where the code is
 
 `native/hands/` (library, build scripts, notes), `tracking/Tracking.kt` (`handsLoop`), `core/Hands.kt`,
