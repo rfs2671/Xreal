@@ -96,6 +96,7 @@ struct uslam {
 	// (measured on the phone: without it new ground often stayed untied until the end and was thrown away).
 	int last_hit = 0, links_made = 0;
 	double link_info = 400.0; // "Ultra/LinkInfo"
+	double urgent_ms = 3000.0; // "Ultra/SearchUrgentMs"
 	bool link_due = false;
 	Transform last_hit_pose, last_corr;
 	double add_after_m = 0.4;
@@ -239,6 +240,14 @@ struct uslam {
 		}
 		if (cv_threads >= 0) cv::setNumThreads(cv_threads);
 		std::vector<uint8_t> l, r;
+		// Where the head is in the map is not known (a session begins, or the estimator began a new world after a
+		// loss): for at most three seconds ("Ultra/SearchUrgentMs") the worker has all the cores and an ordinary
+		// priority. Measured on the phone on the small cores a picture took 350 to 620 ms, and the three pictures it
+		// takes to be sure were what kept position away for 2.2 to 3.0 s after a loss. Once found, or after those
+		// seconds, it is back where it does not disturb the estimator.
+		bool urgent = false;
+		double epoch_ms = now_ms();
+		int found_here = 0;
 		for (;;) {
 			int64_t t;
 			double ps[7];
@@ -270,11 +279,11 @@ struct uslam {
 			}
 			try {
 				// A new world of the estimator's: what a finder holds of the old one (its odometry cache, its last
-				// localisation) must go. Opening the file again is the plain way, and takes a tenth of a second.
-				if (epoch && mode == USLAM_FIND) {
-					rt->close(false);
-					open();
-				}
+				// localisation, its correction) must go. For a map that is only read triggerNewMap() drops just that.
+				// (Until 21 November the file was opened again: measured on the phone, 4.3 s on this thread's small
+				// cores, in which no picture was looked at: the head was found 9 s after a loss, and 8 to 11 s into a
+				// session.)
+				if (epoch && mode == USLAM_FIND) rt->triggerNewMap();
 				// Making a map: what follows is a piece of its own until a place of the earlier piece is seen again.
 				if (epoch && mode == USLAM_MAP) rt->triggerNewMap();
 				if (epoch && mode == USLAM_EXTEND) {
@@ -286,7 +295,19 @@ struct uslam {
 					} else if (adding) rt->triggerNewMap();
 					have_hit_at = false;
 				}
+				if (epoch) epoch_ms = now_ms(), found_here = 0;
 				if (l.empty()) continue;
+				{
+					const bool want = cores == "little" && mode != USLAM_MAP && !adding && found_here < 2 && now_ms() - epoch_ms < urgent_ms;
+					if (want != urgent) {
+						urgent = want;
+						cpu_set_t set;
+						CPU_ZERO(&set);
+						for (int i = 0; i < (urgent ? 8 : 4); i++) CPU_SET(i, &set);
+						sched_setaffinity(gettid(), sizeof set, &set);
+						setpriority(PRIO_PROCESS, (id_t)gettid(), urgent ? 0 : 15);
+					}
+				}
 				if (!model) rectifier(W, H);
 				cv::Mat lr, rr;
 				cv::remap(cv::Mat(H, W, CV_8UC1, l.data()), lr, mapx[0], mapy[0], cv::INTER_LINEAR);
@@ -299,6 +320,7 @@ struct uslam {
 				const Statistics &s = rt->getStatistics();
 				const int loop = rt->getLoopClosureId(), prox = s.proximityDetectionId();
 				const int hit = loop > 0 ? loop : prox > 0 ? prox : 0;
+				if (hit) found_here++;
 				const Transform corr = rt->getMapCorrection();
 				if (root == 0) root = newest();
 				// Does the place this pair belongs to hang together with the map's first place? By the graph's links, not
@@ -434,6 +456,7 @@ USLAM_API uslam_t *uslam_create(const char *rig, const char *db, int mode, const
 				else if (k == "Ultra/AddAfterM") h->add_after_m = atof(v.c_str());
 				else if (k == "Ultra/AddAfterMisses") h->add_after_misses = atoi(v.c_str());
 				else if (k == "Ultra/LinkInfo") h->link_info = atof(v.c_str());
+				else if (k == "Ultra/SearchUrgentMs") h->urgent_ms = atof(v.c_str());
 				else if (k == "Ultra/CvThreads") h->cv_threads = atoi(v.c_str());
 				else p[k] = v;
 			}

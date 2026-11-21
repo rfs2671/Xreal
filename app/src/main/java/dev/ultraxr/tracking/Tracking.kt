@@ -241,6 +241,7 @@ object Tracking : GlassesLink.Listener {
             vioThread = thread(name = "vio-poll", isDaemon = true) { vioLoop() }
             handsThread = thread(name = "hands", isDaemon = true) { handsLoop() }
             roomThread = thread(name = "room", isDaemon = true) { roomLoop() }
+            thread(name = "map-search", isDaemon = true) { mapSearchLoop() }
         }
         if (users > 1) return
         link?.let { it.wantedDisplayMode = wantedMode(); it.sideBySideDisplayPresent = { dev.ultraxr.glasses.DisplayDiagnostics.sideBySidePresent(app) || dev.ultraxr.glasses.DisplayDiagnostics.sideBySideOffered(app) }
@@ -576,6 +577,17 @@ object Tracking : GlassesLink.Listener {
         val v = vio
         if (v != 0L) { Native.vioPushStereo(v, tNs, left, right, 480, 640); supervisor.onFrame(System.nanoTime()) }
         pairIndex++
+        // While the head is being looked for in the saved map (a new session, or after a loss), the map gets pictures
+        // of its own, seven a second: it must not wait for the room's loop (measured 20 November: the map then saw its
+        // first picture seconds after the cameras did, and answered nine seconds after a loss; the library alone
+        // finds the place in 0.4 s).
+        if (slam != 0L && (mapSearching || recovering)) synchronized(mapPicLock) {
+            if (mapPicHave && !mapPicReady && tNs - mapPicT > 400_000_000L) mapPicHave = false
+            if (!mapPicHave && tNs - mapPicLastNs >= 140_000_000L) {
+                System.arraycopy(left, 0, mapPicLeft, 0, left.size); System.arraycopy(right, 0, mapPicRight, 0, right.size)
+                mapPicT = tNs; mapPicLastNs = tNs; mapPicHave = true; mapPicReady = false
+            }
+        }
         // The room: three pictures a second (fewer when the phone is warm), each kept until the estimator says where
         // the head was when it was taken.
         if (settings.roomScan && stereoRig != null) synchronized(roomLock) {
@@ -652,6 +664,11 @@ object Tracking : GlassesLink.Listener {
                         positionConfidence.reset()
                     }
                     val trusted = counted && fit
+                    // the head at the moment of a picture the map search is waiting on: the estimator need not be in use
+                    // yet, only see and not fly (two readings of the map must agree before anything is done with them)
+                    if (slam != 0L && (mapSearching || recovering) && (fit || health.why == dev.ultraxr.core.TrackingHealth.Why.SETTLING)) synchronized(mapPicLock) {
+                        if (mapPicHave && !mapPicReady && Math.abs(out[0].toLong() - mapPicT) < 6_000_000L) { mapPicP = p.copyOf(); mapPicQ = q.copyOf(); mapPicRestoring = recoveryOn && recovering; mapPicReady = true; mapPicLock.notifyAll() }
+                    }
                     // Covered cameras, by replay (20 November 2026, night): one second after the pictures came back the
                     // estimator's position was believed again, while it was still flying off at up to 6 and 11 m/s from six
                     // seconds of the motion sensor alone; the world ended 6 m from where it belonged. With the switch on,
@@ -715,10 +732,6 @@ object Tracking : GlassesLink.Listener {
                                 recovering = false; recoveries++
                                 val said = "6DoF: position is back " + dev.ultraxr.core.Fmt.f((now - seesAgainNs) / 1e9, 1) + " s after the cameras saw again, joined on where the head was held" + (if (mapHeld) " (the map said nothing in time)" else " (no map is held)"); log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said)
                             }
-                        }
-                        // the room's picture of this moment goes to the map alone
-                        if (!use && recovering && mapHeld && fit) synchronized(roomLock) {
-                            if (roomHave && !roomReady && Math.abs(out[0].toLong() - roomT) < 6_000_000L) { roomP = p; roomQ = q; roomFix = head.appFromEstimator(); roomWorld = head.worldVersion; roomMapOnly = true; roomReady = true; roomLock.notifyAll() }
                         }
                     }
                     // Picked up and tracking again: while the glasses lay still their position was held at the table,
@@ -941,6 +954,31 @@ object Tracking : GlassesLink.Listener {
     private const val MAP_MIN_PLACES = 8
 
     /** One room picture and the estimator's pose for it go to the map; what the map has found since is taken up. */
+    private val mapPicLock = Object(); private val mapPicLeft = ByteArray(480 * 640); private val mapPicRight = ByteArray(480 * 640)
+    private var mapPicT = 0L; private var mapPicLastNs = 0L; private var mapPicHave = false; private var mapPicReady = false
+    private var mapPicP = DoubleArray(3); private var mapPicQ = DoubleArray(4); private var mapPicRestoring = false
+    private var mapSaidResults = -1.0
+
+    /** The search for the head in the saved map, on a thread of its own (see [onStereo]). While a new world of the
+     *  estimator's waits to be joined on, what the map says is read here too; otherwise the pictures are only handed
+     *  over, and the room's loop reads the answers as it always did (it moves the room, which is its own to move). */
+    private fun mapSearchLoop() {
+        val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)
+        while (running) {
+            var p: DoubleArray; var q: DoubleArray; var t: Long; var restoring: Boolean
+            synchronized(mapPicLock) {
+                while (running && !mapPicReady) try { mapPicLock.wait(500) } catch (_: InterruptedException) {}
+                if (!running) return
+                System.arraycopy(mapPicLeft, 0, l, 0, l.size); System.arraycopy(mapPicRight, 0, r, 0, r.size)
+                p = mapPicP; q = mapPicQ; t = mapPicT; restoring = mapPicRestoring; mapPicHave = false; mapPicReady = false
+            }
+            try {
+                if (restoring && recovering) mapStep(t, l, r, p, q, true)
+                else synchronized(slamLock) { val h = slam; if (h != 0L) Native.slamFeed(h, t, l, r, 480, 640, doubleArrayOf(p[0], p[1], p[2], q[0], q[1], q[2], q[3])) }
+            } catch (e: Throwable) { log("room map: $e") }
+        }
+    }
+
     private fun mapStep(tNs: Long, l: ByteArray, r: ByteArray, p: DoubleArray, q: DoubleArray, restoring: Boolean = false) {
         val h = slam; if (h == 0L) return
         val st = DoubleArray(18)
@@ -977,6 +1015,7 @@ object Tracking : GlassesLink.Listener {
                 "; estimator " + dev.ultraxr.core.Fmt.f(vioProcessMs, 0) + " ms a frame; losses " + health.losses + " (" + health.blindStates + " states blind, " + health.flyingStates + " flying), " + recoveries + " recoveries, " + head.joinsFromMap + " of them from the map; room: " + synchronized(roomMemory) { roomMemory.kept.size.toString() + " surfaces kept, " + roomMemory.dropped + " dropped" } +
                 ", mesh " + roomMeshBlocks + " blocks (" + dev.ultraxr.core.Fmt.f(roomMeshMs, 0) + " ms a picture), " + furnitureInMap.size + " pieces of furniture")
         }
+        if (restoring && st[0] != mapSaidResults) { mapSaidResults = st[0]; replayLog?.note(link?.replaySeconds ?: 0.0, "room map, before the world is joined on: picture " + st[0].toInt() + " of this world, place " + st[14].toInt() + ", " + st[15].toInt() + " points agree, " + st[16].toInt() + " ms" + (if (st[5] > 0.5) "" else ", no place in the map from it")) }
         if (!reading) return
         // while the world glides back nothing new is asked of the map: what it says now is of a world on its way
         if (restoring) {

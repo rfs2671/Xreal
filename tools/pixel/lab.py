@@ -182,7 +182,9 @@ def replay(dev, name, out, runs):
         put(dev, "vio_options.txt", vio); put(dev, "hand_options.txt", hands); put(dev, "stereo_rotation_fix.txt", RUNS[tag][2] if len(RUNS[tag]) > 2 else "0,0,0")      # "0,0,0": the factory calibration, whatever the unit's standing correction; "": the app as the owner runs it
         restart_app(dev); sh(dev, "logcat -c")
         sh(dev, "input keyevent KEYCODE_WAKEUP")
-        sh(dev, "am start -n %s/.ui.LauncherActivity --es replay %s --es replay_tag %s" % (PKG, name, tag))
+        # "--activity-clear-task": the launcher's task keeps the request it was first started with, and the app would begin
+        # that run again beside this one (which is then refused as "a replay is already running")
+        sh(dev, "am start --activity-clear-task -n %s/.ui.LauncherActivity --es replay %s --es replay_tag %s" % (PKG, name, tag))
         t0 = time.time(); done = ""
         while time.time() - t0 < 420:
             time.sleep(15)

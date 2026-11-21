@@ -494,7 +494,9 @@ sparse finder's table tops are often wrong) or the rule is too quick; until that
 | the estimator started afresh after a loss (`restart_after_loss=1`) | off: not measured |
 | the mesh, furniture and dropping in the app (`room_mesh=1`) | off: drops surfaces it should not |
 
-## 11. Recovery after a loss of position (21 November 2026): built, benchmarked on recorded states, NOT yet on the phone
+## 11. Recovery after a loss of position (21 November 2026): built, and measured on the phone by replay; NOT worn
+
+(What follows down to "Measured on the phone" was written before the phone could be used; the measurements are below.)
 
 The phone was at 1 % and off its charger, so nothing here has run on it. What could be measured without it was: the
 previous build's behaviour, from the states it recorded in the covered-camera replays; and the new judge of the
@@ -542,10 +544,65 @@ later its position was used although for eight more seconds it moved by 20 to 29
 If it works as built, position should be back about 1.2 to 1.5 s after the cameras see again, at the map's accuracy.
 That is arithmetic about timers, not a measurement.
 
-### The 20 cm in newly added ground
+### Measured on the phone (S21 Ultra, replay of the 83 s walk with the cameras' pictures blanked; `C:/uvio/vio_bench/recovery2`, `recovery4`, `recovery5`)
 
-Not investigated: it needs the phone. The batch tries what can be varied (how heavily the first new place is tied to
-the last recognised one, how soon adding begins) against the way of before on the same sessions.
+As first built, the health gate did its part and the map did not. Two faults were found and mended, each measured:
+
+- **The map library opened its file again whenever the estimator began a new world**, on its worker's small cores:
+  4.3 s (its own log), in which it looked at no picture. So the map "said nothing in time", the world was joined on
+  where the head was held (2 to 3 m out after a walk), and was put right 10 to 16 s later. The same 4.3 s were lost at
+  the start of every session. Now `triggerNewMap()` (which for a read map drops exactly the odometry cache, the last
+  localisation and the correction) and nothing is opened.
+- **The map got its pictures from the room's loop**, which hands one over only between its own work and not at all
+  while the estimator is not in use. The search has pictures of its own now, seven a second, from the first state in
+  which the fresh estimator sees (`Tracking.mapSearchLoop`), and for at most three seconds of a search the library's
+  worker has all the cores at an ordinary priority (`Ultra/SearchUrgentMs`, 0 to switch off): a picture then takes
+  40 to 140 ms in place of 350 to 620.
+
+| cameras covered | | position still used while blind | in use again after the pictures return | how far out then | worst afterwards | within 10 cm for good |
+|---|---|---|---|---|---|---|
+| 6 s, map | before (`recovery=0`) | 0.63 s | 1.0 s | 143 cm | 802 cm | after 42 s |
+| | as first built | 0 | 2.8 s | 202 cm | 203 cm | after 13.1 s |
+| | file not reopened | 0 | 2.4 s | 7 cm | 7 cm | at once |
+| | and the search urgent (twice) | 0 | 1.3 s, 1.3 s | 11 cm, 9 cm | 12 cm, 10 cm | after 4.5 s, 3.1 s |
+| 15 s, map | before | 0.63 s | 1.1 s | 237 cm | 726 cm | never (38 s left) |
+| | now | 0 | 1.5 s | 6 cm | 8 cm | at once |
+| 2 s, map | now | 0 | 2.5 s | 10 cm | 13 cm | after 3.5 s |
+| 6 s, no map | before | 0.67 s | 1.1 s | 147 cm | 809 cm | never |
+| | now | 0 | 1.3 s | 204 cm | 208 cm | never: nothing can say where the wearer walked to |
+
+- No runaway in any run of the new way: the furthest the world was ever out is what the wearer walked while blind
+  (and with the map, 13 cm).
+- With nothing going wrong the new way changes nothing: against `recovery=0` over 40 two-second spans the paths
+  differ by 0.0 cm (worst 0.1), position is in use for 99 % of the recording both ways, the estimator takes 20 ms.
+- The 2.5 s after the two-second cover: the map had the head at 1.6 s; the fresh estimator was not yet counted on.
+- The error figures carry the reference's own noise: with nothing going wrong the same comparison reads 3 to 4 cm
+  median and up to 9 cm. So "11 cm at the moment of return" is at the edge of what this measurement can tell from
+  the 10 cm asked for, and is not claimed as under it.
+- The head is found at the start of a session 4 to 6 s into the recording now (8 to 11 before).
+
+Not measured: any of this worn; a loss in a place the map has never seen (then it is the no-map row); a loss by fast
+motion or darkness rather than covering (the dimmed-picture runs of section 10 were not repeated).
+
+### The 20 cm in newly added ground: looked into, no cause found, nothing adopted
+
+On the phone, the library alone: a map of 2 to 30 s, then the sessions 28 to 60 s and 2 to 83 s added, and the worst
+position of the second session against the estimator's own.
+
+| | places after both | worst position in the second session (each figure one run) |
+|---|---|---|
+| every place added (the way of before) | 310 | 14.3 cm |
+| as built (link weight 400) | 126 to 129 | 23.6, 16.2, 19.6, 13.1 cm |
+| link weight 40 | 128 to 131 | 13.5, 16.1, 15.2, 15.2 cm |
+| link weight 10 | 129 to 130 | 14.8, 20.5 cm |
+| link weight 100 / 4000 | 130 / 131 | 17.2 / 16.4 cm |
+| adding after 2 misses and 0.15 m / after 1 miss | 136 / 189 | 17.6 / 18.4 cm |
+
+The same setting gives 13 to 24 cm from one run to the next, which is as much as the settings differ. So the "20 cm
+against 12" of section 8 was one draw from that spread and not the price of adding fewer places, and no setting is
+repeatably better: nothing is changed. Duplicates stay away in every variant but the last. What the spread itself
+comes from (the order in which the worker meets the pictures, and a reference that drifts with the estimator between
+the two stretches) is not separated yet.
 
 ## What is known to be weak (measured, `docs/QUEST_COMPAT.md`, `docs/TRACKING_ANALYSIS.md`)
 
@@ -555,7 +612,8 @@ the last recognised one, how soon adding begins) against the way of before on th
 - **A map that is added to keeps growing** when the same room is walked again (section 8). A change against that is
   built and not measured (section 9).
 - **After the cameras are covered for some seconds the world is metres out** until the map is recognised again, which
-  took 18 to 29 s (section 10). A remedy is built (section 11) and is not measured on the phone.
+  took 18 to 29 s (section 10). Mended and measured by replay (section 11): back in 1.3 to 2.5 s where the map has the
+  head, 6 to 11 cm out. Not worn.
 - **The estimator takes 32 ms a frame on a warm phone**, not the 25 asked for (section 10).
 - **Multi-room use has not been tested at all**: there is no recording of a walk through several rooms.
 - **Position was lost while walking** (seconds at a time, worn, 18 and 19 November); each loss of more than 2 s makes
