@@ -116,6 +116,19 @@ RUNS = {
     "v_blind_nomap": ("room_map=off" + chr(10) + "test_blind=30,36" + chr(10), "", ""), "v_blind_nomap_old": ("room_map=off" + chr(10) + "recovery=0" + chr(10) + "test_blind=30,36" + chr(10), "", ""),
     "v_blind15": ("room_map=find" + chr(10) + "test_blind=30,45" + chr(10), "", ""), "v_blind15_old": ("room_map=find" + chr(10) + "recovery=0" + chr(10) + "test_blind=30,45" + chr(10), "", ""),
     "v_blind2": ("room_map=find" + chr(10) + "test_blind=50,52" + chr(10), "", ""),      # two seconds: a hand over the cameras
+    # a hand over the cameras as it really is (worn, 21 November): dark pictures with noise, in which the corner
+    # detector goes on finding corners; "starve=0" is the build of that morning, which did not notice
+    "h_hand": ("room_map=find" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
+    "h_handb": ("room_map=find" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
+    "h_hand_old": ("room_map=find" + chr(10) + "starve=0" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
+    "h_hand20": ("room_map=find" + chr(10) + "test_blind=30,50" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
+    "h_hand20_old": ("room_map=find" + chr(10) + "starve=0" + chr(10) + "test_blind=30,50" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
+    "h_hand2": ("room_map=find" + chr(10) + "test_blind=50,52" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
+    "h_hand_nomap": ("room_map=off" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
+    "h_n20": ("room_map=find" + chr(10) + "starve=0" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=20" + chr(10), "", ""),
+    "h_n50": ("room_map=find" + chr(10) + "starve=0" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=50" + chr(10), "", ""),
+    "h_n120": ("room_map=find" + chr(10) + "starve=0" + chr(10) + "test_blind=30,36" + chr(10) + "test_blind_noise=120" + chr(10), "", ""),
+    "h_plain": ("room_map=find" + chr(10), "", ""), "h_plain_old": ("room_map=find" + chr(10) + "starve=0" + chr(10), "", ""),
     "v_plain": ("room_map=find" + chr(10), "", ""), "v_plain_old": ("room_map=find" + chr(10) + "recovery=0" + chr(10), "", ""),      # nothing goes wrong: is anything lost by the new way?
     "x_blind15": ("room_map=find" + chr(10) + "map_glide=1" + chr(10) + "test_blind=30,45" + chr(10), "", ""),
     "x_dim": ("room_map=find" + chr(10) + "test_light=0.6" + chr(10), "", ""), "x_dark": ("room_map=find" + chr(10) + "test_light=0.35" + chr(10), "", ""),

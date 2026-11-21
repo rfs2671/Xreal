@@ -34,8 +34,13 @@ def main():
         v = [r for r in csv.DictReader(open(os.path.join(d, tag + "-vio.csv"))) if r.get("trusted") not in (None, "")]
         tv = np.array([float(r["t"]) for r in v]); feat = np.array([int(r["features"]) for r in v])
         dark = np.where(feat < 25)[0]
-        if not len(dark): print("%s: the cameras were never covered" % tag); continue
-        t0 = tv[dark[0]]; t1 = tv[dark[-1]] + 1.0 / 30
+        # a cover of dark noisy pictures (a hand) leaves the corner count up: then the span is read from the run's settings
+        import re
+        lab = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pixel", "lab.py"), encoding="utf-8").read()
+        m = re.search(r'"%s": \(".*?test_blind=([0-9.]+),([0-9.]+)' % re.escape(tag), lab)
+        if m: t0, t1 = float(m.group(1)), float(m.group(2))
+        elif len(dark): t0 = tv[dark[0]]; t1 = tv[dark[-1]] + 1.0 / 30
+        else: print("%s: the cameras were never covered" % tag); continue
         i = np.clip(np.searchsorted(a[:, 0], b[:, 0]), 1, len(a) - 1); i = np.where(np.abs(a[i - 1, 0] - b[:, 0]) < np.abs(a[i, 0] - b[:, 0]), i - 1, i)
         ok = (np.abs(a[i, 0] - b[:, 0]) < 0.012) & (a[i, 4] > 0)
         t = b[ok, 0]; used = b[ok, 4] > 0; raw = b[ok, 1:4] - a[i[ok], 1:4]

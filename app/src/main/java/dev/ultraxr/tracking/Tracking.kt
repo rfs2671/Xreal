@@ -422,6 +422,8 @@ object Tracking : GlassesLink.Listener {
                     mapGlide = lines.none { it.replace(" ", "") == "map_glide=0" }; restartAfterLoss = lines.any { it.replace(" ", "") == "restart_after_loss=1" }; roomMeshOn = lines.any { it.replace(" ", "") == "room_mesh=1" }
                     testBlind = lines.firstOrNull { it.startsWith("test_blind=") }?.substringAfter('=')?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }?.takeIf { it.size == 2 }?.toDoubleArray()
                     testLight = lines.firstOrNull { it.startsWith("test_light=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: 1.0
+                    testNoise = lines.firstOrNull { it.startsWith("test_blind_noise=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: 0
+                    starveOn = lines.none { it.replace(" ", "") == "starve=0" }
                     if (testBlind != null || testLight != 1.0) log("test: " + (testBlind?.let { "the cameras see nothing from " + it[0] + " to " + it[1] + " s of a replay; " } ?: "") + (if (testLight != 1.0) "pictures at $testLight of their brightness" else ""))
                 } catch (_: Exception) { testBlind = null; testLight = 1.0 }
                 slamRig = slamRigOf(calib)
@@ -564,10 +566,22 @@ object Tracking : GlassesLink.Listener {
     //   test_light=GAIN      every picture is made darker (under 1) or brighter by that factor: a session in another light
     @Volatile private var testBlind: DoubleArray? = null
     @Volatile private var testLight = 1.0
+    //   test_blind_noise=N   the blind pictures are not flat but dark with noise of 0 to N grey levels, new in every
+    //                        picture and each camera its own: what a hand over the cameras gives (worn, 21 November:
+    //                        the corner count stays at 108 while the landmarks go)
+    //   starve=0             the loss is not told from the landmarks (the build of the morning of 21 November)
+    @Volatile private var testNoise = 0
+    @Volatile private var starveOn = true
+    private val testRandom = java.util.Random(7)
     private fun testPictures(left: ByteArray, right: ByteArray) {
         val l = link ?: return; if (!l.replaying) return
         val t = l.replaySeconds; val b = testBlind
-        if (b != null && t >= b[0] && t < b[1]) { java.util.Arrays.fill(left, 40.toByte()); java.util.Arrays.fill(right, 40.toByte()); return }
+        if (b != null && t >= b[0] && t < b[1]) {
+            val n = testNoise
+            if (n <= 0) { java.util.Arrays.fill(left, 40.toByte()); java.util.Arrays.fill(right, 40.toByte()) }
+            else for (a in arrayOf(left, right)) { testRandom.nextBytes(a); for (i in a.indices) a[i] = (12 + (a[i].toInt() and 0xff) % (n + 1)).toByte() }
+            return
+        }
         val g = testLight
         if (g != 1.0) for (a in arrayOf(left, right)) for (i in a.indices) a[i] = ((a[i].toInt() and 0xff) * g).toInt().coerceIn(0, 255).toByte()
     }
@@ -658,15 +672,18 @@ object Tracking : GlassesLink.Listener {
                     val counted = positionConfidence.update(now, vioLandmarks, vioStereoMatches)
                     // Is this state's position fit to be used at all (core/TrackingHealth)? Blind or flying: not from this
                     // very state on, and the count of good landmarks starts again from nothing.
-                    val fit = !recoveryOn || health.update(out[0].toLong(), p, vel, vioFeatures)
+                    val fit = !recoveryOn || (if (starveOn) health.update(out[0].toLong(), p, vel, vioFeatures, vioLandmarks, vioStereoMatches) else health.update(out[0].toLong(), p, vel, vioFeatures))
                     if (recoveryOn && !fit && health.why != dev.ultraxr.core.TrackingHealth.Why.SETTLING) {
-                        if (counted || wasUsing) { val said = "6DoF: position unfit (" + (if (health.why == dev.ultraxr.core.TrackingHealth.Why.BLIND) "the cameras see nothing: $vioFeatures corners" else "the estimator says the head flies") + "): held from this state on"; log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said) }
+                        if (counted || wasUsing) { val said = "6DoF: position unfit (" + (if (health.why == dev.ultraxr.core.TrackingHealth.Why.BLIND) "the cameras see nothing: $vioFeatures corners, $vioLandmarks landmarks, $vioStereoMatches seen by both" else "the estimator says the head flies") + "): held from this state on"; log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said) }
                         positionConfidence.reset()
                     }
                     val trusted = counted && fit
                     // the head at the moment of a picture the map search is waiting on: the estimator need not be in use
                     // yet, only see and not fly (two readings of the map must agree before anything is done with them)
-                    if (slam != 0L && (mapSearching || recovering) && (fit || health.why == dev.ultraxr.core.TrackingHealth.Why.SETTLING)) synchronized(mapPicLock) {
+                    // (and only an estimator that sees, on a head that is worn: lying on a table on 21 November it was
+                    // started afresh every five seconds, and each time the map was handed its wanderings as places)
+                    if (slam != 0L && (mapSearching || recovering) && (fit || health.why == dev.ultraxr.core.TrackingHealth.Why.SETTLING)
+                        && !(holdWhenStill && stillness.still) && (!starveOn || (vioLandmarks >= dev.ultraxr.core.TrackingHealth.SEE_LANDMARKS && vioStereoMatches >= dev.ultraxr.core.TrackingHealth.SEE_STEREO))) synchronized(mapPicLock) {
                         if (mapPicHave && !mapPicReady && Math.abs(out[0].toLong() - mapPicT) < 6_000_000L) { mapPicP = p.copyOf(); mapPicQ = q.copyOf(); mapPicRestoring = recoveryOn && recovering; mapPicReady = true; mapPicLock.notifyAll() }
                     }
                     // Covered cameras, by replay (20 November 2026, night): one second after the pictures came back the

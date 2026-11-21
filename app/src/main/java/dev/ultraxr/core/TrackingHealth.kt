@@ -12,6 +12,13 @@ package dev.ultraxr.core
  *   blind      it tracks fewer than [MIN_FEATURES] corners: nothing it says about position is used, from that state on
  *   flying     it says the head moves faster than [MAX_SPEED], or its position moved between two states as if it
  *              did: nobody walks a room at that speed
+ *   starved    (blind, told another way) it has seen, and now for [STARVED_NS] holds no landmark seen by both cameras
+ *              or under [STARVED_LANDMARKS] landmarks at all (in noise a stray one is matched now and then). Worn, 21 November 2026: a hand over the cameras left the
+ *              count of corners at 108 (the detector finds its corners in the noise of a dark picture) and the
+ *              velocity under 1.2 m/s, so neither rule above fired; the world came back 3.4 and 3.9 m out. The
+ *              landmarks were gone at once. In 1.9 hours of replays of ordinary walking this state never lasted
+ *              longer than 0.63 s (one moment of one walk). Once starved it stays blind until it sees again: [SEE_LANDMARKS] landmarks,
+ *              [SEE_STEREO] of them by both cameras.
  *
  * (A third rule, that the position must move as the velocity says, was tried on the recorded states of 40 replays and
  * thrown out: it called 8 to 14 losses in every 83 seconds of ordinary walking.)
@@ -33,20 +40,31 @@ class TrackingHealth {
 
     private var lastT = 0L; private var lastP: DoubleArray? = null
     private var cleanSinceNs = 0L; private var unfitSinceNs = 0L
+    private var sawSight = false; private var starvedSinceNs = 0L; private var lostSight = false
+    var starvedStates = 0; private set
 
     /** A new session of the estimator (it was started afresh): nothing of the old one counts. */
-    fun reset() { fit = false; why = Why.SETTLING; lastT = 0L; lastP = null; cleanSinceNs = 0L; restartDue = false }
+    fun reset() { fit = false; why = Why.SETTLING; lastT = 0L; lastP = null; cleanSinceNs = 0L; restartDue = false; sawSight = false; starvedSinceNs = 0L; lostSight = false }
 
     fun takeRestart(): Boolean { val r = restartDue; restartDue = false; return r }
 
     /**
      * One state: its time, position and velocity in the estimator's own world, and how many corners it tracks
-     * (negative: the library does not say; then blindness cannot be told and is not judged). Returns whether its
-     * position is fit to be used.
+     * (negative: the library does not say; then blindness cannot be told and is not judged), and how many landmarks
+     * it holds and how many of them both cameras see (negative: not said, not judged). Returns whether its position
+     * is fit to be used.
      */
-    fun update(tNs: Long, p: DoubleArray, v: DoubleArray, features: Int): Boolean {
+    fun update(tNs: Long, p: DoubleArray, v: DoubleArray, features: Int, landmarks: Int = -1, stereo: Int = -1): Boolean {
         var bad = Why.FINE
         if (features in 0 until MIN_FEATURES) { bad = Why.BLIND; blindStates++ }
+        val counts = landmarks >= 0 && stereo >= 0
+        val sees = !counts || (landmarks >= SEE_LANDMARKS && stereo >= SEE_STEREO)
+        if (counts) {
+            if (sees) { sawSight = true; lostSight = false }
+            if (sawSight && (stereo < 1 || landmarks < STARVED_LANDMARKS)) { if (starvedSinceNs == 0L) starvedSinceNs = tNs } else starvedSinceNs = 0L
+            if (starvedSinceNs != 0L && tNs - starvedSinceNs >= STARVED_NS) lostSight = true
+            if (bad == Why.FINE && lostSight) { bad = Why.BLIND; starvedStates++ }
+        }
         val speed = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
         if (bad == Why.FINE && (speed > MAX_SPEED || !speed.isFinite())) { bad = Why.FLYING; flyingStates++ }
         // and by where it says the head is: a step between two states that no head makes
@@ -79,5 +97,9 @@ class TrackingHealth {
         const val MAX_SPEED = 3.0
         const val STABLE_NS = 700_000_000L
         const val RESTART_AFTER_NS = 500_000_000L
+        const val STARVED_NS = 700_000_000L
+        const val STARVED_LANDMARKS = 5
+        const val SEE_LANDMARKS = 8
+        const val SEE_STEREO = 2
     }
 }

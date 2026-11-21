@@ -25,6 +25,26 @@ class TrackingHealthTest {
         assertEquals(0, h.losses); assertEquals(TrackingHealth.Why.FINE, h.why)
     }
 
+    /** Worn, 21 November 2026: a hand over the cameras leaves 108 corners and a believable velocity; only the landmarks go. */
+    @Test fun aHandOverTheCamerasIsToldFromTheLandmarksAndAsksForARestartWhenTheySeeAgain() {
+        val h = TrackingHealth(); val v = doubleArrayOf(0.7, 0.0, 0.0)
+        fun st(i: Int, lm: Int, s: Int) = h.update(i * frame, doubleArrayOf(0.7 * i * frame * 1e-9, 1.5, 0.0), v, 108, lm, s)
+        for (i in 0 until 60) st(i, 60, 25); assertTrue(h.fit)
+        // a short dip, as at second 53 of the walk of 18 November: nothing happens
+        for (i in 60 until 78) assertTrue(st(i, 1, 0)); for (i in 78 until 90) assertTrue(st(i, 40, 20)); assertEquals(0, h.losses)
+        // the hand: unfit 0.7 s on, and it stays so whatever the corners say
+        for (i in 90 until 112) assertTrue(st(i, 0, 0)); for (i in 112 until 240) assertFalse(st(i, 0, 0))
+        assertEquals(TrackingHealth.Why.BLIND, h.why); assertEquals(1, h.losses); assertFalse(h.takeRestart())
+        // a stray landmark is not sight
+        assertFalse(st(240, 3, 1)); assertFalse(h.takeRestart())
+        // the hand is gone: a fresh start is asked for, once
+        assertFalse(st(241, 30, 12)); assertTrue(h.takeRestart()); assertFalse(h.takeRestart())
+        h.reset()
+        // the fresh estimator has no landmarks at first: that is not a loss
+        for (i in 242 until 262) st(i, 0, 0); assertFalse(h.takeRestart()); assertEquals(TrackingHealth.Why.SETTLING, h.why)
+        for (i in 262 until 300) st(i, 40, 20); assertTrue(h.fit)
+    }
+
     @Test fun coveredCamerasAreUnfitAtTheFirstStateAndAskForARestartWhenTheySeeAgain() {
         val h = TrackingHealth(); assertTrue(walk(h, 0, 60))
         // the very first state without corners

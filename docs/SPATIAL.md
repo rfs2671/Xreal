@@ -584,6 +584,40 @@ As first built, the health gate did its part and the map did not. Two faults wer
 Not measured: any of this worn; a loss in a place the map has never seen (then it is the no-map row); a loss by fast
 motion or darkness rather than covering (the dimmed-picture runs of section 10 were not repeated).
 
+### Worn, 21 November 2026: it FAILED, and why (`C:/uvio/vio_bench/worn1121`, `hand1`)
+
+Worn on the S21 Ultra, a hand over the cameras twice. Position was hidden 0.7 s after the hand went up (by the older
+count of landmarks, not by the new judge), and when the hand came away the estimator was believed at once: the world
+was 3.88 m and 3.38 m out, and put back by the map 1.8 s and 1.4 s later. The judge of this section never fired:
+under a real hand the pictures are dark and noisy, the corner detector goes on finding 108 corners in them, and the
+velocity stayed under 1.2 m/s. The flat grey pictures of the replays above give no corners, which no worn cover does.
+So the table above measures a cover that does not occur, and is not evidence for worn use.
+
+Also seen: lying on a table the estimator was started afresh every five seconds, and the map search (given pictures
+of its own that morning) handed each wandering to the map as places: 316 to 421 places while nothing moved.
+
+Mended:
+
+- The loss is told from the landmarks as well (`TrackingHealth`, "starved"): none seen by both cameras, or under
+  5 at all, for 0.7 s, after it has once seen; blind from then until 8 landmarks, 2 by both. `starve=0` is the way of
+  that morning. In 1.9 hours of earlier replays of walking that state never lasted over 0.63 s.
+- The map is given pictures only from an estimator that sees, on glasses that are not lying still.
+- The replay's cover can be what a hand gives: `test_blind_noise=20` (dark, noise of 20 grey levels, new in every
+  picture). It gives 108 corners, 0 to 2 landmarks, under 1 m/s: what was seen worn.
+
+By replay with that cover (the 83 s walk, S21 Ultra):
+
+| cover | | still used while blind | in use again | how far out then | worst afterwards |
+|---|---|---|---|---|---|
+| 6 s, map | the morning's build (`starve=0`), twice | 0.5 s, 0.7 s | 1.2 s | 129 cm, 136 cm | 169 cm, 174 cm; right after 21 s, 19 s |
+| | now, twice | 0.6 s, 0.5 s | 1.6 s, 1.7 s | 8 cm, 7 cm | 9 cm, 8 cm |
+| 20 s, map | now | 0.6 s | 2.1 s | 5 cm | 6 cm |
+| 2 s, map | now | 0.5 s | 2.4 s | 7 cm | 9 cm |
+| 6 s, no map | now | 0.6 s | 1.6 s | 155 cm | 156 cm, never right |
+
+Nothing going wrong: no loss called, no restart, the path differs from `starve=0` by 0.7 cm median (worst 4.1).
+For the half second before the loss is told the head is shown up to 12 cm wrong. NOT worn again yet.
+
 ### The 20 cm in newly added ground: looked into, no cause found, nothing adopted
 
 On the phone, the library alone: a map of 2 to 30 s, then the sessions 28 to 60 s and 2 to 83 s added, and the worst
