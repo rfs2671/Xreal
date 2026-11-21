@@ -666,6 +666,7 @@ object Tracking : GlassesLink.Listener {
                 // The estimator restarted (by itself or on request): its world frame is new.
                 if (out[20] != lastResetCount) {
                     if (lastResetCount >= 0) {
+                        log("6DoF: the estimator began afresh (start " + out[20].toLong() + ", " + out[21].toLong() + " of them its own doing)")
                         head.onVioEpochReset(); slam.let { if (it != 0L) Native.slamNewEpoch(it) }
                         health.reset(); recovering = true; stableSinceNs = 0L; mapRestoreFix = null; mapSearching = true; synchronized(mapAlign) { mapAlign.restoreClear() }
                         if (seesAgainNs == 0L || now - seesAgainNs > 5_000_000_000L) seesAgainNs = now

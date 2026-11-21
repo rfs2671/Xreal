@@ -459,8 +459,9 @@ class DesktopSession(private val activity: Activity) {
     /** The shelf is one row of marks, the same whether or not windows are open. */
     private fun shelfCount() = if (panelShown) tiles.size else homeItems.size
     /** The tile of the panel, or the mark of the dock, a ray is on. */
+    private val dockGlide = Glide(1.0); private var dockShown = true
     private fun shelfHit(o: DoubleArray, dir: DoubleArray, anchor: DoubleArray): Int? =
-        if (panelShown) Home.hit(tiles, o, dir, anchor, desktop.followAnchor.yaw) else Shelf.hit(o, dir, anchor, desktop.followAnchor.yaw, shelfFirst, homeItems.size)
+        if (!panelShown && !dockShown) null else if (panelShown) Home.hit(tiles, o, dir, anchor, desktop.followAnchor.yaw) else Shelf.hit(o, dir, anchor, desktop.followAnchor.yaw, shelfFirst, homeItems.size)
     /** The first mark in view: the row slides when the focus passes its end ([Shelf.first]). */
     private var shelfFirst = 0
     /** The page's picture is given the window's shape (after a free sizing, or standing a window up). */
@@ -1138,6 +1139,14 @@ class DesktopSession(private val activity: Activity) {
         val first = slide.toward(shelfFirst.toDouble(), nowNs, Motion.FOCUS_NS, still)
         val on = if (fo is Focus.Shelf && items.isNotEmpty()) fo.index.coerceIn(0, items.size - 1) else -1
         val marks = ArrayList<RenderMark>(n + 1); var name: Sprite? = null; var nameYaw = 0.0
+        // Worn, 21 November 2026: "bottom nav menu is too high overlaping with other screens". It cannot go lower (the
+        // name under a mark ends where the picture does), so it steps aside: while a window comes down over the dock
+        // the dock is not drawn, unless it is in use (the focus or the hand is on it) or looked down at.
+        val reach = Shelf.SPACING * (n - 1) / 2 + Shelf.MARK_ANGLE * 2.2
+        val covered = desktop.visible.any { w -> w.id != desktop.fullscreenId && w.shownPitch() - Math.atan(w.shownBelow() / w.shownDistance()) < Shelf.TOP &&
+            Math.abs(Geometry.wrap(desktop.worldYaw(w) - yaw)) < reach + Math.atan(w.shownWidth() / 2 / w.shownDistance()) }
+        dockShown = !covered || fo is Focus.Shelf || handTarget is Focus.Shelf || Geometry.pitchOf(headForward(head)) < DOCK_LOOK
+        val show = dockGlide.toward(if (dockShown) 1.0 else 0.0, nowNs, Motion.FOCUS_NS, still).toFloat()
         for ((i, item) in items.withIndex()) {
             val slot = i - first
             val swell = swells.getOrPut(i) { Glide(if (i == on) 1.0 else 0.0) }.toward(if (i == on) 1.0 else 0.0, nowNs, Motion.FOCUS_NS, still)
@@ -1147,12 +1156,12 @@ class DesktopSession(private val activity: Activity) {
             val at = Geometry.wrap(yaw + Shelf.yawOffset(slot, n))
             // a mark that has a window says so: a Tide dot under it, hollow while the window is put away
             val has = desktop.windows.filter { it.origin == item.title }; val running = if (has.isEmpty()) 0 else if (has.any { !it.minimized }) 2 else 1
-            marks += RenderMark(at, 1 + (Shelf.FOCUS_SCALE - 1) * swell, markPicture(item, i == on, running), alpha)
-            if (i == on) { name = namePicture(item.title); nameYaw = at }
+            if (show > 0.02f) marks += RenderMark(at, 1 + (Shelf.FOCUS_SCALE - 1) * swell, markPicture(item, i == on, running), alpha * show)
+            if (i == on && show > 0.5f) { name = namePicture(item.title); nameYaw = at }
         }
         val more = n - 0.4      // a dot a little past the last mark where the row goes on
         return RenderShelf(marks, name, nameYaw, statusPicture(nowNs, head), yaw,
-            if (shelfFirst > 0) Geometry.wrap(yaw + Shelf.yawOffset(-0.6, n)) else Double.NaN, if (shelfFirst + n < items.size) Geometry.wrap(yaw + Shelf.yawOffset(more, n)) else Double.NaN)
+            if (shelfFirst > 0 && show > 0.5f) Geometry.wrap(yaw + Shelf.yawOffset(-0.6, n)) else Double.NaN, if (shelfFirst + n < items.size && show > 0.5f) Geometry.wrap(yaw + Shelf.yawOffset(more, n)) else Double.NaN, alpha = show)
     }
 
     // ---- pictures drawn with the 2D canvas. Everything is light on a transparent ground: on the glasses black is
@@ -1258,6 +1267,8 @@ class DesktopSession(private val activity: Activity) {
         /** How far beside a window the hand's ray still has hold of it. */
         private val HAND_BAND = Math.toRadians(3.5)
         private const val HOVER_NS = 180_000_000L
+        /** Looking this far down brings back a dock that stepped aside. */
+        private val DOCK_LOOK = Math.toRadians(-7.0)
         private const val PHONE_HAND_NS = 1_500_000_000L
         private const val PUSH_FREE_M = 0.03
         private const val PUSH_GAIN = 4.0

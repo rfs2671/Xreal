@@ -50,7 +50,9 @@ class RenderShelf(val marks: List<RenderMark>, val name: Sprite?, val nameYaw: D
     /** The home panel ([Home]), shown in the shelf's place when no window is open, and the light round its tile in focus: where its middle is on the panel (metres right and up) and how large. */
     val panel: Sprite? = null, val ring: Sprite? = null, val ringX: Double = 0.0, val ringY: Double = 0.0, val ringW: Double = 0.0, val ringH: Double = 0.0, val panelAlpha: Float = 1f,
     /** Things of the home that stand in the room by themselves (the covers of its wall, the light behind the one in focus). */
-    val pieces: List<RenderPiece> = emptyList())
+    val pieces: List<RenderPiece> = emptyList(),
+    /** The dock as a whole, 0 when it has stepped aside for a window. */
+    val alpha: Float = 1f)
 
 /**
  * A picture standing by itself in front of the home's flat picture: its middle [x] to the right of and [y] above the
@@ -341,8 +343,8 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         if (s.marks.isNotEmpty()) {
             val dw = 2 * Shelf.DISTANCE * Math.tan(Shelf.SPACING * (s.marks.size - 1) / 2 + Shelf.MARK_ANGLE * 2.2); val dh = 2 * Shelf.DISTANCE * Math.tan(Shelf.MARK_ANGLE * Shelf.DOCK)
             Geometry.modelMatrix(Geometry.centre(f.anchor, s.yaw, Shelf.PITCH, Shelf.DISTANCE * 1.02), s.yaw, Shelf.PITCH, dw, dh, model)
-            draw(progFlat, 0, 0, vp, ident, dw, dh, dh / 2, PANE, 0.30f)
-            draw(progFlat, 0, 0, vp, ident, dw, dh, dh / 2, WHITE, 0.30f, edge = Sight.metres(Math.toRadians(0.045), Shelf.DISTANCE).toFloat())
+            draw(progFlat, 0, 0, vp, ident, dw, dh, dh / 2, PANE, 0.30f * s.alpha)
+            draw(progFlat, 0, 0, vp, ident, dw, dh, dh / 2, WHITE, 0.30f * s.alpha, edge = Sight.metres(Math.toRadians(0.045), Shelf.DISTANCE).toFloat())
         }
         s.status?.let { sprite(it, Geometry.centre(f.anchor, s.yaw, Shelf.STATUS_PITCH, Shelf.DISTANCE), s.yaw, Shelf.STATUS_PITCH, Sight.STRIP * Sight.metres(Sight.BODY, Shelf.DISTANCE), 1f, 0, vp) }
         for (m in s.marks) {
