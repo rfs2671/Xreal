@@ -48,6 +48,9 @@ class DesktopSession(private val activity: Activity) {
     private val pointer by lazy { HandPointer(Tracking.handOptions.pressM, Tracking.handOptions.releaseM) }
     /** A window pinched on its handle and carried: it follows the hand while the fingers hold, this far from the ray. */
     private var handTargetNs = 0L; private var handPointed = true
+    @Volatile private var phoneTouchNs = 0L
+    /** The phone's screen was touched just now. */
+    fun phoneTouched() { phoneTouchNs = System.nanoTime() }
     private var handGrab = -1; private var grabYaw = 0.0; private var grabPitch = 0.0; private var handDownDir: DoubleArray? = null
     /** How far the hand was from the head when it took the window up, and how far the window stood then (asked for 21 November 2026: push a held window away, pull it nearer). */
     private var grabReach = -1.0; private var grabDistance = 0.0
@@ -824,7 +827,10 @@ class DesktopSession(private val activity: Activity) {
 
     private fun hands(nowNs: Long, head: HeadTracker.State, origin: DoubleArray, anchor: DoubleArray, tracked: Boolean) {
         val made = madeUpHand(nowNs, head)
-        val aim = if (tracked || made != null) pointer.update(nowNs, made ?: Tracking.handJoints, head.pose.p, head.pose.q) else null
+        // A hand that is working the phone is not pointing at the desktop (worn, 21 November 2026: the hand that held
+        // the phone, low in the cameras' view, was followed and read as pinching, and moved the focus about).
+        val onPhone = made == null && nowNs - phoneTouchNs < PHONE_HAND_NS
+        val aim = if (onPhone) { pointer.reset(); null } else if (tracked || made != null) pointer.update(nowNs, made ?: Tracking.handJoints, head.pose.p, head.pose.q) else null
         if (nowNs - handLogNs > 5_000_000_000L) {      // every five seconds in which a hand was seen: what the pointer makes of it
             if (handSeenFrames > 0) Tracking.log("desktop: a hand in $handSeenFrames frames, ${pointer.results} results and ${pointer.pinches} pinches so far" +
                 (aim?.let { String.format(Locale.US, ", %s hand, fingertips %.0f mm apart, %s, on %s", if (it.right) "right" else "left", it.gapM * 1000, if (it.pinching) "pinching" else "open", handTarget?.describe() ?: "nothing") } ?: ""))
@@ -1252,6 +1258,7 @@ class DesktopSession(private val activity: Activity) {
         /** How far beside a window the hand's ray still has hold of it. */
         private val HAND_BAND = Math.toRadians(3.5)
         private const val HOVER_NS = 180_000_000L
+        private const val PHONE_HAND_NS = 1_500_000_000L
         private const val PUSH_FREE_M = 0.03
         private const val PUSH_GAIN = 4.0
         /** A pinch on a window's handle becomes carrying the window once the hand's ray has turned this far. */

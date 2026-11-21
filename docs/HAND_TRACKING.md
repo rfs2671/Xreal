@@ -523,3 +523,19 @@ Checked with the made-up hand only (S21 Ultra, glasses on the table): pinched 2 
 and carried 8 degrees up, the window was taken up and put down; pinched outside the top right corner and drawn
 out, it was sized. Not worn. Not looked into yet: the shaky anchoring, and why only 9 pinches were counted
 (recording `live-1795294419621.uxrec`, on the phone, is there for both).
+
+### The same session replayed (21 November 2026, evening): the pinches were there
+
+`worn1121b.uxrec` replayed twice on the S21 Ultra. The right hand was found in 68 to 69 % of the results while it
+was up (23 results a second in replay). The pinch rule as it stands gives 9 and 10 pinches, held 14.6 and 15.3 s
+in all: the pinches were made and held (dragging), and the desktop did nothing with them. So the fault was in
+what a pinch does, not in seeing it; that is what the band round the windows and the handle rule above change.
+Other thresholds (38/48, 40/50, 42/52 mm, two results in a row) give the same 9 to 11 on this recording and no
+gain on the recordings of 17 and 19 November: not changed.
+
+Seen in the pictures: a dim room, the cameras exposed for a doorway full of daylight and four spotlights, the
+hand and a dark sleeve in front of them, 39 to 50 degrees to the right of the cameras' axis. A hand held in a
+pinch for over a second, seen from behind, measures 24 to 41 mm between the fingertips. Brightening the hand
+tracker's pictures (`hand_tone=55`: found in 60 and 67 %; `stretch=1`: 73 %, one run) is no repeatable gain.
+At 45 s a hand low in the picture holding something bright (probably the phone) was followed and read as 38 to
+39 mm: the hand is now not a pointer for 1.5 s after any touch on the phone's screen.

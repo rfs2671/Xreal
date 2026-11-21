@@ -620,6 +620,7 @@ class DesktopActivity : Activity() {
         private fun span(e: MotionEvent) = hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
     }
 
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean { if (::session.isInitialized) session.phoneTouched(); return super.dispatchTouchEvent(ev) }
     /** For the bench (debug builds): a window asked for from adb while the desktop is up. */
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
