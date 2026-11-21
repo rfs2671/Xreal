@@ -47,6 +47,7 @@ class DesktopSession(private val activity: Activity) {
     /** The hand as a pointer: the arm's ray and the measured pinch, as in the games ([HandPointer]). */
     private val pointer by lazy { HandPointer(Tracking.handOptions.pressM, Tracking.handOptions.releaseM) }
     /** A window pinched on its handle and carried: it follows the hand while the fingers hold, this far from the ray. */
+    private var handTargetNs = 0L; private var handPointed = true
     private var handGrab = -1; private var grabYaw = 0.0; private var grabPitch = 0.0; private var handDownDir: DoubleArray? = null
     /** How far the hand was from the head when it took the window up, and how far the window stood then (asked for 21 November 2026: push a held window away, pull it nearer). */
     private var grabReach = -1.0; private var grabDistance = 0.0
@@ -874,17 +875,24 @@ class DesktopSession(private val activity: Activity) {
         // The ray starts at the hand, lower than the eyes, so on its way to a window it can pass through the dock (and
         // the other way about): of a mark and a window that both lie on it, the hand is on the nearer.
         var tile = shelfHit(o, dir, anchor) ?: -1
-        var hit = desktop.hit(o, dir, anchor)
+        var hit = desktop.hit(o, dir, anchor, HAND_BAND)
         if (tile >= 0) {
             val yaw = desktop.followAnchor.yaw; val pitch = if (panelShown) Home.PITCH else Shelf.PITCH; val far = if (panelShown) Home.DISTANCE else Shelf.DISTANCE
             val t = Geometry.planeHit(o, dir, Geometry.centre(anchor, yaw, pitch, far), yaw, pitch)?.get(2) ?: 0.0
             if (hit != null && hit.distance < t) tile = -1 else { hit = null; reach = t; onYaw = yaw; onPitch = pitch }
         }
         if (hit != null) { reach = hit.distance; onYaw = desktop.worldYaw(hit.window); onPitch = hit.window.shownPitch() }
+        // The ray's end is always shown, on nothing too (worn, 21 November 2026: beside a window the pointer was gone,
+        // and with it any sign that the hand was still followed): as far off as the nearest window, facing the hand.
+        else if (tile < 0) { reach = desktop.visible.minOfOrNull { it.shownDistance() } ?: 2.0; onYaw = Geometry.yawOf(dir); onPitch = Geometry.pitchOf(dir) }
         show()
-        val target: Focus? = if (hit != null) desktop.focusAt(hit) else if (tile >= 0) Focus.Shelf(tile) else null
-        // the ray moves the focus when it comes over something new, not while it rests there: the d-pad may have moved on since
-        if (target != handTarget) { handTarget = target; if (target != null && !handDown && desktop.point(target)) changed() }
+        // beside a window the focus stays on whatever part of that window it was on
+        val target: Focus? = if (hit != null) (if (hit.frame && desktop.focus.windowId == hit.window.id) desktop.focus else desktop.focusAt(hit)) else if (tile >= 0) Focus.Shelf(tile) else null
+        // The ray moves the focus when it comes over something new, not while it rests there: the d-pad may have moved on
+        // since. And only once it has rested there a moment: worn, the focus went from the handle to the window to the page
+        // to the dock and back with every tremble of the arm ("stuff keep changing").
+        if (target != handTarget) { handTarget = target; handTargetNs = nowNs; handPointed = false }
+        if (!handPointed && !handDown && nowNs - handTargetNs >= HOVER_NS) { handPointed = true; if (target != null && desktop.point(target)) changed() }
         if (hit != null && hit.onPage) {
             cursors[hit.window.id] = doubleArrayOf(hit.u, hit.v)
             if (hit.window.kind == SETTINGS && !handDown && desktop.focus is Focus.Page) settings.point(hit.v)      // the row under the ray is the one in focus
@@ -899,7 +907,8 @@ class DesktopSession(private val activity: Activity) {
             }
         } else if (pinching && handDown) {
             val d = handDownHit; val start = handCorner; val from = handDownDir
-            if (d != null && d.onHandle && from != null && Math.acos((from[0] * dir[0] + from[1] * dir[1] + from[2] * dir[2]).coerceIn(-1.0, 1.0)) > GRAB_ANGLE) {
+            // by the handle, or by its edge anywhere round it
+            if (d != null && (d.onHandle || (d.frame && d.corner < 0)) && from != null && Math.acos((from[0] * dir[0] + from[1] * dir[1] + from[2] * dir[2]).coerceIn(-1.0, 1.0)) > GRAB_ANGLE) {
                 // pinched on the handle and carried off: the window comes along, and stays where the fingers let it go
                 desktop.beginDrag(d.window.id); handGrab = d.window.id; grabReach = -1.0
                 grabYaw = Geometry.wrap(desktop.worldYaw(d.window) - Geometry.yawOf(dir)); grabPitch = d.window.pitch - Geometry.pitchOf(dir)
@@ -911,9 +920,11 @@ class DesktopSession(private val activity: Activity) {
         } else if (!pinching && handDown) {
             val d = handDownHit
             if (d != null && d.handleWord != null) {
-                // a pinch on a word of the handle is Select on that word, if the hand is still on it when it lets go
+                // A pinch on a word of the handle is Select on that word. The hand need not still be on the word when it
+                // lets go, only not on something else (opening the fingers moves the ray; carried further than that, the
+                // pinch took the window up instead and never comes here).
                 val word = Focus.Handle(d.window.id, d.handleWord)
-                if (hit != null && hit.window.id == d.window.id && hit.handleWord == d.handleWord) { desktop.point(word); if (desktop.focus == word) { press(FocusKey.SELECT); moveByHand = desktop.focus is Focus.Moving } }
+                if (hit == null || hit.window.id == d.window.id) { desktop.point(word); if (desktop.focus == word) { press(FocusKey.SELECT); moveByHand = desktop.focus is Focus.Moving } }
             }
             else if (d != null && handCorner != null) { if (d.onPage) pageTap(d.window.id, d.u, d.v) }
             else if (d != null && d.onPage) { val c = cursors[d.window.id] ?: doubleArrayOf(d.u, d.v); pageTouch(d.window.id, MotionEvent.ACTION_UP, c[0], c[1]); handDownHit = null }
@@ -1238,6 +1249,9 @@ class DesktopSession(private val activity: Activity) {
         private val ZERO = doubleArrayOf(0.0, 0.0, 0.0)
         /** A pinch on a corner becomes a drag once the hand's ray has moved this far across the window, metres. */
         private const val CORNER_DRAG_M = 0.03
+        /** How far beside a window the hand's ray still has hold of it. */
+        private val HAND_BAND = Math.toRadians(3.5)
+        private const val HOVER_NS = 180_000_000L
         private const val PUSH_FREE_M = 0.03
         private const val PUSH_GAIN = 4.0
         /** A pinch on a window's handle becomes carrying the window once the hand's ray has turned this far. */

@@ -499,3 +499,27 @@ No hand was in front of the cameras in any of this: it measures rates, not track
 
 Bench: `am start ... --ez desktop true --ez automation true --ei open_shelf N` opens shelf app N in the running
 desktop (debug builds).
+
+## Worn again, 21 November 2026 (afternoon): "doesn't do anything", and what was changed
+
+Two minutes worn, one to six windows. Cameras 60 pictures a second throughout, no tracking loss. The right hand
+was followed (about 16 results a second) and 9 pinches were counted; none moved, sized or closed a window, and
+the focus changed dozens of times between the close word, the window, the page and the dock. The wearer:
+"hand tracking is worst i tested so far. doesnt do anything, 1cm off the actual screen 0 tracking (which makes
+it useless for screen size) stuff keep changing, 6dof anchoring is shkey at best".
+
+Causes found in the code, and changed:
+
+- A ray that just missed a window met nothing: the pointer's end was not drawn, and a corner could only be taken
+  within 4 to 9 cm of it. The hand now has a band of 3.5 degrees round every window (`Desktop.hit(..., band)`,
+  `WindowHit.frame`): pinched there and carried, the window moves; pinched at a corner of the band, it is sized.
+  The ray's end is drawn on nothing too.
+- The ray moved the focus the instant it crossed anything. It now has to rest 0.18 s on a thing first, and beside
+  a window the focus stays on the part of the window it was on.
+- A pinch on a word of the handle counted only if the ray was still on that word when the fingers opened. It now
+  counts unless the ray has gone to another window.
+
+Checked with the made-up hand only (S21 Ultra, glasses on the table): pinched 2 degrees beside the right edge
+and carried 8 degrees up, the window was taken up and put down; pinched outside the top right corner and drawn
+out, it was sized. Not worn. Not looked into yet: the shaky anchoring, and why only 9 pinches were counted
+(recording `live-1795294419621.uxrec`, on the phone, is there for both).

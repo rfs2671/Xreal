@@ -16,6 +16,26 @@ import org.junit.Test
 class DesktopTest {
     private val origin = doubleArrayOf(0.0, 0.0, 0.0)
 
+    @Test fun theHandStillHasAWindowJustBesideItByItsEdgeOrItsCorner() {
+        val d = Desktop(); val w = d.add("A", "https://a.example")!!
+        val band = Math.toRadians(3.5); val out = 0.03      // 3 cm outside the window
+        fun ray(x: Double, y: Double) = doubleArrayOf(x, y, -w.distance)
+        // beside the right edge at half height: nothing without the band, the window's edge with it
+        assertNull(d.hit(origin, ray(w.width / 2 + 0.2, 0.0), origin))
+        val edge = d.hit(origin, ray(w.width / 2 + out, 0.0), origin, band)!!
+        assertTrue(edge.frame); assertEquals(-1, edge.corner); assertTrue(!edge.onPage)
+        // above the top edge: the edge too, and not a touch on the page
+        val above = d.hit(origin, ray(0.0, w.height / 2 + out), origin, band)!!
+        assertTrue(above.frame); assertTrue(!above.onPage); assertEquals(-1, above.corner)
+        // outside each corner: that corner
+        assertEquals(1, d.hit(origin, ray(w.width / 2 + out, w.height / 2 + out), origin, band)!!.corner)
+        assertEquals(0, d.hit(origin, ray(-w.width / 2 - out, w.height / 2 + out), origin, band)!!.corner)
+        assertEquals(3, d.hit(origin, ray(w.width / 2 + out, -w.height / 2 - out), origin, band)!!.corner)
+        // the page itself is still the page, and far beside it there is nothing
+        assertTrue(d.hit(origin, ray(0.0, 0.0), origin, band)!!.onPage)
+        assertNull(d.hit(origin, ray(w.width / 2 + 0.5, 0.0), origin, band))
+    }
+
     @Test fun aWindowStraightAheadIsHitInItsCentreAndMissedBesideIt() {
         val d = Desktop(); val w = d.add("A", "https://a.example")!!
         val h = d.hit(origin, Geometry.direction(0.0, 0.0), origin)!!

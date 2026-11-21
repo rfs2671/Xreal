@@ -114,9 +114,11 @@ class WindowHit(val window: DesktopWindow, val u: Double, val v: Double, val dis
     /** Below the page, where the handle's words are (only the window in focus has them); [handleWord] is the word, null between and beside them. */
     val onHandle: Boolean = false, val handleWord: HandleWord? = null,
     /** The corner of the page the ray has hold of, for sizing by dragging: 0 top left, 1 top right, 2 bottom left, 3 bottom right, -1 none. */
-    val corner: Int = -1) {
+    val corner: Int = -1,
+    /** Beside the window, within the hand's band round it: nothing is there to touch, but the window can be taken hold of. */
+    val frame: Boolean = false) {
     /** On the page itself, where a press is a touch. */
-    val onPage: Boolean get() = !onHandle && u in 0.0..1.0
+    val onPage: Boolean get() = !onHandle && !frame && u in 0.0..1.0
 }
 
 /**
@@ -450,8 +452,26 @@ class Desktop {
     fun worldYaw(w: DesktopWindow) = if (w.follow) Geometry.wrap(w.shownYaw() + followAnchor.yaw) else w.shownYaw()
 
     /** The nearest visible window the ray hits (its page, a corner's bracket, or the handle under the one in focus), or null. */
-    fun hit(origin: DoubleArray, dir: DoubleArray, anchor: DoubleArray): WindowHit? {
+    /**
+     * [band] (an angle, 0 for none) is for the hand. Worn, 21 November 2026: "1cm off the actual screen 0 tracking
+     * (which makes it useless for screen size)". A ray that just missed a window met nothing, so the pointer went
+     * out exactly where a window is taken by its edge or corner. With a band the window is also met that far beside
+     * it, all round ([WindowHit.frame]); a ray that is on a page or a word of some window is on that, before any band.
+     */
+    fun hit(origin: DoubleArray, dir: DoubleArray, anchor: DoubleArray, band: Double = 0.0): WindowHit? {
         var best: WindowHit? = null
+        fun take(h: WindowHit) { val b = best; if (b == null || (b.frame && !h.frame) || (b.frame == h.frame && h.distance < b.distance)) best = h }
+        if (band > 0.0) for (w in visible) {
+            if (w.id == fullscreenId) continue
+            val yaw = worldYaw(w); val pitch = w.shownPitch()
+            val h = Geometry.planeHit(origin, dir, Geometry.centre(anchorFor(w, anchor), yaw, pitch, w.shownDistance()), yaw, pitch) ?: continue
+            val ww = w.shownWidth(); val wh = w.shownHeight(); val x = h[0]; val y = h[1]
+            val edge = Sight.metres(band, w.shownDistance()); val below = if (w.id == handleId) w.shownHandleGap() + w.shownHandleHeight() else 0.0
+            if (abs(x) > ww / 2 + edge || y > wh / 2 + edge || y < -wh / 2 - below - edge) continue
+            // a corner is the band's own corner and as much of the window's edge beside it
+            val side = abs(x) >= ww / 2 - edge * 0.5; val top = y >= wh / 2 - edge * 0.5; val bottom = y <= -wh / 2 + edge * 0.5 && (abs(x) > ww / 2 || y >= -wh / 2)
+            take(WindowHit(w, x / ww + 0.5, 0.5 - y / wh, h[2], corner = if (side && (top || bottom)) (if (top) 0 else 2) + (if (x > 0) 1 else 0) else -1, frame = true))
+        }
         for (w in visible) {
             val yaw = worldYaw(w); val pitch = w.shownPitch()
             val c = Geometry.centre(anchorFor(w, anchor), yaw, pitch, w.shownDistance())
@@ -468,7 +488,7 @@ class Desktop {
             val u = x / ww + 0.5; val v = 0.5 - y / wh
             val hitNow = WindowHit(w, u, v, h[2], onHandle,
                 if (onHandle && y <= -wh / 2 - gap) HandleStrip.wordAt(handleU(w, x)) else null, if (byCorner) (if (y > 0) 0 else 2) + (if (x > 0) 1 else 0) else -1)
-            if (best == null || hitNow.distance < best.distance) best = hitNow
+            take(hitNow)
         }
         return best
     }
