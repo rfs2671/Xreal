@@ -620,6 +620,11 @@ class DesktopActivity : Activity() {
         private fun span(e: MotionEvent) = hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
     }
 
+    /** For the bench (debug builds): a window asked for from adb while the desktop is up. */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) HomeApps.all.getOrNull(intent.getIntExtra(EXTRA_OPEN_SHELF, -1))?.let { session.open(it) }
+    }
     private var padMode = 0; private var padText: TextView? = null; private var moveWord: TextView? = null; private var sizeWord: TextView? = null; private var fullWord: TextView? = null
     companion object { const val PAD_WORDS = "Slide to point  \u00b7  tap to select\nTwo fingers to scroll\nDouble-tap and hold to drag"; const val EXTRA_AUTOMATION = "automation"; const val EXTRA_STEREO_PREVIEW = "stereo_preview"; const val EXTRA_OPEN_SHELF = "open_shelf" }
 }

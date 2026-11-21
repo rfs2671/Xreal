@@ -472,3 +472,30 @@ OpenXR games), `tools/tracking/mono_hands_trial.py` (the MediaPipe trial), `docs
 
 Not stated here because I have not measured it: the cameras' field of view in degrees. It follows from the
 calibration file on the phone (`files/factory_config.json`).
+
+## Cameras losing pictures under the desktop, 21 November 2026: found and fixed
+
+Measured with the glasses plugged in and lying on a table (S21 Ultra), from the new "camera:" line the app
+writes every five seconds (pictures and pairs a second, pictures cut short, the reader's own work).
+
+| | pictures / pairs a second |
+|---|---|
+| no desktop | 60 / 30 |
+| desktop, four windows, before | 55 / 25 |
+| desktop, four windows, camera read first | 60 / 30 |
+| desktop, six windows (two YouTube/Xbox, four web), camera read first | 60 / 30 |
+
+No picture was ever cut short and no read timed out: whole pictures went missing. The glasses throw a picture
+away when the phone does not fetch the last one in time, and the thread that fetches them ran at ordinary
+priority behind the windows' rendering. It now runs at priority -16 (`UvcStream.PRIORITY`, `cam_priority=` in
+`vio_options.txt`). The worn session of the morning (37 to 41 pictures a second with six windows) was also
+writing a 6.8 GB recording on that same thread; that case was not re-run.
+
+Not fixed: with six windows the hand tracker itself takes 36 to 125 ms a result (21 to 26 ms with four), about
+15 results a second. Raising the trackers' priority (`work_priority=-8`) gave 29 to 58 ms in a single run and
+more late display frames; the battery ran out before a second run, so it is not adopted. The six-window run
+with the old camera priority could not be made either (the phone stopped powering the glasses at 10 %).
+No hand was in front of the cameras in any of this: it measures rates, not tracking of a real hand.
+
+Bench: `am start ... --ez desktop true --ez automation true --ei open_shelf N` opens shelf app N in the running
+desktop (debug builds).

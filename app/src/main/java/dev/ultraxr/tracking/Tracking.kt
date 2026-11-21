@@ -325,6 +325,15 @@ object Tracking : GlassesLink.Listener {
             // shipped values, so a replay of a recording can compare settings over adb without a new build.
             try {
                 val lines = File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()
+                // Measured 21 November 2026, glasses on the table, desktop open: the cameras gave 55 pictures a second
+                // of 60 (25 pairs of 30) with four windows, because the reader stood in line behind the windows' own
+                // work; read ahead of them it gives 60, with six windows too ("cam_priority=0": as before). The hand
+                // tracker was still slow with six windows (36 to 125 ms a result). Putting the trackers first as well
+                // ("work_priority=-8") gave 29 to 58 ms in the one run there was battery for, with more late display
+                // frames (12 a second against 8): not shown to be better, so it is off until it is.
+                dev.ultraxr.usb.UvcStream.PRIORITY = lines.firstOrNull { it.startsWith("cam_priority=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: -16
+                workPriority = lines.firstOrNull { it.startsWith("work_priority=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: WORK_PRIORITY
+                try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
                 holdWhenStill = lines.none { it.replace(" ", "") == "hold_when_still=0" }
                 denseWalls = lines.none { it.replace(" ", "") == "dense_walls=0" }
                 val changed = ArrayList<String>()
@@ -641,6 +650,7 @@ object Tracking : GlassesLink.Listener {
     val trace = VioTrace { log(it) }
 
     private fun vioLoop() {
+        try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
         val out = DoubleArray(24).also { it[22] = -1.0; it[23] = -1.0 }   // 22, 23: stereo matches, landmarks (-1 = not reported)
         var lastSeq = 0L
         var lastResetCount = -1.0
@@ -1424,7 +1434,10 @@ object Tracking : GlassesLink.Listener {
     }
     private const val ROOM_MAX_RANGE_M = 4.5
 
+    private const val WORK_PRIORITY = 0
+    @Volatile private var workPriority = WORK_PRIORITY
     private fun handsLoop() {
+        try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
         val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)
         val out = FloatArray(2 * Hand.JOINTS * 3)
         val out26 = FloatArray(2 * 26 * 7)

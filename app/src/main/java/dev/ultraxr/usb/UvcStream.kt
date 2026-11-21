@@ -31,6 +31,10 @@ class UvcStream(
     @Volatile var timeouts = 0L; private set
     @Volatile var longestGapNs = 0L; private set
     @Volatile var bytes = 0L; private set
+    /** The reader's own work between two reads of the camera (21 November 2026: frames were lost when the desktop opened). */
+    @Volatile var busyMaxNs = 0L
+    @Volatile var busySumNs = 0L
+    @Volatile var reaps = 0L; private set
     @Volatile var fatal: String? = null; private set
     var assembler: UvcFrameAssembler? = null; private set
     var negotiatedFrameBytes = 0; private set
@@ -121,10 +125,14 @@ class UvcStream(
             val size = if (negotiatedPayloadSize > 0) negotiatedPayloadSize.coerceAtMost(1 shl 20) else 16384
             worker = thread(name = "uvc-bulk") {
                 val buf = ByteArray(size)
+                var back = 0L
+                try { android.os.Process.setThreadPriority(PRIORITY) } catch (_: Throwable) {}
                 while (running) {
                     val t0 = System.nanoTime()
+                    if (back != 0L) { val busy = t0 - back; busySumNs += busy; if (busy > busyMaxNs) busyMaxNs = busy }
                     val n = conn.bulkTransfer(ep, buf, buf.size, 500)
-                    val took = System.nanoTime() - t0
+                    back = System.nanoTime(); reaps++
+                    val took = back - t0
                     if (took > longestGapNs && bytes > 0) longestGapNs = took
                     // Android reports a timeout and a real error the same way; tell them apart by duration.
                     if (n < 0) { if (took >= 450_000_000L) timeouts++ else { transferErrors++; if (took < 2_000_000L) try { Thread.sleep(2) } catch (_: InterruptedException) {} }; continue }
@@ -144,8 +152,11 @@ class UvcStream(
         val meta = IntArray(pkts + 2)
         val heap = ByteArray(pktSize * pkts)
         var failures = 0
+        var back = 0L
         while (running) {
+            if (back != 0L) { val busy = System.nanoTime() - back; busySumNs += busy; if (busy > busyMaxNs) busyMaxNs = busy }
             val n = IsoNative.reap(handle, direct, meta, 500)
+            back = System.nanoTime(); reaps++
             if (n < 0) {
                 transferErrors++
                 if (++failures > 20) { fatal = "iso reap errno ${-n}"; break }
@@ -172,6 +183,8 @@ class UvcStream(
     }
 
     companion object {
+        /** The camera is read ahead of everything but sound: a read that waits is a picture the glasses throw away. */
+        @Volatile var PRIORITY = -16
         fun hasVideoInterface(device: UsbDevice): Boolean =
             (0 until device.interfaceCount).any { device.getInterface(it).interfaceClass == UsbConstants.USB_CLASS_VIDEO }
     }

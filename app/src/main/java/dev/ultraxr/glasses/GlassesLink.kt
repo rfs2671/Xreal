@@ -577,11 +577,19 @@ class GlassesLink(private val context: Context, private val listener: Listener) 
     /** Latest decoded raw eye image (640x480 grey), for previews. */
     fun copyRawEye(right: Boolean, into: ByteArray) { System.arraycopy(pipeline.rawEye[if (right) 1 else 0], 0, into, 0, CameraDecoder.IMAGE_BYTES) }
 
+    private var healthNs = 0L; private var healthTick = 0; private var healthGood = 0L; private var healthShort = 0L; private var healthBad = 0L; private var healthPairs = 0L; private var healthBusy = 0L
     private val watchdog = object : Runnable {
         override fun run() {
             if (!started) return
             if (state == State.STREAMING || state == State.CONNECTING) guardDisplayMode()
             if (state == State.STREAMING) {
+                if (++healthTick % 5 == 0) uvc?.let { u ->
+                    val a = u.assembler; val good = a?.goodFrames ?: 0L; val short = a?.shortFrames ?: 0L
+                    val nowNs = System.nanoTime(); val s = ((nowNs - healthNs) / 1e9).coerceAtLeast(0.1); healthNs = nowNs
+                    listener.onLog(String.format(java.util.Locale.US, "camera: %.0f frames and %.0f pairs a second, %d cut short, %d bad packets, reader busy %.1f ms a second, longest %.0f ms",
+                        (good - healthGood) / s, (pipeline.pairs - healthPairs) / s, short - healthShort, u.badIsoPackets - healthBad, (u.busySumNs - healthBusy) / 1e6 / s, u.busyMaxNs / 1e6))
+                    healthGood = good; healthShort = short; healthBad = u.badIsoPackets; healthPairs = pipeline.pairs; healthBusy = u.busySumNs; u.busyMaxNs = 0
+                }
                 val imuMoved = pipeline.imuSamples != watchImu
                 val camMoved = pipeline.cameraFrames != watchPairs
                 watchImu = pipeline.imuSamples; watchPairs = pipeline.cameraFrames

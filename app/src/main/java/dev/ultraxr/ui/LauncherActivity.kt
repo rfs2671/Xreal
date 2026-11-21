@@ -98,7 +98,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
         }
         if (i?.getBooleanExtra("desktop", false) != true) return
         startActivity(Intent(this, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_AUTOMATION, i.getBooleanExtra(DesktopActivity.EXTRA_AUTOMATION, false))
-            .putExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, i.getBooleanExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, false)).putExtra("open_app", i.getStringExtra("open_app")).putExtra("home_page", i.getIntExtra("home_page", 0)))
+            .putExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, i.getBooleanExtra(DesktopActivity.EXTRA_STEREO_PREVIEW, false)).putExtra("open_app", i.getStringExtra("open_app")).putExtra("home_page", i.getIntExtra("home_page", 0))
+            .putExtra(DesktopActivity.EXTRA_OPEN_SHELF, i.getIntExtra(DesktopActivity.EXTRA_OPEN_SHELF, -1)).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
     }
 
     override fun onResume() {
@@ -381,7 +382,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         /** The set-up has been offered in this run of the app. */
         private var setupOffered = false
         /** This screen's own switches for tests and tools (see [openDesktopIfAsked]). */
-        private val TEST_EXTRAS = setOf("skip_setup", "desktop", DesktopActivity.EXTRA_AUTOMATION, DesktopActivity.EXTRA_STEREO_PREVIEW, "open_app", "home_page", "force_half_stereo", "sim_wearer", "dump_egl", "test_site",
+        private val TEST_EXTRAS = setOf("skip_setup", "desktop", DesktopActivity.EXTRA_AUTOMATION, DesktopActivity.EXTRA_STEREO_PREVIEW, "open_app", "home_page", DesktopActivity.EXTRA_OPEN_SHELF, "force_half_stereo", "sim_wearer", "dump_egl", "test_site",
             "diag3d", "pace_by_display", "auto_enter", "replay", "replay_tag", "record_seconds")
     }
 }
