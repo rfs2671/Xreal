@@ -353,6 +353,7 @@ object XrHost : OpenXrGlassesLayer.Host {
     /** The owner's floor correction in metres, for showing. */
     val floorTrimM: Float get() = if (floorTrim.isNaN()) 0f else floorTrim
 
+    private var floorRegains = 0
     private fun applyFloor(nowNs: Long) {
         if (floorTrim.isNaN()) floorTrim = Tracking.settings.floorTrimM
         if (nowNs - floorNs < 50_000_000L) return
@@ -363,7 +364,9 @@ object XrHost : OpenXrGlassesLayer.Host {
         val trim = floorTrim
         val want = (if (known) (-fy).toFloat() else Tracking.settings.standingHeightM) + trim
         val version = Tracking.head.worldVersion
-        val snap = floorApplied.isNaN() || version != floorWorld || known != floorKnown || trim != floorTrimApplied
+        val regains = Tracking.roomRegains
+        val snap = floorApplied.isNaN() || version != floorWorld || known != floorKnown || trim != floorTrimApplied || regains != floorRegains
+        floorRegains = regains
         floorTrimApplied = trim
         val next = if (snap) want else floorApplied + (want - floorApplied).coerceIn(-0.04f * dt, 0.04f * dt)
         if (known != floorKnown || floorApplied.isNaN()) {

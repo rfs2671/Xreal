@@ -689,3 +689,23 @@ frame, two runs each.
 At 2 m, 5 mm is 6 pixels of the display. The turn (from the gyroscope) is unchanged by this: 0.03 degrees a
 frame still, the same in all four runs. This is a replay: whether the picture now looks steady has not been
 seen in the glasses. Not looked at: late display frames (about 5 in 100 with one window, more with six).
+
+## 13. Worn, 21 November 2026, evening: floor 50 cm too high as a game started; no hand found
+
+Four minutes: five windows closed from the phone, then the ball-shooter game. The wearer: "hand tracking is
+completely off [not shown at all, desktop and game]. starting floor is really off by at least 20 inches [too
+high], bottom nav menu is too high overlaping with other screens, everything else seems to work fine".
+
+- Floor: the log has position away for 0.9 s at the instant the game connected (the estimator began afresh;
+  why is not known, it is logged from now on), the head held where it was while moving at 0.28 m/s, and the
+  world joined on at the held place. A head that rises in that time leaves the world, and the floor measured
+  in it, that much too high; the floor given to the game then followed new measurements at 4 cm a second.
+  Changed: half a second without position (it was two) drops what was found of the room and puts the floor at
+  its usual depth under the head, and the game takes that floor at once (`Tracking.roomRegains`). Not
+  reproduced and not worn: there is no recording of that session (the recording did not start).
+- Hands: the tracker gave 30 results a second (26 ms each, the camera fix) and found no hand in any of them
+  for 90 s of desktop. The afternoon's recording replayed through the same build finds the right hand in 62 %
+  of results, so it is not the build. Sunset was at about 16:35 and the session at 17:21: the room was lit by
+  its spotlights alone. Not confirmed: it needs a recording in that light.
+- The dock: see `Shelf`/`DesktopSession.shelf` (it steps aside while a window covers it).
+- The saved room map had no places for three sessions and so never grew: an empty one is now begun afresh.

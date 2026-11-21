@@ -787,9 +787,13 @@ object Tracking : GlassesLink.Listener {
                         head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13])); wasUsing = true
                         // After more than two seconds without position the wearer may be somewhere else: what was
                         // found of the room is dropped (the floor's height is kept until a new one is found).
-                        if (roomUsedNs != 0L && now - roomUsedNs > 2_000_000_000L) {
+                        // Worn, 21 November 2026: position was away for 0.9 s as a game started, the head was held where it
+                        // had been while its wearer straightened up, and the game's floor stood 50 cm too high and came
+                        // back at 4 cm a second. Half a second without position is enough for the world to have shifted
+                        // (it was two seconds), and the application is told to take the floor afresh ([roomRegains]).
+                        if (roomUsedNs != 0L && now - roomUsedNs > ROOM_AWAY_NS) {
                             val headNow = head.appFromEstimator().apply(Q.rotate(HeadTracker.Z_TO_Y, p))[1]
-                            room.regained(headNow); wallMapReset = true; roomFindings = room.analyse(headNow)
+                            room.regained(headNow); wallMapReset = true; roomFindings = room.analyse(headNow); roomRegains++
                             log("room: position was away for " + (now - roomUsedNs) / 1_000_000_000L + " s: surfaces forgotten, floor " + (if (floorY.isNaN()) "unknown again" else dev.ultraxr.core.Fmt.f(headNow - floorY, 2) + " m below the head as before"))
                             val planned = synchronized(planLock) {
                                 if (plan == null) false else {
@@ -842,6 +846,9 @@ object Tracking : GlassesLink.Listener {
     private fun dist(a: DoubleArray, b: DoubleArray) = Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))
     private const val LYING_WANDER_M = 0.10
     private const val LYING_WANDER_ON_PICKUP_M = 0.03
+    private const val ROOM_AWAY_NS = 500_000_000L
+    /** How often what was found of the room was dropped because position had been away. */
+    @Volatile var roomRegains = 0; private set
 
     /** Starts the position estimator afresh; the head keeps its place and the new estimate is aligned to it. */
     private fun restartVio(v: Long, why: String) {
