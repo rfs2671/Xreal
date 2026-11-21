@@ -391,6 +391,109 @@ What that says, plainly:
   place; one that stands is not.** On two recordings no real wall was dropped; one of two made-up walls was each
   time. The other was never looked through from within 3 m for long enough.
 
+## 10. What the phone said of section 9 (20 November 2026, late night)
+
+The owner said to run the tests on the battery that was left, until it ran out; it did, at 1 %. So this is one
+evening's runs on one recording (83 s, moving about one room), most things once. **Replays, not worn.** The build with
+everything below switched on together was made after the phone went dark and **has not itself run on the phone.**
+
+### Places are added only where the map has none: taken
+
+The library by itself (`ultra_slam_replay`, `UX_EXTEND`; each session's world turned and shifted by its own unknown
+amount):
+
+| a map of 2 to 30 s (58 places), then sessions over | places after each | written | each session found itself |
+|---|---|---|---|
+| 2 to 30 s, three times | 58, 58, 58 | nothing: nothing was added; the file is as it was | 0.4 s in; 79 of 80 pairs; 1.9 cm (median) from the estimator's own |
+| 28 to 60, 2 to 83, 40 to 83, 2 to 83 | 112, 129, 132, 135 | each | 0.4 s in; median 6.4 to 9.4 cm, 90th 9 to 20, worst 9.5 to 20.7 |
+| the same first session the way of before (every place added) | 136 after one session; 11 MB to 20 MB in two (section 8) | | |
+
+Finding in 58 to 83 s afterwards: 62 of 70 pairs recognised, 0.4 s in (43 of 70 with every place added; 28 of 70, 3.6 s
+in, in the map of 2 to 30 s alone); position median 9.6 cm, 90th 20.4, worst 21.0 (10.0, 11.1, 12.4 with every place
+added). **So the map stops growing and is recognised more often, and the worst positions in ground that was added
+are worse (20 cm against 12).** That is the price as measured, and it is not understood yet.
+
+Two things had to be put right to get there, both found by these runs:
+
+- New ground stayed untied to the map until the end and was thrown away. Now the first new place is linked to the last
+  recognised one by the way the head went between them (0.1 to 1.8 m in these runs).
+- The question "is this place linked to the map's first" was asked of `Rtabmap::getLastLocationId()`, the id given to
+  the last pair; a pair much like the one before is merged into that one and its id is gone. It is asked of the last
+  place that is really in the graph now.
+
+In the app (one run after a map was made): nothing was added and nothing written (7.6 MB before and after); a thing
+put down in the first session came back median 2.2 cm off, 90th 9.0, worst 12.0, within 10 cm for 93 % of 69 seconds.
+
+### The estimator's time for a frame: 32 ms, not 25
+
+The same settings do not give the same time twice: the unchanged estimator took 29.0 ms in the first run of a batch
+and 40.4 to 41.6 ms in later ones. The phone's warmth (and, here, its emptying battery) moves the figure more than
+any setting, so only neighbours in a batch are compared:
+
+| | batch 1, ms a frame | batch 2 | states a second | hands, ms |
+|---|---|---|---|---|
+| as it was (2 threads, 7 optimiser rounds) | 29.0 first, 41.6 last | 40.4, 41.3 | 29.7 to 30.0 | 32 to 40 |
+| the estimator's threads ahead of others (`thread_nice` -8) | 28.6 (second run) | 35.8 | 29.9 | 37, 40 |
+| 4 threads | 47.9 | | 29.4 | 40 |
+| 4 threads, ahead of others | 32.4 | | 30.0 | 45 |
+| 5 optimiser rounds | 38.9 | | 29.8 | 40 |
+| **ahead of others, 3 threads, 5 rounds (taken)** | 32.4 | 32.1 | 30.0, 30.0 | 43, 44 |
+
+The path is the same (two-second spans against the old settings: median 0.4 and 0.8 cm, worst 3.5 and 6.3; two runs
+of the old settings differ by 0.6 to 0.9, worst 3.9 to 8.5). The hand tracker pays about 3 ms. **25 ms is not
+reached**: on a warm phone the estimator is at 32. What would be next is not settings: fewer corners with a check that
+tracking holds while walking, and the optical flow on the GPU.
+
+### A large correction glides: taken up to 1.5 m
+
+A push of 1 m and 25 degrees (`s_100g`): seen by the map 3.1 s later, glided back in 2.3 s, within 2 cm of the map
+6.0 s after the push; afterwards 2.2 cm (median) from a run that was not pushed. The head's place changed by up to
+53 mm between two states while it glided (12 to 15 mm between two runs anyway): more than the slices were meant to
+allow, because they were sized at the world's origin and not at the head. That is changed (arithmetic, not measured
+again). A glide of 6 m took 14 s (below), so beyond 1.5 m the world is put back at once.
+
+### Covered cameras: the map recovers the room; the estimator must not be believed straight away
+
+`test_blind`: the cameras see nothing from second 30 to 36 (and to 45).
+
+| | position believed again | where the world then was | put back |
+|---|---|---|---|
+| 6 s covered, with the map | 1.1 s after the pictures return | 6.24 m and 4 degrees from where it belongs | recognised 18 s after the pictures returned, glided back over 14 s |
+| 6 s covered, no map | 1.1 s | as far off | never |
+| 15 s covered, with the map | 1.2 s | 6.27 m and 12 degrees | recognised 29 s after the pictures returned |
+
+The reason for the 6 m is in the estimator's own output: it comes back "trusted" a second after it sees again, while
+it is still flying at up to 6 and 11 m/s from seconds of the motion sensor alone (31 jumps of more than 5 cm between
+states). The world is joined on to that. **This is the worn "everything drifts after I lose tracking" seen in a
+replay for the first time.** Built on it and not measured (the battery ended): `restart_after_loss=1` starts the
+estimator afresh when it sees again after more than 1.5 s without position, and the map is asked with every picture
+after a loss or a new world (that part is on). Runs `x_blind_r`, `x_blind15_r`, `x_blind_r_nomap` are ready.
+
+### Another light
+
+Every picture made darker in the finding session (`test_light`): at 0.6 of the brightness the head was found 8.4 s in
+(4.1 s as recorded) and a saved place came back median 3.5 cm off, 90th 12.8, within 10 cm for 80 %; at 0.35, 8.0 s,
+3.0 cm, 11.6, 83 % (as recorded: 2.1 to 2.2 cm, 9.0 to 9.5, 90 to 93 %). A picture scaled darker is not a lamp
+switched on.
+
+### The mesh in the app: stays off
+
+With `room_mesh=1` the estimator's time and rate were as in the runs beside it (38.6 ms, 29.9 states a second), the
+mesh was written (9.9 MB) and up to 7 pieces of furniture were reported. But **three of eleven kept surfaces were
+dropped as "seen through" in a replay of the very room they were found in.** Either they were never there (the
+sparse finder's table tops are often wrong) or the rule is too quick; until that is known it is not to be on.
+
+### What is on in the build now, and what is not
+
+| | |
+|---|---|
+| places added only where the map has none | on |
+| the estimator ahead of other threads, 3 threads, 5 rounds | on |
+| large corrections glided, up to 1.5 m | on |
+| the map asked with every picture after a loss | on (not measured by itself) |
+| the estimator started afresh after a loss (`restart_after_loss=1`) | off: not measured |
+| the mesh, furniture and dropping in the app (`room_mesh=1`) | off: drops surfaces it should not |
+
 ## What is known to be weak (measured, `docs/QUEST_COMPAT.md`, `docs/TRACKING_ANALYSIS.md`)
 
 - **A saved map only since 20 November** (sections 7 and 8), for the desktop's windows, games' anchors and the room's
@@ -398,8 +501,10 @@ What that says, plainly:
   known. Before it, an anchor put on a wall was 0.73 m off in the next run and 2.70 m off after walking.
 - **A map that is added to keeps growing** when the same room is walked again (section 8). A change against that is
   built and not measured (section 9).
-- **Section 9's phone work is unmeasured**: no duplicate places, the glide, the estimator's settings, the tests of
-  covered cameras and changed light.
+- **After the cameras are covered for some seconds the world is metres out** until the map is recognised again, which
+  took 18 to 29 s (section 10). The remedy is built and not measured.
+- **The estimator takes 32 ms a frame on a warm phone**, not the 25 asked for (section 10).
+- **Multi-room use has not been tested at all**: there is no recording of a walk through several rooms.
 - **Position was lost while walking** (seconds at a time, worn, 18 and 19 November); each loss of more than 2 s makes
   the room model forget its surfaces. The long wait after a loss is fixed (section 7); why it is lost is not known,
   and no recording reproduces it.

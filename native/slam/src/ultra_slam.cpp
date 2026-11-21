@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ultra_slam.h"
 
+#include <rtabmap/core/Link.h>
 #include <rtabmap/core/Memory.h>
 #include <rtabmap/core/Parameters.h>
 #include <rtabmap/core/Rtabmap.h>
 #include <rtabmap/core/SensorData.h>
+#include <rtabmap/core/Signature.h>
 #include <rtabmap/core/Statistics.h>
 #include <rtabmap/core/StereoCameraModel.h>
 #include <rtabmap/core/Transform.h>
@@ -82,13 +84,29 @@ struct uslam {
 	std::unique_ptr<Rtabmap> rt;
 	int root = 0; // the map's first place
 	// USLAM_EXTEND: is the map being added to just now, or only read?
-	// add_always: every place of every session is added (measured, docs/SPATIAL.md section 8). Adding only where the
-	// map has no places ("Ultra/AddAlways=0") is built and not yet measured on the phone, so it is not the default.
-	bool adding = false, add_always = true, dangling = false, have_hit_at = false;
+	// add_always ("Ultra/AddAlways=1"): every place of every session is added, as until 20 November 2026. Measured on
+	// the phone that night (docs/SPATIAL.md section 10): with places added only where the map has none, four sessions
+	// over much the same ground took a map from 58 to 135 places in place of several hundred, and three over exactly
+	// the same ground added none.
+	bool adding = false, add_always = false, dangling = false, have_hit_at = false;
 	int misses = 0, old_hits = 0, old_max = 0, spells = 0;
 	double hit_at[3] = {0, 0, 0};
+	// The last place a pair was recognised as, where it lies in the map, and what the map said of the estimator's
+	// world then: when adding begins, the first new place is linked to that one by the way the head went since
+	// (measured on the phone: without it new ground often stayed untied until the end and was thrown away).
+	int last_hit = 0, links_made = 0;
+	bool link_due = false;
+	Transform last_hit_pose, last_corr;
 	double add_after_m = 0.4;
 	int add_after_misses = 4, read_after_hits = 3;
+
+	// The newest place that is in the map's graph. Not Rtabmap::getLastLocationId(): that is the id given to the last
+	// pair, and a pair much like the one before it is merged into that one and its id is gone (measured: asking the
+	// graph about such an id says "not linked to anything").
+	int newest() const {
+		const Signature *s = rt->getMemory() ? rt->getMemory()->getLastWorkingSignature(false) : nullptr;
+		return s ? s->id() : 0;
+	}
 
 	void set_adding(bool on) {
 		ParametersMap p;
@@ -98,6 +116,7 @@ struct uslam {
 		rt->parseParameters(p);
 		adding = on;
 		misses = old_hits = 0;
+		link_due = on;
 		if (on) {
 			spells++;
 			old_max = 0;
@@ -280,13 +299,13 @@ struct uslam {
 				const int loop = rt->getLoopClosureId(), prox = s.proximityDetectionId();
 				const int hit = loop > 0 ? loop : prox > 0 ? prox : 0;
 				const Transform corr = rt->getMapCorrection();
-				if (root == 0) root = rt->getLastLocationId();
+				if (root == 0) root = newest();
 				// Does the place this pair belongs to hang together with the map's first place? By the graph's links, not
 				// by the poses RTAB-Map holds: those of a map read from the file are all there whether or not anything
 				// newer is linked to them.
 				bool tied = false;
 				{
-					const int from = adding ? rt->getLastLocationId() : hit;
+					const int from = adding ? newest() : hit;
 					if (root != 0 && from == root) tied = true;
 					else if (root != 0 && from > 0 && rt->getMemory()) tied = rt->getMemory()->getNeighborsId(from, 0).count(root) > 0;
 				}
@@ -317,6 +336,24 @@ struct uslam {
 					st.corr[0] = corr.x(), st.corr[1] = corr.y(), st.corr[2] = corr.z();
 					st.corr[3] = q.x(), st.corr[4] = q.y(), st.corr[5] = q.z(), st.corr[6] = q.w();
 					st.has_corr = 1;
+				}
+				if (mode == USLAM_EXTEND && !add_always) {
+					if (!adding && hit > 0 && tied && !corr.isNull()) {
+						const auto &poses = rt->getLocalOptimizedPoses();
+						const auto ph = poses.find(hit);
+						if (ph != poses.end()) last_hit = hit, last_hit_pose = ph->second, last_corr = corr;
+					} else if (adding && link_due) {
+						const int fresh = newest();
+						if (fresh > old_max && last_hit > 0 && !last_corr.isNull()) {
+							link_due = false;
+							const Transform here = last_corr * tf(pose7(ps)); // the new place in the map, by the way the head went
+							const cv::Mat info = cv::Mat::eye(6, 6, CV_64FC1) * 400.0; // about 5 cm and 3 degrees
+							const bool ok = rt->addLink(Link(fresh, last_hit, Link::kUserClosure, here.inverse() * last_hit_pose, info));
+							LOGI("new place %d linked to place %d, %.2f m away: %s", fresh, last_hit, (here.inverse() * last_hit_pose).getNorm(), ok ? "done" : "refused");
+							if (ok) links_made++;
+							else LOGW("the first new place (%d) could not be linked to place %d", fresh, last_hit);
+						}
+					}
 				}
 				adding_step(hit, ps, tied);
 			} catch (const std::exception &e) {
@@ -394,6 +431,7 @@ USLAM_API uslam_t *uslam_create(const char *rig, const char *db, int mode, const
 				if (k == "Ultra/Cores") h->cores = v;
 				else if (k == "Ultra/AddAlways") h->add_always = atoi(v.c_str()) != 0;
 				else if (k == "Ultra/AddAfterM") h->add_after_m = atof(v.c_str());
+				else if (k == "Ultra/AddAfterMisses") h->add_after_misses = atoi(v.c_str());
 				else if (k == "Ultra/CvThreads") h->cv_threads = atoi(v.c_str());
 				else p[k] = v;
 			}
@@ -458,6 +496,7 @@ USLAM_API void uslam_destroy(uslam_t *h, int save) {
 		// a map that was added to is written if anything was added, all of it tied to the map; what was being added
 		// last must be tied too
 		if (h->mode == USLAM_EXTEND && h->adding && !h->last_tied) h->dangling = true;
+		if (h->mode == USLAM_EXTEND) LOGI("added to in %d spells, %d links made; at the end %s, the newest place %d %s", h->spells, h->links_made, h->adding ? "adding" : "reading", h->rt ? h->rt->getLastLocationId() : 0, h->last_tied ? "tied" : "not tied");
 		const bool keep = save && (h->mode == USLAM_MAP || (h->mode == USLAM_EXTEND && h->st.linked && h->st.added && !h->dangling));
 		if (h->rt) h->rt->close(keep);
 		if (h->mode == USLAM_MAP && !save) remove(h->db.c_str());

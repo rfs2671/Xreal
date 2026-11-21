@@ -384,7 +384,13 @@ object Tracking : GlassesLink.Listener {
                 Native.vioSetOption(h, "startup_imu_gate", 1.0)
                 Native.vioSetOption(h, "startup_gate_frames", 3.0); Native.vioSetOption(h, "startup_gate_gyro", 1.0); Native.vioSetOption(h, "startup_gate_gyro_std", 0.5)
                 Native.vioSetOption(h, "startup_gate_accel_err", 2.0); Native.vioSetOption(h, "startup_gate_accel_std", 1.5)
-                Native.vioSetOption(h, "num_threads", 2.0)
+                // Measured twice on the S21 Ultra (20 November 2026, night; tools/tracking/map_cost.py, runs e_mix and e_mixb
+                // against e_base*): the estimator's own threads ahead of ordinary ones, three of them, and five optimiser
+                // rounds in place of seven took a frame from 40 to 42 ms to 32 ms on a warm phone, at 30.0 states a second,
+                // with the same path (median 0.4 to 0.8 cm from the old settings' over two seconds, as two runs of the old
+                // settings are from each other). The hand tracker pays about 3 ms a result for it.
+                Native.vioSetOption(h, "num_threads", 3.0)
+                Native.vioSetOption(h, "thread_nice", -8.0)
                 // Under measurement: "native.KEY=VALUE" lines in files/vio_options.txt go to the library as they are
                 // (startup_imu_gate, startup_gate_frames, startup_gate_gyro, ...), after the settings above.
                 try {
@@ -411,7 +417,7 @@ object Tracking : GlassesLink.Listener {
                 mapSlipDone = false
                 try {
                     val lines = File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()
-                    mapGlide = lines.any { it.replace(" ", "") == "map_glide=1" }; roomMeshOn = lines.any { it.replace(" ", "") == "room_mesh=1" }
+                    mapGlide = lines.none { it.replace(" ", "") == "map_glide=0" }; restartAfterLoss = lines.any { it.replace(" ", "") == "restart_after_loss=1" }; roomMeshOn = lines.any { it.replace(" ", "") == "room_mesh=1" }
                     testBlind = lines.firstOrNull { it.startsWith("test_blind=") }?.substringAfter('=')?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }?.takeIf { it.size == 2 }?.toDoubleArray()
                     testLight = lines.firstOrNull { it.startsWith("test_light=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: 1.0
                     if (testBlind != null || testLight != 1.0) log("test: " + (testBlind?.let { "the cameras see nothing from " + it[0] + " to " + it[1] + " s of a replay; " } ?: "") + (if (testLight != 1.0) "pictures at $testLight of their brightness" else ""))
@@ -630,6 +636,19 @@ object Tracking : GlassesLink.Listener {
                     replayLog?.vio(link?.replaySeconds ?: 0.0, out, positionConfidence.trusted)
                     val wasTrusted = positionConfidence.trusted
                     val trusted = positionConfidence.update(now, vioLandmarks, vioStereoMatches)
+                    // Covered cameras, by replay (20 November 2026, night): one second after the pictures came back the
+                    // estimator's position was believed again, while it was still flying off at up to 6 and 11 m/s from six
+                    // seconds of the motion sensor alone; the world ended 6 m from where it belonged. With the switch on,
+                    // an estimator that sees again after more than a second and a half without position is started afresh
+                    // (it is going again a tenth of a second later, from rest) in place of being believed.
+                    if (trusted) untrustedSinceNs = 0L else {
+                        if (untrustedSinceNs == 0L) untrustedSinceNs = now
+                        val seesAgain = vioLandmarks >= dev.ultraxr.core.PositionConfidence.GOOD_LANDMARKS && vioStereoMatches >= dev.ultraxr.core.PositionConfidence.GOOD_STEREO
+                        if (restartAfterLoss && seesAgain && now - untrustedSinceNs > 1_500_000_000L && now - lossRestartNs > 3_000_000_000L) {
+                            val away = (now - untrustedSinceNs) / 1e9; lossRestartNs = now; untrustedSinceNs = 0L; mapSearching = true
+                            restartVio(v, "position was away for " + dev.ultraxr.core.Fmt.f(away, 1) + " s and the cameras see again: started afresh rather than believed")
+                        }
+                    }
                     if (trusted != wasTrusted) log(if (trusted) "6DoF position trusted ($vioLandmarks landmarks, $vioStereoMatches seen by both cameras)"
                         else "6DoF position not trusted ($vioLandmarks landmarks, $vioStereoMatches seen by both cameras): rotation only")
                     // Lying perfectly still (put down): the position is not changing, whatever the cameras make of
@@ -884,12 +903,13 @@ object Tracking : GlassesLink.Listener {
             if (slam != h) return
             // Every room picture (three a second) until the head is found in a saved map; after that one in three, and
             // one in two while a map is made: places are a step apart, and the estimator needs the processor more.
-            val every = when (slamMode) { 1 -> if (mapAlign.version == 0) 1 else 3; 2 -> if (mapFoundNs == 0L) 1 else 3; else -> 2 }
+            val every = if (mapSearching) 1 else when (slamMode) { 1 -> if (mapAlign.version == 0) 1 else 3; 2 -> if (mapFoundNs == 0L) 1 else 3; else -> 2 }
             if (mapTick++ % every == 0) Native.slamFeed(h, tNs, l, r, 480, 640, doubleArrayOf(p[0], p[1], p[2], q[0], q[1], q[2], q[3]))
             Native.slamGetState(h, st)
         }
         mapPlaces = st[13].toInt(); mapResults = st[0].toLong(); mapMs = st[16]
-        if (st[17] != slamEpochSeen) { slamEpochSeen = st[17]; slamFoundSeen = 0.0 }
+        // the estimator began a new world: where the head is in the map is asked with every picture until it is known again
+        if (st[17] != slamEpochSeen) { if (slamEpochSeen >= 0) mapSearching = true; slamEpochSeen = st[17]; slamFoundSeen = 0.0 }
         // making a map, every result is a reading (the map is this session's own world, bent a little where a place
         // was seen again); finding, only a pair that was recognised is one
         if (st[17] != slamEpochSeen) slamResultsSeen = 0.0
@@ -914,6 +934,7 @@ object Tracking : GlassesLink.Listener {
         }
         if (!reading) return
         // while the world glides back nothing new is asked of the map: what it says now is of a world on its way
+        mapSearching = false
         if (mapGliding) return
         val corr = Pose(doubleArrayOf(st[6], st[7], st[8]), doubleArrayOf(st[9], st[10], st[11], st[12]))
         val before = mapAlign.version
@@ -935,9 +956,14 @@ object Tracking : GlassesLink.Listener {
                 // more than half a metre and twenty degrees a second, everything on an arc to where it belongs: plainly
                 // seen, but nothing leaps. What the room finder holds is put where the map has it now, in one go.
                 // (Built and unit-tested, not yet measured on the phone: on only with "map_glide=1" in vio_options.txt.)
-                if (!mapGlide) synchronized(mapMoveLock) { mapPart = null; mapPartsLeft = 0; mapSmall = false; mapShifting = true; try { head.moveWorld(move) } finally { mapShifting = false } }
+                // Measured once by replay (a push of 1 m and 25 degrees: glided back in 2.3 s, within 2 cm of the map 6 s
+                // after the push). Beyond a metre and a half nothing shown is anywhere near where it belongs, and a glide
+                // would take many seconds (measured: 14 s for 6 m after the cameras were covered): that is put back at once.
+                val headNow = head.predict(System.nanoTime()).pose.p
+                if (!mapGlide || mapAlign.lastOffM > MAP_GLIDE_MOST_M) synchronized(mapMoveLock) { mapPart = null; mapPartsLeft = 0; mapSmall = false; mapShifting = true; try { head.moveWorld(move) } finally { mapShifting = false } }
                 else synchronized(mapMoveLock) {
-                    val n = dev.ultraxr.core.MapAlign.slices(move, head.appFromEstimator().p, MAP_GLIDE_PART_M, MAP_GLIDE_PART_RAD, MAP_STEP_PARTS, 600)
+                    // slices are sized by how far they carry the wearer's own head, not the world's origin
+                    val n = dev.ultraxr.core.MapAlign.slices(move, headNow, MAP_GLIDE_PART_M, MAP_GLIDE_PART_RAD, MAP_STEP_PARTS, 600)
                     room.transform(move); wallMapReset = true; roomFindings = room.analyse(0.0); head.bumpWorld()
                     mapPart = dev.ultraxr.core.MapAlign.slice(move, n); mapPartsLeft = n; mapGliding = true; mapGlideParts += n
                 }
@@ -965,7 +991,12 @@ object Tracking : GlassesLink.Listener {
     private const val MAP_GLIDE_PART_M = 0.0125      // a part every 25 ms: half a metre a second
     private val MAP_GLIDE_PART_RAD = Math.toRadians(0.5)
     @Volatile private var mapGliding = false
-    @Volatile private var mapGlide = false
+    @Volatile private var mapGlide = true
+    private const val MAP_GLIDE_MOST_M = 1.5
+    /** After position was away the estimator is started afresh when it sees again ("restart_after_loss=1"): built on what the covered-camera replays showed, not yet measured. */
+    @Volatile private var restartAfterLoss = false
+    private var untrustedSinceNs = 0L; private var lossRestartNs = 0L
+    @Volatile private var mapSearching = false
     /** The mesh kept with the map, furniture, and dropping of kept surfaces seen through: on with "room_mesh=1" in vio_options.txt until its cost on the phone is measured. */
     @Volatile private var roomMeshOn = false
     @Volatile var mapGlideParts = 0; private set
