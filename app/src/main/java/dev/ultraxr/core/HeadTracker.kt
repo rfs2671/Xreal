@@ -235,6 +235,19 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         return State(head, if (sixDof) Mode.SIX_DOF else Mode.ORIENTATION_ONLY, Q.rotate(fix.q, vel), age, w)
     }
 
+    /**
+     * How far the picture's middle lies above the motion sensor's straight-ahead, radians: the wearer's own
+     * correction. He has judged everything too high three times (a floor moved 30 cm down by hand, a picture turned
+     * 10 degrees, and on 21 November 2026 "still 20 inches too high" of windows and of a game's floor); twice the
+     * correction was reasoned away afterwards. It is his eye that says where the picture is.
+     */
+    @Volatile var sightPitchRad = 0.0
+    /** [predict], as the eye sees it: the view turned up by [sightPitchRad], so that what is drawn lands lower. */
+    fun predictSight(tNs: Long): State {
+        val s = predict(tNs); val t = sightPitchRad
+        return if (t == 0.0) s else State(Pose(s.pose.p, Q.normalize(Q.mul(s.pose.q, Q.axisAngle(1.0, 0.0, 0.0, t)))), s.mode, s.velocity, s.vioAgeNs, s.angularVelocity)
+    }
+
     /** Transform from the IMU body frame at host time [tNs] to the app world (for hand joints). */
     @Synchronized fun bodyInApp(tNs: Long): Pose? {
         if (!haveGravity) return null

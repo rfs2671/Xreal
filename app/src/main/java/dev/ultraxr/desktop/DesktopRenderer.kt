@@ -205,7 +205,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
         syncTextures(f)
 
         // View: the head's orientation always; its position only when position tracking is trusted.
-        val head = Tracking.head.predict(now + periodNs * 3 / 2)
+        val head = Tracking.head.predictSight(now + periodNs * 3 / 2)
         val tracked = head.mode != dev.ultraxr.core.HeadTracker.Mode.NONE
         val q = if (tracked) head.pose.q else Q.mul(Q.axisAngle(0.0, 1.0, 0.0, previewYaw), Q.axisAngle(1.0, 0.0, 0.0, previewPitch))
         val p = if (tracked && f.usePosition) head.pose.p else f.anchor

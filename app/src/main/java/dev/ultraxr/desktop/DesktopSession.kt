@@ -282,6 +282,7 @@ class DesktopSession(private val activity: Activity) {
     var onLookPress: (() -> Unit)? = null
 
     fun start() {
+        dev.ultraxr.xr.XrHost.loadPictureTilt()
         try { prefs.getString("layout", null)?.let { desktop.load(JSONObject(it)) } } catch (e: Exception) { Tracking.log("desktop: saved layout ignored: $e") }
         // once: windows saved while they were raised above the dock come down to eye level with the new ones
         if (!prefs.getBoolean("lowered_1121", false)) { for (w in desktop.windows) if (!w.maximized) w.pitch = WINDOW_PITCH; desktop.touch(); prefs.edit().putBoolean("lowered_1121", true).apply() }
@@ -721,7 +722,7 @@ class DesktopSession(private val activity: Activity) {
     fun tick(nowNs: Long) {
         val dt = if (lastTickNs == 0L) 0.016 else ((nowNs - lastTickNs) * 1e-9).coerceIn(0.0, 0.1)
         lastTickNs = nowNs
-        val head = Tracking.head.predict(nowNs)
+        val head = Tracking.head.predictSight(nowNs)
         val tracked = head.mode != HeadTracker.Mode.NONE
         val forward = if (tracked) headForward(head) else Geometry.direction(renderers.firstOrNull()?.previewYaw ?: 0.0, renderers.firstOrNull()?.previewPitch ?: 0.0)
         // The head's place in the room is used whenever there is a head: the tracker holds its last place while it

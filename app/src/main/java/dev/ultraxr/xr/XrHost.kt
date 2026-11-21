@@ -331,14 +331,24 @@ object XrHost : OpenXrGlassesLayer.Host {
         // Every tilt so far was judged while each eye was shown a picture a third too large and off centre (see
         // XRT_COMPOSITOR_SCALE_PERCENTAGE below). With the picture the right size they mean nothing: back to none, once.
         if (!st.tiltClearedForSize) { st.pictureTiltDeg = 0f; st.tiltClearedForSize = true }
-        pictureTiltDeg = st.pictureTiltDeg
-        UltraXrFeed.displayPitchRad = Math.toRadians(pictureTiltDeg.toDouble()).toFloat()
+        // Worn, 21 November 2026: everything 20 inches too high at about 2 m, in the desktop and in a game. Once.
+        if (!st.tiltWorn1121) { if (st.pictureTiltDeg < 1f) st.pictureTiltDeg = TILT_WORN_DEG; st.tiltWorn1121 = true }
+        applyTilt(st.pictureTiltDeg)
+    }
+    const val TILT_WORN_DEG = 12f
+    private fun applyTilt(t: Float) {
+        pictureTiltDeg = t
+        UltraXrFeed.displayPitchRad = Math.toRadians(t.toDouble()).toFloat(); Tracking.head.sightPitchRad = Math.toRadians(t.toDouble())
+    }
+    /** Sets how far everything drawn is turned down, in degrees (the desktop and applications alike); kept. */
+    fun setPictureTilt(deg: Float) {
+        val t = deg.coerceIn(-20f, 20f); Tracking.settings.pictureTiltDeg = t; Tracking.settings.tiltWorn1121 = true; applyTilt(t)
+        Tracking.log("picture turned to " + dev.ultraxr.core.Fmt.f(t.toDouble(), 1) + " degrees down")
     }
     /** Turns everything drawn a step down (positive degrees) or up for the owner, who is looking at it; kept. */
     fun nudgePictureTilt(stepDeg: Float) {
         val t = (pictureTiltDeg + stepDeg).coerceIn(-20f, 20f)
-        pictureTiltDeg = t; Tracking.settings.pictureTiltDeg = t
-        UltraXrFeed.displayPitchRad = Math.toRadians(t.toDouble()).toFloat()
+        Tracking.settings.pictureTiltDeg = t; applyTilt(t)
         Tracking.log("OpenXR: picture turned by the owner to " + dev.ultraxr.core.Fmt.f(t.toDouble(), 1) + " degrees down")
     }
     /** Moves the floor a step down (positive) or up for the owner, who is looking at it; kept for next time. */

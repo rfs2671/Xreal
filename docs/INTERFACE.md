@@ -321,3 +321,12 @@ back ("here"), saved windows were lowered once, and the dock is not drawn while 
 (it returns when the focus or the hand is on it, or when it is looked down at by 7 degrees). The factory
 calibration puts the displays within a degree of the motion sensor's axes, so there is no tilt of the picture
 to correct. Not yet confirmed by the wearer.
+
+### The picture is turned down for the eye (21 November 2026, later)
+
+With windows at eye level it was "still 20 inches too high". The whole picture is now turned down by the
+wearer's correction, 12 degrees to begin with (20 inches at about 2 m), in the desktop as in applications:
+`HeadTracker.sightPitchRad` / `predictSight`, the setting `picture_tilt`, `XrHost.setPictureTilt`. From adb,
+while it is worn: `am start -n dev.ultraxr/.ui.LauncherActivity --ef picture_tilt 10`. The value is the
+wearer's judgement, not a measurement; the note above that there is "no tilt of the picture to correct"
+was wrong about what he sees.
