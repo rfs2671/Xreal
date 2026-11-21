@@ -494,6 +494,59 @@ sparse finder's table tops are often wrong) or the rule is too quick; until that
 | the estimator started afresh after a loss (`restart_after_loss=1`) | off: not measured |
 | the mesh, furniture and dropping in the app (`room_mesh=1`) | off: drops surfaces it should not |
 
+## 11. Recovery after a loss of position (21 November 2026): built, benchmarked on recorded states, NOT yet on the phone
+
+The phone was at 1 % and off its charger, so nothing here has run on it. What could be measured without it was: the
+previous build's behaviour, from the states it recorded in the covered-camera replays; and the new judge of the
+estimator's states, run over the recorded states of about forty replays. What the estimator does once it is started
+afresh after a loss, and whether the saved map then gives the position in time, can only be seen on the phone:
+`bash tools/tracking/recovery_phone_batch.sh` (35 minutes, phone charging). Rollback: the tag `pre-recovery` and
+`C:/uvio/rollback/app-c4c43c0.apk` are the build of before; in the new build `recovery=0` in `vio_options.txt` is
+the old behaviour, which is how the batch compares the two.
+
+### The previous build, measured (`tools/tracking/recovery_report.py` on the runs of section 10)
+
+| cameras covered | position still used while blind | in use again | how far out then | worst afterwards | within 10 cm for good |
+|---|---|---|---|---|---|
+| 6 s, with the map | 0.47 s (up to 10 cm wrong) | 1.0 s after the pictures return | 135 cm | 648 cm | 37.7 s after the pictures return |
+| 6 s, no map | 0.37 s | 1.1 s | 151 cm | 658 cm | never |
+| 15 s, with the map | 0.47 s | 1.1 s | 240 cm | 621 cm | never in the 38 s that were left |
+
+Why, from the recorded states: with no corners the estimator ran on the motion sensor alone and reached 4 m/s; when
+the pictures came back its velocity fell to half a metre a second at once, enough landmarks were counted, and a second
+later its position was used although for eight more seconds it moved by 20 to 29 cm between states.
+
+### What is built
+
+1. **Every state is judged before its position is used** (`core/TrackingHealth`). Blind (fewer than 25 corners
+   tracked; walking and turning it has 100 to 190, covered none) or flying (a velocity, or a step between two states,
+   of more than 3 m/s; the fastest head in the recordings is 1.6): the position is not used from that very state on,
+   and OpenXR is told the position is not tracked, as it always was while position is held. Over the recorded states of
+   about forty replays of five recordings in which nothing went wrong it never fired: the share of states shown is
+   the same to a tenth of a percent. Over the covered-camera runs it fires on the first blind state (0.03 s in place
+   of 0.4 to 0.5 s). A third rule, that the position must move as the velocity says, was thrown out by the same
+   benchmark: 8 to 14 false losses in every 83 s of ordinary walking.
+2. **After a loss of more than half a second the estimator is not carried on with.** At the first state in which it
+   sees again it is started afresh (it starts within three frames since section 7), so what follows begins from rest
+   and not from where it flew to.
+3. **Position counts again only when the fresh estimator has behaved** for 0.7 s and has had enough landmarks seen by
+   both cameras for a second.
+4. **The saved map first.** While the fresh estimator settles, the room's pictures go to the map with the estimator's
+   poses although the app does not use them yet; when two readings agree where the new world lies in the map, the world
+   is joined on exactly there (`MapAlign.restoreReading`, `HeadTracker.joinNextAt`): the wearer is where the map has
+   them, and nothing has to glide or jump afterwards. Only if the map has said nothing a second and a half after the
+   estimator is fit is the world joined on where the head was held, as before, to be corrected later.
+5. **Meanwhile the world is frozen:** the head keeps its last position and turns from the motion sensor, as it always
+   did while position is held. Nothing is hidden.
+
+If it works as built, position should be back about 1.2 to 1.5 s after the cameras see again, at the map's accuracy.
+That is arithmetic about timers, not a measurement.
+
+### The 20 cm in newly added ground
+
+Not investigated: it needs the phone. The batch tries what can be varied (how heavily the first new place is tied to
+the last recognised one, how soon adding begins) against the way of before on the same sessions.
+
 ## What is known to be weak (measured, `docs/QUEST_COMPAT.md`, `docs/TRACKING_ANALYSIS.md`)
 
 - **A saved map only since 20 November** (sections 7 and 8), for the desktop's windows, games' anchors and the room's
@@ -502,7 +555,7 @@ sparse finder's table tops are often wrong) or the rule is too quick; until that
 - **A map that is added to keeps growing** when the same room is walked again (section 8). A change against that is
   built and not measured (section 9).
 - **After the cameras are covered for some seconds the world is metres out** until the map is recognised again, which
-  took 18 to 29 s (section 10). The remedy is built and not measured.
+  took 18 to 29 s (section 10). A remedy is built (section 11) and is not measured on the phone.
 - **The estimator takes 32 ms a frame on a warm phone**, not the 25 asked for (section 10).
 - **Multi-room use has not been tested at all**: there is no recording of a walk through several rooms.
 - **Position was lost while walking** (seconds at a time, worn, 18 and 19 November); each loss of more than 2 s makes
@@ -516,7 +569,7 @@ sparse finder's table tops are often wrong) or the rule is too quick; until that
 
 ## Where the code is
 
-`native/vio/` (Basalt and its wrapper), `native/slam/` (RTAB-Map and its wrapper), `core/MapAlign.kt`, `core/RoomMemory.kt`, `core/RoomMesh.kt`, `core/Furniture.kt`, `tracking/Tracking.kt` (the loops that tie it together),
+`native/vio/` (Basalt and its wrapper), `native/slam/` (RTAB-Map and its wrapper), `core/TrackingHealth.kt`, `core/MapAlign.kt`, `core/RoomMemory.kt`, `core/RoomMesh.kt`, `core/Furniture.kt`, `tracking/Tracking.kt` (the loops that tie it together),
 `core/HeadTracker.kt`, `core/PositionConfidence.kt`, `core/FactoryCalibration.kt`, `core/FloorCalibrator.kt`,
 `core/StereoPoints.kt`, `core/RoomModel.kt`, `core/RoomTidy.kt`, `core/DenseStereo.kt`, `core/WallMap.kt`,
 `core/RoomMesh.kt`, `core/RoomPlan.kt`, `core/RoomRecall.kt`, `xr/XrHost.kt`, `questlab/src/main/cpp/meta_layer.cpp`.

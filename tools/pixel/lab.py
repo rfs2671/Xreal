@@ -109,6 +109,14 @@ RUNS = {
     "x_blind": ("room_map=find" + chr(10) + "map_glide=1" + chr(10) + "test_blind=30,36" + chr(10), "", ""), "x_blind_nomap": ("room_map=off" + chr(10) + "test_blind=30,36" + chr(10), "", ""),
     "x_blind_r": ("room_map=find" + chr(10) + "restart_after_loss=1" + chr(10) + "test_blind=30,36" + chr(10), "", ""), "x_blind15_r": ("room_map=find" + chr(10) + "restart_after_loss=1" + chr(10) + "test_blind=30,45" + chr(10), "", ""),
     "x_blind_r_nomap": ("room_map=off" + chr(10) + "restart_after_loss=1" + chr(10) + "test_blind=30,36" + chr(10), "", ""),
+    # recovery after a loss, the way from 21 November (core/TrackingHealth, the estimator started afresh, the world joined
+    # on where the saved map has the head) against the way of before ("recovery=0"), with the map and without
+    "v_blind": ("room_map=find" + chr(10) + "test_blind=30,36" + chr(10), "", ""), "v_blindb": ("room_map=find" + chr(10) + "test_blind=30,36" + chr(10), "", ""),
+    "v_blind_old": ("room_map=find" + chr(10) + "recovery=0" + chr(10) + "test_blind=30,36" + chr(10), "", ""),
+    "v_blind_nomap": ("room_map=off" + chr(10) + "test_blind=30,36" + chr(10), "", ""), "v_blind_nomap_old": ("room_map=off" + chr(10) + "recovery=0" + chr(10) + "test_blind=30,36" + chr(10), "", ""),
+    "v_blind15": ("room_map=find" + chr(10) + "test_blind=30,45" + chr(10), "", ""), "v_blind15_old": ("room_map=find" + chr(10) + "recovery=0" + chr(10) + "test_blind=30,45" + chr(10), "", ""),
+    "v_blind2": ("room_map=find" + chr(10) + "test_blind=50,52" + chr(10), "", ""),      # two seconds: a hand over the cameras
+    "v_plain": ("room_map=find" + chr(10), "", ""), "v_plain_old": ("room_map=find" + chr(10) + "recovery=0" + chr(10), "", ""),      # nothing goes wrong: is anything lost by the new way?
     "x_blind15": ("room_map=find" + chr(10) + "map_glide=1" + chr(10) + "test_blind=30,45" + chr(10), "", ""),
     "x_dim": ("room_map=find" + chr(10) + "test_light=0.6" + chr(10), "", ""), "x_dark": ("room_map=find" + chr(10) + "test_light=0.35" + chr(10), "", ""),
     "x_bright": ("room_map=find" + chr(10) + "test_light=1.6" + chr(10), "", ""),

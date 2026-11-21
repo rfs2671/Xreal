@@ -89,8 +89,38 @@ class MapAlign(private val zToY: DoubleArray) {
         val carried = recent.map { flat(moved * it) }; recent.clear(); recent.addAll(carried)
     }
 
+    // ---- after a loss: where must a NEW world of the estimator's lie for the map to stay where it is held?
+    private val fresh = ArrayList<Pose>()
+    /** Readings of the estimator's new world, before it is used, are forgotten (it was started afresh again, or is in use now). */
+    fun restoreClear() { fresh.clear() }
+    /**
+     * A reading of where the estimator's new world lies in the map ([corr]), taken while its position is not yet used.
+     * Returns where that world must lie in the app's world for the map to be where it is held, once [RESTORE_AGREE]
+     * readings agree about the point [near] (the head, in the estimator's world, z up); null until then, or with no map
+     * held. The caller joins the new world on there ([HeadTracker.joinNextAt]): the wearer is put where the map has them,
+     * not where they were when position was lost.
+     */
+    fun restoreReading(corr: Pose, near: DoubleArray): Pose? {
+        val held = appFromMap ?: return null
+        fresh.add(corr); if (fresh.size > KEEP) fresh.removeAt(0)
+        var best: Pose? = null; var bestN = 0
+        for (a in fresh) {
+            var n = 0; val pa = a.apply(near)
+            for (b in fresh) { if (a === b) continue; val pb = b.apply(near)
+                val d = Math.sqrt((pa[0] - pb[0]) * (pa[0] - pb[0]) + (pa[1] - pb[1]) * (pa[1] - pb[1]) + (pa[2] - pb[2]) * (pa[2] - pb[2]))
+                // both worlds have z up: the turn between two readings is about z
+                val rel = Q.mul(a.q, Q.conj(b.q)); val turn = 2 * Math.abs(Math.atan2(rel[2], rel[3])).let { if (it > Math.PI / 2) Math.PI - it else it }
+                if (d < AGREE_M && turn < AGREE_RAD) n++ }
+            if (n > bestN) { bestN = n; best = a }
+        }
+        if (bestN < RESTORE_AGREE - 1 || best == null) return null
+        fresh.clear(); recent.clear()
+        // seen(fix, corr) == held  <=>  fix = held * zToY * corr * zToY^-1
+        return flat(held * Pose(q = zToY) * best * Pose(q = Q.conj(zToY)))
+    }
+
     /** A new session of the estimator or a new map: nothing is known. */
-    fun clear() { appFromMap = null; lastOffM = 0.0; lastOffDeg = 0.0; recent.clear() }
+    fun clear() { appFromMap = null; lastOffM = 0.0; lastOffDeg = 0.0; recent.clear(); fresh.clear() }
 
     private fun flat(p: Pose) = Pose(p.p, Q.axisAngle(0.0, 1.0, 0.0, Q.yawY(p.q)))
 
@@ -100,6 +130,8 @@ class MapAlign(private val zToY: DoubleArray) {
         const val STEP_M = 0.015
         val STEP_RAD = Math.toRadians(0.25)
         const val KEEP = 5
+        /** Readings of a new world that must agree before it is joined on by them: two, for the sake of the second it saves. */
+        const val RESTORE_AGREE = 2
         const val AGREE_OTHERS = 2
         const val AGREE_M = 0.12
         val AGREE_RAD = Math.toRadians(3.0)

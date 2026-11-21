@@ -120,6 +120,32 @@ class MapAlignTest {
         assertEquals(0.0, dist(d2.apply(near), shift.apply(near)), 1e-12)
     }
 
+    @Test fun afterALossTheNewWorldIsJoinedOnWhereTheMapHasItNotWhereTheHeadWasHeld() {
+        val a = MapAlign(zy); val fix = yUp(0.3, 0.0, -0.2, 20.0); val corr = zUp(1.0, 2.0, 0.1, 35.0)
+        a.thrice(fix, corr)
+        val thing = doubleArrayOf(2.0, -1.0, 0.4)                  // a thing in the map (z up)
+        val was = app(fix, corr.inverse().apply(thing))            // where it is in the app's world
+        // position is lost; the wearer walks; the estimator is started afresh: its new world lies elsewhere in the map
+        val corr2 = zUp(-3.2, 0.7, 0.1, -110.0); val head = doubleArrayOf(0.2, 0.1, 0.0)
+        assertNull(a.restoreReading(corr2, head))                 // one reading is not enough
+        val fix2 = a.restoreReading(zUp(-3.17, 0.72, 0.1, -109.2), head)!!
+        // joined on there, the thing is where it was in the app's world: nothing has to glide or jump afterwards
+        val now = app(fix2, corr2.inverse().apply(thing))
+        assertTrue("" + dist(was, now), dist(was, now) < 0.08)
+        assertEquals(1, a.version)
+        // and the ordinary readings that follow find nothing to correct
+        assertNull(a.thrice(fix2, corr2))
+    }
+
+    @Test fun twoReadingsOfANewWorldThatDisagreeJoinNothing() {
+        val a = MapAlign(zy); a.thrice(yUp(0.0, 0.0, 0.0, 0.0), Pose()); val head = doubleArrayOf(0.0, 0.0, 0.0)
+        assertNull(a.restoreReading(zUp(1.0, 0.0, 0.0, 10.0), head)); assertNull(a.restoreReading(zUp(1.6, 0.3, 0.0, 30.0), head))
+        // a third that agrees with the first does
+        assertNotNull(a.restoreReading(zUp(1.02, 0.01, 0.0, 10.5), head))
+        // with no map held there is nothing to join on
+        assertNull(MapAlign(zy).restoreReading(Pose(), head))
+    }
+
     @Test fun noiseIsLeftAlone() {
         val a = MapAlign(zy); val fix = yUp(0.0, 0.0, 0.0, 0.0)
         a.thrice(fix, Pose())

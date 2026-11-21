@@ -417,6 +417,7 @@ object Tracking : GlassesLink.Listener {
                 mapSlipDone = false
                 try {
                     val lines = File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()
+                    recoveryOn = lines.none { it.replace(" ", "") == "recovery=0" }
                     mapGlide = lines.none { it.replace(" ", "") == "map_glide=0" }; restartAfterLoss = lines.any { it.replace(" ", "") == "restart_after_loss=1" }; roomMeshOn = lines.any { it.replace(" ", "") == "room_mesh=1" }
                     testBlind = lines.firstOrNull { it.startsWith("test_blind=") }?.substringAfter('=')?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }?.takeIf { it.size == 2 }?.toDoubleArray()
                     testLight = lines.firstOrNull { it.startsWith("test_light=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: 1.0
@@ -623,7 +624,14 @@ object Tracking : GlassesLink.Listener {
             if (v != 0L && (link?.state == GlassesLink.State.STREAMING || link?.replaying == true)) {
                 val seq = Native.vioGetState(v, out)
                 // The estimator restarted (by itself or on request): its world frame is new.
-                if (out[20] != lastResetCount) { if (lastResetCount >= 0) { head.onVioEpochReset(); slam.let { if (it != 0L) Native.slamNewEpoch(it) } }; lastResetCount = out[20] }
+                if (out[20] != lastResetCount) {
+                    if (lastResetCount >= 0) {
+                        head.onVioEpochReset(); slam.let { if (it != 0L) Native.slamNewEpoch(it) }
+                        health.reset(); recovering = true; stableSinceNs = 0L; mapRestoreFix = null; mapSearching = true; synchronized(mapAlign) { mapAlign.restoreClear() }
+                        if (seesAgainNs == 0L || now - seesAgainNs > 5_000_000_000L) seesAgainNs = now
+                    }
+                    lastResetCount = out[20]
+                }
                 vioAutoResets = out[21].toLong()
                 val fresh = seq != lastSeq && out[19] > 0.5
                 if (fresh) {
@@ -635,7 +643,15 @@ object Tracking : GlassesLink.Listener {
                     vioStereoMatches = out[22].toInt(); vioLandmarks = out[23].toInt()
                     replayLog?.vio(link?.replaySeconds ?: 0.0, out, positionConfidence.trusted)
                     val wasTrusted = positionConfidence.trusted
-                    val trusted = positionConfidence.update(now, vioLandmarks, vioStereoMatches)
+                    val counted = positionConfidence.update(now, vioLandmarks, vioStereoMatches)
+                    // Is this state's position fit to be used at all (core/TrackingHealth)? Blind or flying: not from this
+                    // very state on, and the count of good landmarks starts again from nothing.
+                    val fit = !recoveryOn || health.update(out[0].toLong(), p, vel, vioFeatures)
+                    if (recoveryOn && !fit && health.why != dev.ultraxr.core.TrackingHealth.Why.SETTLING) {
+                        if (counted || wasUsing) { val said = "6DoF: position unfit (" + (if (health.why == dev.ultraxr.core.TrackingHealth.Why.BLIND) "the cameras see nothing: $vioFeatures corners" else "the estimator says the head flies") + "): held from this state on"; log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said) }
+                        positionConfidence.reset()
+                    }
+                    val trusted = counted && fit
                     // Covered cameras, by replay (20 November 2026, night): one second after the pictures came back the
                     // estimator's position was believed again, while it was still flying off at up to 6 and 11 m/s from six
                     // seconds of the motion sensor alone; the world ended 6 m from where it belonged. With the switch on,
@@ -644,7 +660,7 @@ object Tracking : GlassesLink.Listener {
                     if (trusted) untrustedSinceNs = 0L else {
                         if (untrustedSinceNs == 0L) untrustedSinceNs = now
                         val seesAgain = vioLandmarks >= dev.ultraxr.core.PositionConfidence.GOOD_LANDMARKS && vioStereoMatches >= dev.ultraxr.core.PositionConfidence.GOOD_STEREO
-                        if (restartAfterLoss && seesAgain && now - untrustedSinceNs > 1_500_000_000L && now - lossRestartNs > 3_000_000_000L) {
+                        if (!recoveryOn && restartAfterLoss && seesAgain && now - untrustedSinceNs > 1_500_000_000L && now - lossRestartNs > 3_000_000_000L) {
                             val away = (now - untrustedSinceNs) / 1e9; lossRestartNs = now; untrustedSinceNs = 0L; mapSearching = true
                             restartVio(v, "position was away for " + dev.ultraxr.core.Fmt.f(away, 1) + " s and the cameras see again: started afresh rather than believed")
                         }
@@ -655,6 +671,11 @@ object Tracking : GlassesLink.Listener {
                     // the table top. Held exactly like an untrusted position, and re-aligned when motion returns.
                     val lying = holdWhenStill && stillness.still
                     var restarted = false
+                    // After a loss the estimator is not carried on with: it is started afresh the moment it sees again.
+                    if (recoveryOn && health.takeRestart() && now - lossRestartNs > 1_000_000_000L) {
+                        lossRestartNs = now; seesAgainNs = now
+                        restartVio(v, "the cameras see again after a loss: started afresh rather than believed"); restarted = true
+                    }
                     // The estimator's idea of down is far from the accelerometer's (it began while the glasses were
                     // being picked up or turned over): the picture would hang tilted or upside down. Half a second
                     // of that and it is started afresh; meanwhile the head tracker keeps the accelerometer's tilt.
@@ -675,7 +696,31 @@ object Tracking : GlassesLink.Listener {
                         // Still lying there and the estimator is walking off: restart it now, so it cannot build up speed.
                         lyingRestartNs = now; restartVio(v, "wandering " + dev.ultraxr.core.Fmt.f(dist(p, lyingAt!!), 2) + " m with the glasses lying still"); lyingAt = null; restarted = true
                     } else if (lying && lyingAt == null) lyingAt = p.copyOf()
-                    val use = trusted && !lying && !restarted
+                    var use = trusted && !lying && !restarted
+                    // A new world of the estimator's after a loss. If the saved map is held in this session, it is asked
+                    // where this world lies BEFORE the position is used (the room's pictures go to it meanwhile), and the
+                    // world is joined on there: the wearer is where the map has them, with nothing to glide or jump
+                    // afterwards. Only if the map says nothing within a second and a half of the estimator being fit is
+                    // the world joined on where the head was held, as before.
+                    if (recoveryOn && recovering) {
+                        val mapHeld = slam != 0L && appFromMap() != null
+                        if (use) {
+                            if (stableSinceNs == 0L) stableSinceNs = now
+                            val target = mapRestoreFix
+                            if (target != null) {
+                                head.joinNextAt(target); mapRestoreFix = null; recovering = false; recoveries++
+                                val said = "6DoF: position is back " + dev.ultraxr.core.Fmt.f((now - seesAgainNs) / 1e9, 1) + " s after the cameras saw again, where the saved map has the head"; log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said)
+                            } else if (mapHeld && now - stableSinceNs < MAP_FIRST_NS) use = false
+                            else {
+                                recovering = false; recoveries++
+                                val said = "6DoF: position is back " + dev.ultraxr.core.Fmt.f((now - seesAgainNs) / 1e9, 1) + " s after the cameras saw again, joined on where the head was held" + (if (mapHeld) " (the map said nothing in time)" else " (no map is held)"); log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said)
+                            }
+                        }
+                        // the room's picture of this moment goes to the map alone
+                        if (!use && recovering && mapHeld && fit) synchronized(roomLock) {
+                            if (roomHave && !roomReady && Math.abs(out[0].toLong() - roomT) < 6_000_000L) { roomP = p; roomQ = q; roomFix = head.appFromEstimator(); roomWorld = head.worldVersion; roomMapOnly = true; roomReady = true; roomLock.notifyAll() }
+                        }
+                    }
                     // Picked up and tracking again: while the glasses lay still their position was held at the table,
                     // and the way up to the face is not tracked (the estimator is starting afresh). So the world is
                     // recentred on the wearer once position has been good for a second, as when a game starts.
@@ -716,7 +761,7 @@ object Tracking : GlassesLink.Listener {
                         // This state is the head at the moment of a picture the room is waiting on: hand both over.
                         synchronized(roomLock) {
                             if (roomHave && !roomReady && Math.abs(out[0].toLong() - roomT) < 6_000_000L) {
-                                roomP = p; roomQ = q; roomFix = head.appFromEstimator(); roomWorld = head.worldVersion; roomReady = true; roomLock.notifyAll()
+                                roomP = p; roomQ = q; roomFix = head.appFromEstimator(); roomWorld = head.worldVersion; roomMapOnly = false; roomReady = true; roomLock.notifyAll()
                             }
                         }
                     }
@@ -757,7 +802,7 @@ object Tracking : GlassesLink.Listener {
     private fun restartVio(v: Long, why: String) {
         replayLog?.note(link?.replaySeconds ?: 0.0, "restart: $why")
         log("6DoF restarted: $why")
-        positionConfidence.reset()
+        positionConfidence.reset(); health.reset()
         Native.vioReset(v)
         head.onVioEpochReset()
     }
@@ -896,7 +941,7 @@ object Tracking : GlassesLink.Listener {
     private const val MAP_MIN_PLACES = 8
 
     /** One room picture and the estimator's pose for it go to the map; what the map has found since is taken up. */
-    private fun mapStep(tNs: Long, l: ByteArray, r: ByteArray, p: DoubleArray, q: DoubleArray) {
+    private fun mapStep(tNs: Long, l: ByteArray, r: ByteArray, p: DoubleArray, q: DoubleArray, restoring: Boolean = false) {
         val h = slam; if (h == 0L) return
         val st = DoubleArray(18)
         synchronized(slamLock) {
@@ -929,11 +974,18 @@ object Tracking : GlassesLink.Listener {
                 (if (mapFoundNs != 0L) " (last " + dev.ultraxr.core.Fmt.f((nowNs - mapFoundNs) / 1e9, 1) + " s ago)" else "") + ", a picture takes " + dev.ultraxr.core.Fmt.f(mapMs, 0) + " ms; " +
                 (if (mapAlign.version == 0) "the map's place in this session is not known" + (if (mapAlign.unsure > 0) " (" + mapAlign.unsure + " readings without enough agreement)" else "")
                  else "last seen " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffM * 100, 1) + " cm and " + dev.ultraxr.core.Fmt.f(mapAlign.lastOffDeg, 2) + " degrees from where it is held; " + mapSmallSteps + " small steps (" + dev.ultraxr.core.Fmt.f(mapStepSumM * 100, 0) + " cm in all), " + mapBigMoves + " large ones put back (" + (if (mapGlide) dev.ultraxr.core.Fmt.f(mapGlideParts * 0.025, 1) + " s of gliding" else "at once") + ")") +
-                "; estimator " + dev.ultraxr.core.Fmt.f(vioProcessMs, 0) + " ms a frame; room: " + synchronized(roomMemory) { roomMemory.kept.size.toString() + " surfaces kept, " + roomMemory.dropped + " dropped" } +
+                "; estimator " + dev.ultraxr.core.Fmt.f(vioProcessMs, 0) + " ms a frame; losses " + health.losses + " (" + health.blindStates + " states blind, " + health.flyingStates + " flying), " + recoveries + " recoveries, " + head.joinsFromMap + " of them from the map; room: " + synchronized(roomMemory) { roomMemory.kept.size.toString() + " surfaces kept, " + roomMemory.dropped + " dropped" } +
                 ", mesh " + roomMeshBlocks + " blocks (" + dev.ultraxr.core.Fmt.f(roomMeshMs, 0) + " ms a picture), " + furnitureInMap.size + " pieces of furniture")
         }
         if (!reading) return
         // while the world glides back nothing new is asked of the map: what it says now is of a world on its way
+        if (restoring) {
+            // the estimator's new world is not in use yet: this reading says where it must be joined on
+            val corrNew = Pose(doubleArrayOf(st[6], st[7], st[8]), doubleArrayOf(st[9], st[10], st[11], st[12]))
+            val target = synchronized(mapAlign) { mapAlign.restoreReading(corrNew, p) }
+            if (target != null) { mapRestoreFix = target; mapSearching = false; replayLog?.note(link?.replaySeconds ?: 0.0, "room map: the head is found again in the saved map (place " + st[14].toInt() + ", " + st[15].toInt() + " points agree)") }
+            return
+        }
         mapSearching = false
         if (mapGliding) return
         val corr = Pose(doubleArrayOf(st[6], st[7], st[8]), doubleArrayOf(st[9], st[10], st[11], st[12]))
@@ -997,6 +1049,16 @@ object Tracking : GlassesLink.Listener {
     @Volatile private var restartAfterLoss = false
     private var untrustedSinceNs = 0L; private var lossRestartNs = 0L
     @Volatile private var mapSearching = false
+    // ---- recovery after a loss (core/TrackingHealth, MapAlign.restoreReading). "recovery=0" in vio_options.txt is the way
+    // of before 21 November 2026: position believed again a second after enough landmarks are seen, whatever it says.
+    val health = dev.ultraxr.core.TrackingHealth()
+    @Volatile private var recoveryOn = true
+    @Volatile private var recovering = false
+    private var stableSinceNs = 0L; private var seesAgainNs = 0L
+    @Volatile private var mapRestoreFix: Pose? = null
+    @Volatile private var roomMapOnly = false
+    @Volatile var recoveries = 0; private set
+    private const val MAP_FIRST_NS = 1_500_000_000L
     /** The mesh kept with the map, furniture, and dropping of kept surfaces seen through: on with "room_mesh=1" in vio_options.txt until its cost on the phone is measured. */
     @Volatile private var roomMeshOn = false
     @Volatile var mapGlideParts = 0; private set
@@ -1127,14 +1189,15 @@ object Tracking : GlassesLink.Listener {
         var dense: dev.ultraxr.core.DenseStereo? = null; val wallMap = dev.ultraxr.core.WallMap(); var denseWallsNow: List<dev.ultraxr.core.RoomSurface> = emptyList(); var saidWalls = -1
         val ranges = DoubleArray(300)
         while (running) {
-            var p: DoubleArray; var q: DoubleArray; var fix: Pose; var version: Int; var tPic: Long
+            var p: DoubleArray; var q: DoubleArray; var fix: Pose; var version: Int; var tPic: Long; var mapOnly: Boolean
             synchronized(roomLock) {
                 while (running && !roomReady) try { roomLock.wait(500) } catch (_: InterruptedException) {}
                 if (!running) return
                 System.arraycopy(roomLeft, 0, l, 0, l.size); System.arraycopy(roomRight, 0, r, 0, r.size)
-                p = roomP; q = roomQ; fix = roomFix; version = roomWorld; roomHave = false; roomReady = false; tPic = roomT
+                p = roomP; q = roomQ; fix = roomFix; version = roomWorld; roomHave = false; roomReady = false; tPic = roomT; mapOnly = roomMapOnly
             }
-            try { mapStep(tPic, l, r, p, q) } catch (e: Throwable) { log("room map: $e") }
+            try { mapStep(tPic, l, r, p, q, mapOnly) } catch (e: Throwable) { log("room map: $e") }
+            if (mapOnly) continue      // the estimator's position is not in use yet: nothing of this picture is put into the room
             val rig = stereoRig ?: continue
             if (rig !== finderRig) {
                 finder = dev.ultraxr.core.StereoPoints(rig); finderRig = rig

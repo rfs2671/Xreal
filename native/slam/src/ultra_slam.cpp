@@ -95,6 +95,7 @@ struct uslam {
 	// world then: when adding begins, the first new place is linked to that one by the way the head went since
 	// (measured on the phone: without it new ground often stayed untied until the end and was thrown away).
 	int last_hit = 0, links_made = 0;
+	double link_info = 400.0; // "Ultra/LinkInfo"
 	bool link_due = false;
 	Transform last_hit_pose, last_corr;
 	double add_after_m = 0.4;
@@ -347,7 +348,7 @@ struct uslam {
 						if (fresh > old_max && last_hit > 0 && !last_corr.isNull()) {
 							link_due = false;
 							const Transform here = last_corr * tf(pose7(ps)); // the new place in the map, by the way the head went
-							const cv::Mat info = cv::Mat::eye(6, 6, CV_64FC1) * 400.0; // about 5 cm and 3 degrees
+							const cv::Mat info = cv::Mat::eye(6, 6, CV_64FC1) * link_info; // 400: about 5 cm and 3 degrees
 							const bool ok = rt->addLink(Link(fresh, last_hit, Link::kUserClosure, here.inverse() * last_hit_pose, info));
 							LOGI("new place %d linked to place %d, %.2f m away: %s", fresh, last_hit, (here.inverse() * last_hit_pose).getNorm(), ok ? "done" : "refused");
 							if (ok) links_made++;
@@ -432,6 +433,7 @@ USLAM_API uslam_t *uslam_create(const char *rig, const char *db, int mode, const
 				else if (k == "Ultra/AddAlways") h->add_always = atoi(v.c_str()) != 0;
 				else if (k == "Ultra/AddAfterM") h->add_after_m = atof(v.c_str());
 				else if (k == "Ultra/AddAfterMisses") h->add_after_misses = atoi(v.c_str());
+				else if (k == "Ultra/LinkInfo") h->link_info = atof(v.c_str());
 				else if (k == "Ultra/CvThreads") h->cv_threads = atoi(v.c_str());
 				else p[k] = v;
 			}

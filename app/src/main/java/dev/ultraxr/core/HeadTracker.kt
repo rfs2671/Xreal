@@ -114,7 +114,9 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             newCorr = if (n > 1e-6) doubleArrayOf(0.0, newCorr[1] / n, 0.0, newCorr[3] / n) else corr
         } else vioTiltBad = 0
         if (epochPending || !haveVio) {
-            if (!recenterPending) {
+            val given = pendingFix; pendingFix = null
+            if (given != null && !recenterPending) fix = given
+            else if (!recenterPending) {
                 // Keep the app world where it was: old estimate of the body at tNs must equal the new one.
                 val oldQ = Q.mul(fix.q, Q.mul(corr, Q.mul(Z_TO_Y, gyroAt)))
                 val oldP = fix.apply(heldP)
@@ -142,6 +144,15 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
 
     /** The estimator was restarted: its next state lives in a new world frame. */
     @Synchronized fun onVioEpochReset() { if (haveVio) epochPending = true; haveVio = false }
+
+    /**
+     * The next position that is used begins a world of the estimator's that lies at [fixTo] in the app's world (the
+     * saved map of the room said so), in place of being joined on where the head was held: after a loss the wearer may
+     * have walked, and the held place is then wrong by as far.
+     */
+    @Synchronized fun joinNextAt(fixTo: Pose) { pendingFix = Pose(fixTo.p, Q.axisAngle(0.0, 1.0, 0.0, Q.yawY(fixTo.q))); epochPending = true; haveVio = false; joinsFromMap++ }
+    private var pendingFix: Pose? = null
+    var joinsFromMap = 0; private set
 
     /** Makes the current head position and heading the origin of the app world. */
     @Synchronized fun recenter() { recenterPending = true }
