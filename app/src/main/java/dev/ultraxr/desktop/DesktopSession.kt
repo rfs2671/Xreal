@@ -342,6 +342,13 @@ class DesktopSession(private val activity: Activity) {
         val from = openingFrom ?: title
         desktop.windows.firstOrNull { it.minimized && it.kind == kind && (it.origin == from || it.url == url) }?.let { old -> bringBack(old.id); return true }
         if (desktop.windows.size >= Desktop.MAX_WINDOWS) desktop.windows.firstOrNull { it.minimized }?.let { close(it.id) }
+        // Worn, 21 November 2026: six windows stood somewhere in the room out of sight, nothing new would open and
+        // there was no finding them to close one. A window asked for always opens: the one furthest from where the
+        // wearer looks (and not the one in use) makes room, and it is said which.
+        if (desktop.windows.size >= Desktop.MAX_WINDOWS) {
+            val hy = headYaw()
+            desktop.windows.filter { it.id != desktop.focusedId && it.kind != SETTINGS }.maxByOrNull { Math.abs(Geometry.wrap(desktop.worldYaw(it) - hy)) }?.let { far -> val t = far.title; close(far.id); say("Closed $t to make room") }
+        }
         stageMoving = true      // the dock comes to where the wearer is now, so that the new window stands clear of it
         val w = desktop.add(title, url, kind, headYaw())
         if (w == null) { say("Six windows are open: close one first"); return false }
@@ -393,6 +400,40 @@ class DesktopSession(private val activity: Activity) {
     fun resetLayout() { for (id in desktop.windows.map { it.id }) close(id); changed() }
 
     /** Focus the next window that is showing (wraps around). Returns false if there is none to move to. */
+    /** The window an action from the phone is meant for: the one in focus, or else the one nearest to where the wearer looks. */
+    private fun target(): DesktopWindow? = desktop.focused?.takeIf { !it.minimized } ?: run {
+        val hy = headYaw(); desktop.windows.filter { !it.minimized }.minByOrNull { Math.abs(Geometry.wrap(desktop.worldYaw(it) - hy)) }
+    }
+    /** "close" on the phone: one press, whatever has the focus. */
+    fun closeFocused() {
+        val w = target() ?: run { say("No window is open"); return }
+        val t = w.title; val next = FocusModel.afterClose(FocusScene(shelfCount(), desktop.windows.filter { !it.minimized }.map { FocusWindow(it.id, desktop.worldYaw(it)) }, headYaw(), desktop.shelfIndex), w.id)
+        close(w.id); (next as? Focus.Window)?.let { desktop.focus(it.id) }; say("Closed $t"); changed()
+    }
+    /** "full" on the phone: the window fills the view and stays with the head; again, and it is back where it stood. */
+    fun toggleFull() {
+        val w = target() ?: run { say("No window is open"); return }
+        if (moving || sizing) press(FocusKey.SELECT)
+        desktop.toggleFullscreen(w.id); say(if (desktop.fullscreenId == w.id) w.title + " fills the view: press full again to put it back" else w.title + " is back in its place"); changed()
+    }
+    /** "here" on the phone: every window, put away or left anywhere in the room, comes in front of the wearer. */
+    fun bringHere() {
+        val n = desktop.windows.size
+        if (n == 0) { say("No window is open"); return }
+        if (desktop.fullscreenId != -1) desktop.toggleFullscreen(desktop.fullscreenId)
+        for (w in desktop.windows) if (w.minimized) desktop.restore(w.id)
+        gather(); target()?.let { desktop.focus(it.id) }
+        say(if (n == 1) "The window is in front of you" else "$n windows are in front of you"); changed()
+    }
+    /** "next" on the phone: the focus goes to the next window, and it is said which, so that it can be found. */
+    fun nextWindow() {
+        val vis = desktop.windows.filter { !it.minimized }
+        if (vis.isEmpty()) { say("No window is open"); return }
+        if (moving || sizing) press(FocusKey.SELECT)
+        if (vis.size == 1) desktop.focus(vis[0].id) else cycleFocus()
+        desktop.focused?.let { say(it.title + " is in focus") }; changed()
+    }
+
     fun cycleFocus(): Boolean {
         val vis = desktop.windows.filter { !it.minimized }
         if (vis.size < 2) return false

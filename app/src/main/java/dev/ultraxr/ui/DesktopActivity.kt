@@ -295,6 +295,14 @@ class DesktopActivity : Activity() {
         // moving and sizing the window in focus are a press away, not behind "more": slide the touchpad or use the d-pad, then press again (or Select)
         left.add(side("move", "Move the window in focus: slide or use the d-pad, two fingers for nearer and further; press again to put it down") { tick(heavy = false); session.toggleMove() }, h = 0, weight = 1f)
         right.add(side("size", "Size the window in focus: slide or use the d-pad; press again when it is right") { tick(heavy = false); session.toggleSize() }, h = 0, weight = 1f)
+        // Worn, 21 November 2026: "no way to close certain windows ... make them bigger or full screen". What is done to
+        // a window is one press each, in a row of its own above the d-pad: no focus has to be walked anywhere first.
+        val acts = Ui.row(this)
+        acts.add(side("close", "Close the window in focus") { tick(heavy = true); session.closeFocused() }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
+        acts.add(side("full", "Full view: the window in focus fills the view; press again to put it back") { tick(heavy = false); session.toggleFull() }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
+        acts.add(side("next", "Next window: the focus goes to the next window") { tick(heavy = false); session.nextWindow() }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
+        acts.add(side("here", "Here: every window comes in front of you") { tick(heavy = false); session.bringHere() }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
+        root.add(acts, h = Ui.dp(this, 52), topDp = 4)
         low.add(left, Ui.dp(this, 76), ViewGroup.LayoutParams.MATCH_PARENT)
         low.add(dpad, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
         low.add(right, Ui.dp(this, 76), ViewGroup.LayoutParams.MATCH_PARENT)

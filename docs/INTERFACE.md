@@ -212,6 +212,13 @@ The phone is a controller that is used without looking at it.
 +------------------------------+
 ```
 
+- **One press each, in a row above the d-pad (21 November 2026, after the owner wore it: "no way to close certain
+  windows ... make them bigger or full screen"):** "close" closes the window in focus (or the one nearest to where
+  the wearer looks), "full" makes it fill the view and again puts it back, "next" moves the focus to the next window,
+  "here" brings every window, put away or left anywhere in the room, in front of the wearer. Each says in the status
+  line what it did. A seventh window no longer refuses to open: the window furthest from where the wearer looks is
+  closed to make room, and it is said which. Checked on the S21 Ultra in the phone's preview (here, full, full again,
+  next, close twice); not in the glasses, and the seventh window not at all.
 - "keys" opens Android's keyboard for the page in focus. "more" opens a short list: quick sizes, reload, address,
   pocket mode, settings.
 - Line on a dark ground (the phone's screen is an ordinary one: it may be dark, not see-through). The same six
