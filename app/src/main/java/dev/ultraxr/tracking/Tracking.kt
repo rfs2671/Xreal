@@ -913,7 +913,7 @@ object Tracking : GlassesLink.Listener {
     } catch (e: Exception) { log("room map: the calibration could not be read for it: $e"); null }
 
     /** Opens the saved map to find the head in, or begins a new one when there is none ([fresh]: forget the one there). */
-    private fun openRoomMap(fresh: Boolean) = synchronized(slamLock) {
+    private fun openRoomMap(fresh: Boolean): Unit = synchronized(slamLock) {
         val old = slam; slam = 0L
         if (old != 0L) Native.slamDestroy(old, false)
         synchronized(mapAlign) { mapAlign.clear() }
@@ -937,6 +937,12 @@ object Tracking : GlassesLink.Listener {
         val h = try { Native.slamCreate(rig, f.absolutePath, mode, slamParams()) } catch (e: Throwable) { log("room map: not available: $e"); 0L }
         if (h == 0L) { log("room map: could not be opened: " + Native.lastError()); return@synchronized }
         val st = DoubleArray(18); Native.slamGetState(h, st); mapPlaces = st[13].toInt()
+        // A saved map with no place in it can never be recognised, so nothing would ever be added to it (worn, 21
+        // November 2026: three sessions ran on "a saved map of 0 places", and a loss had no map to come back by).
+        if (finding && mapPlaces == 0 && !roomMapReadOnly) {
+            Native.slamDestroy(h, false); log("room map: the saved map is empty; a new one is begun")
+            openRoomMap(true); return@synchronized
+        }
         slamMode = mode; slamResultsSeen = 0.0; slamOpenedNs = System.nanoTime(); slam = h
         log(if (finding) "room map: a saved map of " + mapPlaces + " places is open; looking for the head in it" + (if (mode == 2) ", and adding to it once it is found" else "") + " (" + Native.slamVersion() + ")" else "room map: none saved, making one from this session (" + Native.slamVersion() + ")")
     }
