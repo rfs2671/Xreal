@@ -666,3 +666,26 @@ the two stretches) is not separated yet.
 `core/StereoPoints.kt`, `core/RoomModel.kt`, `core/RoomTidy.kt`, `core/DenseStereo.kt`, `core/WallMap.kt`,
 `core/RoomMesh.kt`, `core/RoomPlan.kt`, `core/RoomRecall.kt`, `xr/XrHost.kt`, `questlab/src/main/cpp/meta_layer.cpp`.
 Research and roadmap: `reports/XREAL Quest level spatial roadmap.md`, `docs/SPATIAL_RESEARCH.md`.
+
+## 12. "6dof anchoring is shaky at best" (worn, 21 November 2026, afternoon): the steps between states
+
+Replay of the worn two minutes (`worn1121b.uxrec`, the first 108 s of `live-1795294419621.uxrec`, S21 Ultra).
+The head given to the renderer was the newest state carried forward by its own speed, and each new state
+replaced the last outright. Thirty times a second the head's place therefore jumped by what the last state's
+speed had been wrong by. `HeadTracker` now keeps what a new state changes as an offset that dies away in 50 ms
+(`GLIDE_S`), and approaches the turn's correction at every motion sample instead of halfway at every state
+(`glide=0` in `vio_options.txt`: as before).
+
+Measured on the head as the renderer gets it, asked for 60 times a second during the replay (`TAG-render.csv`,
+`tools/tracking/render_judder.py`): what is left of the head's place after smooth motion is taken out, per
+frame, two runs each.
+
+| head | before, rms mm | after, rms mm | before, 99th percentile | after |
+|---|---|---|---|---|
+| still (under 0.05 m/s) | 0.62, 0.66 | 0.18, 0.17 | 2.2, 2.3 mm | 0.65, 0.65 mm |
+| moving slowly (to 0.2 m/s) | 1.74, 1.91 | 0.70, 0.74 | 5.4, 5.6 mm | 2.4, 2.3 mm |
+| walking | 3.46, 3.50 | 1.67, 1.56 | 9.3, 10.3 mm | 5.8, 5.3 mm |
+
+At 2 m, 5 mm is 6 pixels of the display. The turn (from the gyroscope) is unchanged by this: 0.03 degrees a
+frame still, the same in all four runs. This is a replay: whether the picture now looks steady has not been
+seen in the glasses. Not looked at: late display frames (about 5 in 100 with one window, more with six).

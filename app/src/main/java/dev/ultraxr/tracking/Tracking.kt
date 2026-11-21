@@ -433,6 +433,7 @@ object Tracking : GlassesLink.Listener {
                     testLight = lines.firstOrNull { it.startsWith("test_light=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: 1.0
                     testNoise = lines.firstOrNull { it.startsWith("test_blind_noise=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: 0
                     starveOn = lines.none { it.replace(" ", "") == "starve=0" }
+                    head.glideOn = lines.none { it.replace(" ", "") == "glide=0" }
                     handTone = lines.firstOrNull { it.startsWith("hand_tone=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: HAND_TONE
                     handToneLut = handTone.takeIf { it > 0 }?.let { tau -> ByteArray(256) { i -> (255.0 * (1 - Math.exp(-i / tau)) / (1 - Math.exp(-255.0 / tau))).toInt().coerceIn(0, 255).toByte() } }
                     if (testBlind != null || testLight != 1.0) log("test: " + (testBlind?.let { "the cameras see nothing from " + it[0] + " to " + it[1] + " s of a replay; " } ?: "") + (if (testLight != 1.0) "pictures at $testLight of their brightness" else ""))
@@ -1238,6 +1239,14 @@ object Tracking : GlassesLink.Listener {
         val rl = try { ReplayLog(outDir, tag) } catch (e: Exception) { onDone("cannot write the replay log: $e"); return }
         replayLog = rl
         positionConfidence.reset()
+        thread(name = "replay-render", isDaemon = true) {      // stands in for the renderer: the head 60 times a second, on the recording's own clock
+            val t0 = System.nanoTime(); var n = 0L
+            while (replayLog === rl) {
+                val now = System.nanoTime(); val s = head.predict(now)
+                try { rl.render((now - t0) / 1e9, s.pose.p, s.pose.q, s.mode == HeadTracker.Mode.SIX_DOF) } catch (_: Throwable) { break }
+                n++; val wait = t0 + n * 16_666_667L - System.nanoTime(); if (wait > 0) java.util.concurrent.locks.LockSupport.parkNanos(wait)
+            }
+        }
         l.replay(file) { note -> try { saveRoomMap() } catch (e: Throwable) { log("room map: not saved: $e") }; replayLog = null; rl.close(note); onDone(note) }
     }
 

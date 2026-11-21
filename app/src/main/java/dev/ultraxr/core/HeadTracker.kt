@@ -88,6 +88,7 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             }
             val kp = if (imuCount < 1500) 2.0 else 0.15
             qGI = Q.normalize(Q.mul(qGI, Q.exp((wx + kp * ex) * dt, (wy + kp * ey) * dt, (wz + kp * ez) * dt)))
+            if (glideOn) corrTo?.let { to -> corr = Q.normalize(Q.slerp(corr, to, (dt / GLIDE_S).coerceAtMost(1.0))) }
         }
         imuCount++
         val i = (histN % HIST).toInt()
@@ -130,10 +131,25 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             }
             epochPending = false
             epochs++
-            corr = newCorr
-        } else {
+            corr = newCorr; corrTo = newCorr
+            glide[0] = 0.0; glide[1] = 0.0; glide[2] = 0.0
+        } else if (!glideOn) {
             // Blend the correction a little to hide estimator jitter between frames.
             corr = Q.normalize(Q.slerp(corr, newCorr, 0.5))
+        } else {
+            // Worn, 21 November 2026: "6dof anchoring is shaky at best". Each state used to replace the last outright,
+            // so thirty times a second the head's place jumped by whatever the last state's speed had been wrong by
+            // (replay of that session: 1 to 3 mm with the head moving slowly, 3 to 9 mm walking; at 2 m that is 4 to
+            // 11 pixels). Now what the new state changes is kept as an offset that dies away in a twentieth of a
+            // second, so the head's place has no steps in it, and the turn is approached at every motion sample.
+            corrTo = newCorr
+            val now = maxOf(lastImuNs, tNs)
+            val g = glideAt(now)
+            val oldDt = ((now - vioNs) * 1e-9).coerceIn(0.0, MAX_POSITION_EXTRAPOLATION_S); val newDt = ((now - tNs) * 1e-9).coerceIn(0.0, MAX_POSITION_EXTRAPOLATION_S)
+            for (i in 0..2) glide[i] = vioP[i] + vioV[i] * oldDt + g[i] - (pY[i] + vY[i] * newDt)
+            glideNs = now
+            // a correction too large to be the estimator's ordinary noise is not drawn out
+            if (glide[0] * glide[0] + glide[1] * glide[1] + glide[2] * glide[2] > GLIDE_MAX_M * GLIDE_MAX_M) { glide[0] = 0.0; glide[1] = 0.0; glide[2] = 0.0 }
         }
         gyroBiasEst?.let { if (it.all { b -> b.isFinite() && abs(b) < 0.2 }) { gyroBias[0] = it[0]; gyroBias[1] = it[1]; gyroBias[2] = it[2] } }
         vioNs = tNs; vioP = pY; vioV = vY; heldP = pY; heldValid = true
@@ -141,6 +157,14 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         vioStates++
     }
     private var heldValid = false
+    /** What the last state changed in the head's place, dying away ([GLIDE_S]); and the turn the correction is on its way to. */
+    private val glide = DoubleArray(3); private var glideNs = 0L; private var corrTo: DoubleArray? = null
+    /** Off: each state replaces the last outright, as until 21 November 2026 (for comparison). */
+    @Volatile var glideOn = true
+    private fun glideAt(tNs: Long): DoubleArray {
+        val k = Math.exp(-((tNs - glideNs) * 1e-9).coerceAtLeast(0.0) / GLIDE_S)
+        return doubleArrayOf(glide[0] * k, glide[1] * k, glide[2] * k)
+    }
 
     /** The estimator was restarted: its next state lives in a new world frame. */
     @Synchronized fun onVioEpochReset() { if (haveVio) epochPending = true; haveVio = false }
@@ -192,7 +216,8 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         val vel = if (sixDof) vioV else doubleArrayOf(0.0, 0.0, 0.0)
         val pBody = if (sixDof) {
             val dt = (age * 1e-9).coerceIn(0.0, MAX_POSITION_EXTRAPOLATION_S)
-            doubleArrayOf(vioP[0] + vel[0] * dt, vioP[1] + vel[1] * dt, vioP[2] + vel[2] * dt).also { heldP = it }
+            val g = if (glideOn) glideAt(tNs) else ZERO3
+            doubleArrayOf(vioP[0] + vel[0] * dt + g[0], vioP[1] + vel[1] * dt + g[1], vioP[2] + vel[2] * dt + g[2]).also { heldP = it }
         } else heldP
         var head = Pose(pBody, qBody) * Pose(headInImu, IMU_TO_HEAD)
         if (recenterPending) {
@@ -251,6 +276,9 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         const val VIO_STALE_NS = 400_000_000L
         const val MAX_GYRO_EXTRAPOLATION_S = 0.05
         const val MAX_POSITION_EXTRAPOLATION_S = 0.12
+        const val GLIDE_S = 0.05
+        const val GLIDE_MAX_M = 0.10
+        private val ZERO3 = doubleArrayOf(0.0, 0.0, 0.0)
         /** z-up world -> y-up world: (x, y, z) -> (x, z, -y). */
         val Z_TO_Y: DoubleArray = Q.axisAngle(1.0, 0.0, 0.0, -Math.PI / 2)
         /** Head axes in the IMU frame: right = -x, up = +z, back = +y. */

@@ -46,6 +46,8 @@ RUNS = {
     # upstream's rules (no tiles, a hand dropped as soon as one camera is unsure) against the library as it now is, each twice
     "h_up":  ("", "tiles=0" + chr(10) + "keep=0" + chr(10)), "h_upb": ("", "tiles=0" + chr(10) + "keep=0" + chr(10)),
     "h_now": ("", ""), "h_nowb": ("", ""),
+    # the head given to the renderer with and without the glide between states (TAG-render.csv)
+    "j_glide": ("", ""), "j_glideb": ("", ""), "j_step": ("glide=0" + chr(10), ""), "j_stepb": ("glide=0" + chr(10), ""),
     # the plain CPU kernels against XNNPACK (the default), and what the time gained buys: three tiles a run
     "h_nox": ("", "xnnpack=0" + chr(10)), "h_noxb": ("", "xnnpack=0" + chr(10)),
     "h_t3": ("", "tiles=3" + chr(10)), "h_t3b": ("", "tiles=3" + chr(10)),
@@ -210,7 +212,7 @@ def replay(dev, name, out, runs):
             log = chr(10).join(l for l in log.splitlines() if "already running" not in l)
             if "replay finished" in log or "replay stopped" in log: done = log; break
         print("%s: %s" % (tag, (done.splitlines()[-1].split("UltraXR :")[-1].strip() if done else "no end message after 7 minutes")), flush=True)
-        for kind in ("vio.csv", "hands.csv", "app.csv", "joints.csv", "room.csv", "notes.txt"):
+        for kind in ("vio.csv", "hands.csv", "app.csv", "render.csv", "joints.csv", "room.csv", "notes.txt"):
             run(["adb", "-s", dev, "pull", "%s/replay/%s-%s" % (FILES, tag, kind), os.path.join(out, "%s-%s" % (tag, kind))], 120)
         temp = re.search(r"temperature: (\d+)", sh(dev, "dumpsys battery"))
         if temp and int(temp.group(1)) > 420: print("battery at %.1f C: pausing two minutes" % (int(temp.group(1)) / 10)); time.sleep(120)

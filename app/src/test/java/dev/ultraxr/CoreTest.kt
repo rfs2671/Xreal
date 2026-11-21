@@ -198,6 +198,34 @@ class CoreTest {
         assertTrue("roll drift ${Math.toDegrees(Math.acos(upNow[1]))} deg", upNow[1] > Math.cos(Math.toRadians(9.0)))
     }
 
+    @Test fun aStateWhoseSpeedIsWrongDoesNotMakeTheHeadsPlaceJump() {
+        // Walking at 0.3 m/s; every state's speed is wrong by 0.1 m/s, one way and then the other, and each state
+        // arrives 30 ms after its picture. The place is asked for 60 times a second, as the renderer does.
+        fun worstStep(glide: Boolean): Pair<Double, Double> {
+            val t = HeadTracker(); t.glideOn = glide
+            still(t, 1, 400); t.predict(400_000_000L)
+            var worst = 0.0; var last: DoubleArray? = null; var prev: DoubleArray? = null; var k = 0; var end = 0.0
+            for (ms in 400..2400) {
+                still(t, ms, ms + 1)
+                if ((ms - 400) % 33 == 30) {      // the state of the picture taken 30 ms ago
+                    val sec = (ms - 30 - 400) / 1000.0; val wrong = if (ms > 2000) 0.0 else if (k++ % 2 == 0) 0.1 else -0.1
+                    t.onVio((ms - 30) * 1_000_000L, doubleArrayOf(0.0, -0.3 * sec, 0.0), Q.identity(), doubleArrayOf(0.0, -0.3 - wrong, 0.0), null)
+                }
+                if (ms % 16 == 0 && ms > 600) {
+                    val p = t.predict(ms * 1_000_000L).pose.p; val a = last; val b = prev
+                    if (a != null && b != null && ms <= 2000) worst = maxOf(worst, Math.abs(p[2] - 2 * a[2] + b[2]))      // what is not smooth motion
+                    prev = a; last = p; end = p[2]
+                }
+            }
+            return worst to end
+        }
+        val (before, _) = worstStep(false); val (after, end) = worstStep(true)
+        assertTrue("steps of $before m before", before > 0.004)
+        assertTrue("steps of $after m with the glide, $before m without", after < before * 0.6)
+        // and it ends where the head is: 0.3 m/s for the two seconds to 2400 ms
+        assertEquals(-0.6, end, 0.004)
+    }
+
     @Test fun positionComesFromVioAndIsPredictedForward() {
         val t = HeadTracker()
         still(t, 1, 400); t.predict(400_000_000L)
