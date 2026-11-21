@@ -311,3 +311,13 @@ do ("Six windows are open: close one first"). Nothing else in the glasses interr
   - Known limits: the helper that puts other Android apps in windows is started over the phone's own debugging
     port, which a restart of the phone closes until it is opened again from the laptop; "mark the room" is still
     started from the phone.
+
+## Height of windows and the dock (21 November 2026)
+
+Worn: "bottom nav menu is too high overlaping with other screens", then "everything is still extremely high".
+Windows were raised until their handle stood clear of the dock (up to 8 degrees: the middle 28 cm above the
+eyes at 2 m, the top out of the picture). A window's middle is now at eye level when it is opened or brought
+back ("here"), saved windows were lowered once, and the dock is not drawn while a window comes down over it
+(it returns when the focus or the hand is on it, or when it is looked down at by 7 degrees). The factory
+calibration puts the displays within a degree of the motion sensor's axes, so there is no tilt of the picture
+to correct. Not yet confirmed by the wearer.

@@ -283,6 +283,8 @@ class DesktopSession(private val activity: Activity) {
 
     fun start() {
         try { prefs.getString("layout", null)?.let { desktop.load(JSONObject(it)) } } catch (e: Exception) { Tracking.log("desktop: saved layout ignored: $e") }
+        // once: windows saved while they were raised above the dock come down to eye level with the new ones
+        if (!prefs.getBoolean("lowered_1121", false)) { for (w in desktop.windows) if (!w.maximized) w.pitch = WINDOW_PITCH; desktop.touch(); prefs.edit().putBoolean("lowered_1121", true).apply() }
         // Windows are where they were left, and as they were left: open ones open, the ones put away put away.
         for (w in desktop.windows) { if (w.kind != SETTINGS && !w.minimized) ensureWeb(w); if (w.origin.isNotEmpty()) fromMark[w.id] = w.origin }
         // Windows kept from before the shelf stood 8 degrees under the line of sight are lifted clear of it, once.
@@ -374,7 +376,10 @@ class DesktopSession(private val activity: Activity) {
         changed(); return true
     }
     /** As high as a window stands to be clear of the shelf, but no higher than is comfortable to look at. */
-    private fun clearPitch(w: DesktopWindow) = Shelf.clearPitch(w.shownBelow(), w.shownDistance()).coerceIn(0.0, Math.toRadians(8.0))
+    // Worn, 21 November 2026: "everything is still extremely high". A window used to be raised until its handle
+    // stood clear of the dock, up to 8 degrees: its middle 28 cm above the eyes at 2 m and its top out of the picture.
+    // A window now has its middle at eye level, and the dock steps aside under it ([shelf]).
+    @Suppress("UNUSED_PARAMETER") private fun clearPitch(w: DesktopWindow) = WINDOW_PITCH
     /** The settings, as a window like any other. One at most: asked for again, it is shown. */
     fun openSettings(): Boolean {
         desktop.windows.firstOrNull { it.kind == SETTINGS }?.let { w -> if (w.minimized) desktop.restore(w.id); desktop.focus(w.id); changed(); return true }
@@ -1267,6 +1272,8 @@ class DesktopSession(private val activity: Activity) {
         /** How far beside a window the hand's ray still has hold of it. */
         private val HAND_BAND = Math.toRadians(3.5)
         private const val HOVER_NS = 180_000_000L
+        /** Where a window's middle stands when it is opened or brought back: at eye level. */
+        private const val WINDOW_PITCH = 0.0
         /** Looking this far down brings back a dock that stepped aside. */
         private val DOCK_LOOK = Math.toRadians(-7.0)
         private const val PHONE_HAND_NS = 1_500_000_000L
