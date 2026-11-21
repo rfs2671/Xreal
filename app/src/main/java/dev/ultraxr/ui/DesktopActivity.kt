@@ -82,6 +82,19 @@ class DesktopActivity : Activity() {
             // the state in words: what the session says of tracking, and what the keys do at this moment
             val words = session.statusLine + (if (session.moving) " · moving a window" else if (session.sizing) " · sizing a window" else if (session.pageInUse) " · keys go to the page" else "")
             if (status.text.toString() != words) status.text = words
+            // the pad says what a slide and a tap do at this moment, and the word of what is going on is lit
+            val mode = if (session.moving) 1 else if (session.sizing) 2 else if (session.full) 3 else 0
+            if (mode != padMode) {
+                padMode = mode
+                padText?.text = when (mode) {
+                    1 -> "Slide to carry the window\nTwo fingers: nearer and further\nTap to put it down"
+                    2 -> "Slide right for wider, down for taller\nTap when it is right"
+                    3 -> "Filling the view\nSlide to point  \u00b7  tap to select\nPress full to put it back"
+                    else -> PAD_WORDS
+                }
+                padText?.setTextColor(if (mode == 1 || mode == 2) Ui.LAMP else Ui.SLATE)
+                moveWord?.setTextColor(if (mode == 1) Ui.LAMP else Ui.CHALK); sizeWord?.setTextColor(if (mode == 2) Ui.LAMP else Ui.CHALK); fullWord?.setTextColor(if (mode == 3) Ui.LAMP else Ui.CHALK)
+            }
             // Machine-readable state for UI automation and accessibility tools.
             val d = session.debugState(); if (status.contentDescription != d) status.contentDescription = d
             Choreographer.getInstance().postFrameCallback(this)
@@ -267,11 +280,11 @@ class DesktopActivity : Activity() {
         root.add(previewHost, h = Ui.dp(this, 170), topDp = 10)
 
         // the touchpad: the upper two thirds. Four corner brackets, as round a window in the glasses; Lamp under a finger.
-        val pad = Ui.text(this, "Slide to point  ·  tap to select\nTwo fingers to scroll\nDouble-tap and hold to drag", 14f, Ui.SLATE).apply {
+        val pad = Ui.text(this, PAD_WORDS, 14f, Ui.SLATE).apply {
             background = Brackets(this@DesktopActivity, Ui.SLATE, armDp = 20f, closeOnPress = false)
             gravity = Gravity.CENTER; contentDescription = "Touchpad"; setLineSpacing(0f, 1.4f)
         }
-        pad.setOnTouchListener(Pad())
+        pad.setOnTouchListener(Pad()); padText = pad
         root.add(pad, h = 0, weight = 2f, topDp = 10)
 
         // the lower third: the d-pad, with "back" and "home" above it either side and "keys" and "more" below
@@ -293,13 +306,13 @@ class DesktopActivity : Activity() {
         right.add(side("home", "Home: put the windows away and show the shelf") { tick(heavy = false); session.showHome() }, h = 0, weight = 1f)
         right.add(side("more", "More: everything else, as a list") { tick(heavy = false); openSheet() }, h = 0, weight = 1f)
         // moving and sizing the window in focus are a press away, not behind "more": slide the touchpad or use the d-pad, then press again (or Select)
-        left.add(side("move", "Move the window in focus: slide or use the d-pad, two fingers for nearer and further; press again to put it down") { tick(heavy = false); session.toggleMove() }, h = 0, weight = 1f)
-        right.add(side("size", "Size the window in focus: slide or use the d-pad; press again when it is right") { tick(heavy = false); session.toggleSize() }, h = 0, weight = 1f)
+        left.add(side("move", "Move the window in focus: slide or use the d-pad, two fingers for nearer and further; press again to put it down") { tick(heavy = false); session.toggleMove() }.also { moveWord = it }, h = 0, weight = 1f)
+        right.add(side("size", "Size the window in focus: slide or use the d-pad; press again when it is right") { tick(heavy = false); session.toggleSize() }.also { sizeWord = it }, h = 0, weight = 1f)
         // Worn, 21 November 2026: "no way to close certain windows ... make them bigger or full screen". What is done to
         // a window is one press each, in a row of its own above the d-pad: no focus has to be walked anywhere first.
         val acts = Ui.row(this)
         acts.add(side("close", "Close the window in focus") { tick(heavy = true); session.closeFocused() }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
-        acts.add(side("full", "Full view: the window in focus fills the view; press again to put it back") { tick(heavy = false); session.toggleFull() }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
+        acts.add(side("full", "Full view: the window in focus fills the view; press again to put it back") { tick(heavy = false); session.toggleFull() }.also { fullWord = it }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
         acts.add(side("next", "Next window: the focus goes to the next window") { tick(heavy = false); session.nextWindow() }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
         acts.add(side("here", "Here: every window comes in front of you") { tick(heavy = false); session.bringHere() }, 0, ViewGroup.LayoutParams.MATCH_PARENT, weight = 1f)
         root.add(acts, h = Ui.dp(this, 52), topDp = 4)
@@ -607,5 +620,6 @@ class DesktopActivity : Activity() {
         private fun span(e: MotionEvent) = hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
     }
 
-    companion object { const val EXTRA_AUTOMATION = "automation"; const val EXTRA_STEREO_PREVIEW = "stereo_preview"; const val EXTRA_OPEN_SHELF = "open_shelf" }
+    private var padMode = 0; private var padText: TextView? = null; private var moveWord: TextView? = null; private var sizeWord: TextView? = null; private var fullWord: TextView? = null
+    companion object { const val PAD_WORDS = "Slide to point  \u00b7  tap to select\nTwo fingers to scroll\nDouble-tap and hold to drag"; const val EXTRA_AUTOMATION = "automation"; const val EXTRA_STEREO_PREVIEW = "stereo_preview"; const val EXTRA_OPEN_SHELF = "open_shelf" }
 }

@@ -219,6 +219,10 @@ The phone is a controller that is used without looking at it.
   line what it did. A seventh window no longer refuses to open: the window furthest from where the wearer looks is
   closed to make room, and it is said which. Checked on the S21 Ultra in the phone's preview (here, full, full again,
   next, close twice); not in the glasses, and the seventh window not at all.
+- "move" and "size" never do nothing: with no window in focus they take the one nearest to where the wearer looks,
+  a window filling the view is put back first, and with no window open it is said. While one is going on its word is
+  lit, the touchpad says what a slide and a tap do now, and the status line in the glasses names the window. A slide
+  across the whole pad carries a window 40 degrees (it was 69, out of a view of 46). Checked in the phone's preview.
 - "keys" opens Android's keyboard for the page in focus. "more" opens a short list: quick sizes, reload, address,
   pocket mode, settings.
 - Line on a dark ground (the phone's screen is an ordinary one: it may be dark, not see-through). The same six

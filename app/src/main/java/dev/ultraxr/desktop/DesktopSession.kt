@@ -615,10 +615,19 @@ class DesktopSession(private val activity: Activity) {
     /** A window is being carried: the touchpad and the d-pad move it until it is put down. */
     val moving: Boolean get() = desktop.focus is Focus.Moving
     /** The phone's Move button: takes up the window in focus, or puts down the one being carried. */
-    fun toggleMove() { if (moving) press(FocusKey.SELECT) else desktop.focused?.let { desktop.startMove(it.id); changed() } }
+    fun toggleMove() { if (moving) { press(FocusKey.SELECT); return }; takeUp("Carrying %s: slide, then tap to put it down") { desktop.startMove(it) } }
+    /** Move and size never do nothing without a word: no window, and it is said; filling the view, it is put back first. */
+    private fun takeUp(says: String, start: (Int) -> Unit) {
+        if (moving || sizing) press(FocusKey.SELECT)
+        val w = target() ?: run { say("No window is open"); return }
+        if (desktop.fullscreenId == w.id) desktop.toggleFullscreen(w.id)
+        desktop.focus(w.id); start(w.id); say(String.format(says, w.title)); changed()
+    }
+    /** A window filling the view, for the phone to show. */
+    val full: Boolean get() = desktop.fullscreenId != -1
     val sizing: Boolean get() = desktop.focus is Focus.Sizing
     /** The phone's Size button: the window in focus is sized by the touchpad or the d-pad until Select or the button again. */
-    fun toggleSize() { if (sizing) press(FocusKey.SELECT) else desktop.focused?.let { desktop.startSize(it.id); changed() } }
+    fun toggleSize() { if (sizing) { press(FocusKey.SELECT); return }; takeUp("Sizing %s: slide, then tap when it is right") { desktop.startSize(it) } }
 
     fun padMove(dx: Double, dy: Double) {
         padTouchNs = System.nanoTime()
@@ -632,7 +641,7 @@ class DesktopSession(private val activity: Activity) {
         }
         val w = desktop.focused ?: return
         val f = desktop.focus
-        if (f is Focus.Moving) { desktop.move(f.id, -dx * 1.2, -dy * 1.2); return }
+        if (f is Focus.Moving) { desktop.move(f.id, -dx * 0.7, -dy * 0.7); return }
         // sizing: a slide to the right widens the window and a slide down makes it taller, as the d-pad does
         if (f is Focus.Sizing) { desktop.find(f.id)?.let { desktop.sizeTo(it.id, it.width * Math.exp(dx * 1.5), it.height * Math.exp(dy * 1.5)) }; return }
         // a corner is held (double-tap and hold on it): it follows the finger and the window's middle stays where it is
