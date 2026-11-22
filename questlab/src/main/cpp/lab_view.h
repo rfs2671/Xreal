@@ -289,6 +289,15 @@ static void buildGeometry(XrTime t, const XrPosef &head) {
         lineTo(at(p.pose, x1, y0, 0), at(p.pose, x1, y1, 0)); lineTo(at(p.pose, x0, y1, 0), at(p.pose, x1, y1, 0));
         if (p.kind == 0) batch(GL_LINES, first, 0.15f, 0.35f, 1.0f, 1, 0); else if (p.kind == 2) batch(GL_LINES, first, 0.1f, 1.0f, 0.3f, 1, 0); else batch(GL_LINES, first, 1.0f, 0.8f, 0.1f, 1, 0);
     }
+    // A measurement (22 November 2026): the horizon, a red ring 30 m out at the height of the eyes, level by the
+    // tracker's gravity. On a real wall it must sit at the wearer's eye height from any distance; if it climbs the wall
+    // as the wearer backs away, what is drawn is turned up or down against the lenses.
+    if (!setupMode) { XrSpaceLocation hl{XR_TYPE_SPACE_LOCATION};
+        if (XR_SUCCEEDED(xrLocateSpace(view, local, t, &hl)) && (hl.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
+            int first = (int)vtx.size() / 3; const XrVector3f &o = hl.pose.position;
+            for (int k = -1; k <= 1; k++) for (int i = 0; i < 72; i++) { float a0 = i * 0.0872665f, a1 = (i + 1) * 0.0872665f, y = o.y + k * 0.02f;
+                lineTo({o.x + 30 * std::cos(a0), y, o.z + 30 * std::sin(a0)}, {o.x + 30 * std::cos(a1), y, o.z + 30 * std::sin(a1)}); }
+            batch(GL_LINES, first, 1.0f, 0.1f, 0.1f, 1, 0); } }
     // a wall's two cubes: both go through the depth test; the one in front must survive it, the one behind must not
     for (auto &p : scene) {
         if (!p.ok || p.kind != 2) continue;
