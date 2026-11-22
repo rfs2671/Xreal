@@ -70,6 +70,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             if (i?.hasExtra("force_half_stereo") == true) Tracking.forceHalfStereo = i.getBooleanExtra("force_half_stereo", false)
             if (i?.hasExtra("picture_tilt") == true) dev.ultraxr.xr.XrHost.setPictureTilt(i.getFloatExtra("picture_tilt", 0f))
+            if (i?.hasExtra("floor_trim") == true) dev.ultraxr.xr.XrHost.setFloorTrim(i.getFloatExtra("floor_trim", 0f))
             if (i?.hasExtra("sim_wearer") == true) Tracking.simulateWearer = i.getBooleanExtra("sim_wearer", false)
             if (i?.getBooleanExtra("dump_egl", false) == true) dumpEglConfigs()
             if (i?.getBooleanExtra("test_site", false) == true) { dev.ultraxr.xr.LocalSite.testFiles = true; dev.ultraxr.xr.LocalSite.start(applicationContext) }
@@ -383,7 +384,7 @@ class LauncherActivity : Activity(), Tracking.Observer {
         /** The set-up has been offered in this run of the app. */
         private var setupOffered = false
         /** This screen's own switches for tests and tools (see [openDesktopIfAsked]). */
-        private val TEST_EXTRAS = setOf("skip_setup", "desktop", DesktopActivity.EXTRA_AUTOMATION, DesktopActivity.EXTRA_STEREO_PREVIEW, "open_app", "home_page", DesktopActivity.EXTRA_OPEN_SHELF, "force_half_stereo", "sim_wearer", "dump_egl", "test_site",
+        private val TEST_EXTRAS = setOf("skip_setup", "desktop", DesktopActivity.EXTRA_AUTOMATION, DesktopActivity.EXTRA_STEREO_PREVIEW, "open_app", "home_page", DesktopActivity.EXTRA_OPEN_SHELF, "force_half_stereo", "picture_tilt", "floor_trim", "sim_wearer", "dump_egl", "test_site",
             "diag3d", "pace_by_display", "auto_enter", "replay", "replay_tag", "record_seconds")
     }
 }

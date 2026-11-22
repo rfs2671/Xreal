@@ -73,15 +73,12 @@ class PointerService : AccessibilityService() {
     private fun show() {
         val v = Pad(this)
         v.onLeave = { leave() }
-        // The picture's tilt is turned a degree only by two taps on the same button within 0.6 s. A single tap did
-        // it until 19 November 2026, when ten stray touches of the phone during a game, a second or more apart,
-        // left everything drawn 10 degrees low without the wearer knowing.
-        var floorTapNs = 0L; var floorTapStep = 0f
-        v.onFloor = { step ->
-            val now = System.nanoTime()
-            if (step == floorTapStep && now - floorTapNs < 600_000_000L) { floorTapNs = 0L; XrHost.nudgePictureTilt(step) }
-            else { floorTapNs = now; floorTapStep = step; dev.ultraxr.tracking.Tracking.log("OpenXR: one tap on a picture-tilt button, ignored (two quick taps turn the picture a degree)") }
-        }
+        // The Floor buttons (asked for 22 November 2026: "a button that lets me lower the floor, only the floor"). A
+        // finger held on one moves the floor 3 cm, and 3 cm more for every third of a second it stays: the wearer
+        // watches the floor go and lets go when it is right. A stray touch is never that long (19 November 2026: ten
+        // stray taps had turned the picture 10 degrees without the wearer knowing). The buttons here turned the whole
+        // picture until now, and asked for two holds within 0.6 s of each other, which no finger can do.
+        v.onFloor = { stepM -> XrHost.nudgeFloor(stepM) }
         val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.OPAQUE)
@@ -143,8 +140,17 @@ class PointerService : AccessibilityService() {
         private val metresPerPixel = 0.7 / minOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels).coerceAtLeast(1)
         init { setBackgroundColor(0xFF05070A.toInt()); keepScreenOn = true }
         var onLeave: (() -> Unit)? = null
-        /** The Picture buttons: called with degrees to turn everything drawn down (negative: up). */
+        /** The Floor buttons: called with metres to move the floor down (negative: up). */
         var onFloor: ((Float) -> Unit)? = null
+        private var floorStep = 0f; private var floorMoved = false
+        private val floorRepeat = object : Runnable {
+            override fun run() {
+                if (floorStep == 0f) return
+                floorMoved = true; onFloor?.invoke(floorStep)
+                try { performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP) } catch (_: Throwable) {}
+                invalidate(); postDelayed(this, 330)
+            }
+        }
         private fun inFloorUp(ux: Float, uy: Float, w: Int, h: Int) = ux > w * 0.08f && ux < w * 0.48f && uy > h * 0.66f && uy < h * 0.75f
         private fun inFloorDown(ux: Float, uy: Float, w: Int, h: Int) = ux > w * 0.52f && ux < w * 0.92f && uy > h * 0.66f && uy < h * 0.75f
         /** Where the Leave button is, as fractions of the upright page: across its middle, near the bottom. */
@@ -157,6 +163,7 @@ class PointerService : AccessibilityService() {
             out[0] += w / 2f; out[1] += h / 2f
         }
         private val page = FloatArray(2)
+        private val FLOOR_STEP_M = 0.03f
 
         /**
          * The browser holds the phone's screen in landscape, but the phone is held upright. The touchpad therefore
@@ -209,12 +216,12 @@ class PointerService : AccessibilityService() {
             canvas.drawRoundRect(width * 0.08f, height * 0.66f, width * 0.48f, height * 0.75f, 24 * density, 24 * density, paint)
             canvas.drawRoundRect(width * 0.52f, height * 0.66f, width * 0.92f, height * 0.75f, 24 * density, 24 * density, paint)
             paint.style = Paint.Style.FILL; paint.color = 0xFFE8F0FA.toInt(); paint.textSize = 17f * density
-            canvas.drawText("Hold: picture up", width * 0.28f, height * 0.705f + 6 * density, paint)
-            canvas.drawText("Hold: picture down", width * 0.72f, height * 0.705f + 6 * density, paint)
+            canvas.drawText("Hold: floor up", width * 0.28f, height * 0.705f + 6 * density, paint)
+            canvas.drawText("Hold: floor down", width * 0.72f, height * 0.705f + 6 * density, paint)
             // what is set and what the cameras measure, in numbers the wearer can read out
             paint.textSize = 17f * density; paint.color = 0xFFFFFFFF.toInt()
-            val tilt = XrHost.pictureTiltDeg
-            canvas.drawText("Picture turned " + dev.ultraxr.core.Fmt.f(Math.abs(tilt).toDouble(), 0) + " degrees " + (if (tilt >= 0) "down" else "up"), width / 2f, height * 0.60f, paint)
+            val trim = XrHost.floorTrimM * 100.0
+            canvas.drawText(if (Math.abs(trim) < 0.5) "Floor as measured" else "Floor moved " + dev.ultraxr.core.Fmt.f(Math.abs(trim), 0) + " cm " + (if (trim >= 0) "down" else "up") + " by you", width / 2f, height * 0.60f, paint)
             val below = XrHost.measuredBelowGlassesM
             canvas.drawText(if (below.isNaN()) "Floor not found yet" else "Cameras: floor " + dev.ultraxr.core.Fmt.f(below, 2) + " m under the glasses", width / 2f, height * 0.635f, paint)
         }
@@ -222,12 +229,19 @@ class PointerService : AccessibilityService() {
         override fun onTouchEvent(e: MotionEvent): Boolean {
             val now = System.nanoTime()
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { lastX = e.x; lastY = e.y; downNs = now; travelled = 0f; many = false }
-                MotionEvent.ACTION_POINTER_DOWN -> { many = true; PointerInput.hold(now, 0, true) }
+                MotionEvent.ACTION_DOWN -> {
+                    lastX = e.x; lastY = e.y; downNs = now; travelled = 0f; many = false; floorMoved = false
+                    toPage(e.x, e.y, page)
+                    val t = turn(); val w = if (t == 1 || t == 3) height else width; val h = if (t == 1 || t == 3) width else height
+                    floorStep = if (inFloorDown(page[0], page[1], w, h)) FLOOR_STEP_M else if (inFloorUp(page[0], page[1], w, h)) -FLOOR_STEP_M else 0f
+                    removeCallbacks(floorRepeat); if (floorStep != 0f) postDelayed(floorRepeat, 550)
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> { many = true; floorStep = 0f; removeCallbacks(floorRepeat); PointerInput.hold(now, 0, true) }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.x - lastX; val dy = e.y - lastY; lastX = e.x; lastY = e.y; travelled += abs(dx) + abs(dy)
+                    if (floorStep != 0f && travelled > 24 * density) { floorStep = 0f; removeCallbacks(floorRepeat) }   // a drag, not a hold
                     upright(dx, dy, moved)
-                    PointerInput.move(now, moved[0] * metresPerPixel, moved[1] * metresPerPixel)
+                    if (!floorMoved) PointerInput.move(now, moved[0] * metresPerPixel, moved[1] * metresPerPixel)
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
                     // the finger that stays becomes the reference, so the pointer does not jump
@@ -236,7 +250,8 @@ class PointerService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     PointerInput.hold(now, 0, false)
-                    if (e.actionMasked == MotionEvent.ACTION_UP && !many && travelled < 24 * density) {
+                    floorStep = 0f; removeCallbacks(floorRepeat)
+                    if (e.actionMasked == MotionEvent.ACTION_UP && !many && !floorMoved && travelled < 24 * density) {
                         val held = now - downNs
                         // A quick tap is a select wherever it lands: the touchpad is used without looking at it. The
                         // buttons answer only to a finger held on them for over half a second.
@@ -245,8 +260,6 @@ class PointerService : AccessibilityService() {
                             toPage(e.x, e.y, page)
                             val t = turn(); val w = if (t == 1 || t == 3) height else width; val h = if (t == 1 || t == 3) width else height
                             if (inLeave(page[0], page[1], w, h)) { onLeave?.invoke(); return true }
-                            if (inFloorUp(page[0], page[1], w, h)) onFloor?.invoke(-1f)
-                            if (inFloorDown(page[0], page[1], w, h)) onFloor?.invoke(1f)
                         }
                     }
                 }

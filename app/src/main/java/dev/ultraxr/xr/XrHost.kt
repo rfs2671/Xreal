@@ -333,6 +333,10 @@ object XrHost : OpenXrGlassesLayer.Host {
         if (!st.tiltClearedForSize) { st.pictureTiltDeg = 0f; st.tiltClearedForSize = true }
         // Worn, 21 November 2026: everything 20 inches too high at about 2 m, in the desktop and in a game. Once.
         if (!st.tiltWorn1121) { if (st.pictureTiltDeg < 1f) st.pictureTiltDeg = TILT_WORN_DEG; st.tiltWorn1121 = true }
+        // The owner, 22 November 2026, with the 12 degrees on: "still too high. add a button that lets me lower the floor
+        // (only the floor. everything else should stay at eyes height)". So it was the floor all along: the picture is
+        // not turned, and the floor is the owner's to move (the touchpad's Floor buttons, [nudgeFloor]). Once.
+        if (!st.tiltEye1122) { st.pictureTiltDeg = 0f; st.tiltEye1122 = true }
         applyTilt(st.pictureTiltDeg)
     }
     const val TILT_WORN_DEG = 12f
@@ -358,6 +362,8 @@ object XrHost : OpenXrGlassesLayer.Host {
         val fy = Tracking.floorY
         Tracking.log("OpenXR: floor moved by the owner to " + dev.ultraxr.core.Fmt.f(t * 100.0, 0) + " cm below what was " + (if (fy.isNaN()) "set as height" else "measured (" + dev.ultraxr.core.Fmt.f(-fy, 2) + " m below the origin)"))
     }
+    /** Sets the owner's floor correction outright, in metres down (a tool's switch). */
+    fun setFloorTrim(m: Float) { nudgeFloor(m - (if (floorTrim.isNaN()) Tracking.settings.floorTrimM else floorTrim)) }
     /** How far under the glasses the cameras put the floor right now, in metres; NaN when they have not found it. */
     val measuredBelowGlassesM: Double get() { val fy = Tracking.floorY; return if (fy.isNaN()) Double.NaN else dev.ultraxr.openxr.UltraXrFeed.lastHead[1] - fy }
     /** The owner's floor correction in metres, for showing. */

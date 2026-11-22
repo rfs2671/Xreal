@@ -330,3 +330,18 @@ wearer's correction, 12 degrees to begin with (20 inches at about 2 m), in the d
 while it is worn: `am start -n dev.ultraxr/.ui.LauncherActivity --ef picture_tilt 10`. The value is the
 wearer's judgement, not a measurement; the note above that there is "no tilt of the picture to correct"
 was wrong about what he sees.
+
+## Floor buttons, and the picture not turned (22 November 2026)
+
+With the picture turned 12 degrees down the owner said: "still too high. add a button that lets me lower the floor
+(only the floor. everything else should stay at eyes height) and judge based on that". So:
+
+- The picture is not turned any more (once, `tilt_eye_1122`); windows stand at eye height again.
+- The game touchpad's two buttons are now "Hold: floor up" and "Hold: floor down". A finger held on one moves the
+  application's floor 3 cm after half a second and 3 cm more every third of a second, with a tick each step; the
+  amount is kept (`floor_trim`) and shown on the phone ("Floor moved N cm down by you").
+- The old buttons turned the whole picture and needed two holds within 0.6 s of each other, which cannot be done:
+  they never worked.
+- A tool can set the amount outright: `am start -n dev.ultraxr/.ui.LauncherActivity --ef floor_trim 0.30`.
+
+Not yet tried on the phone or worn. What the owner settles on is the measure of how far the cameras' floor is off.

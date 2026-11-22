@@ -40,6 +40,7 @@ class Settings(context: Context) {
     val pictureTiltSet: Boolean get() = p.contains("picture_tilt")
     var tiltClearedForSize: Boolean get() = p.getBoolean("tilt_cleared_size", false); set(v) = p.edit().putBoolean("tilt_cleared_size", v).apply()
     var tiltWorn1121: Boolean get() = p.getBoolean("tilt_worn_1121", false); set(v) = p.edit().putBoolean("tilt_worn_1121", v).apply()
+    var tiltEye1122: Boolean get() = p.getBoolean("tilt_eye_1122", false); set(v) = p.edit().putBoolean("tilt_eye_1122", v).apply()
     var tiltRejudged: Boolean get() = p.getBoolean("tilt_rejudged", false); set(v) = p.edit().putBoolean("tilt_rejudged", v).apply()
     /** How hands reach OpenXR applications: "auto" (by application), "hands" (joints only) or "controllers" (joints and Touch-shaped controllers). */
     /**
