@@ -202,6 +202,55 @@ class RoomTest {
         assertTrue(n.analyse(0.3).floorY.isNaN())
     }
 
+    /** Pictures of a sofa seat only: a wide level surface [y] high, nothing of the floor. */
+    private fun sofaOnly(m: RoomModel, y: Double, from: Int, frames: Int, headY: Double): Double {
+        val r = Random(11); val pts = FloatArray(3 * 200); var floor = Double.NaN
+        for (f in from until from + frames) {
+            for (i in 0 until 200) { pts[i * 3] = (-1.5 + 3 * r.nextDouble()).toFloat(); pts[i * 3 + 1] = (y + r.nextGaussian() * 0.012).toFloat(); pts[i * 3 + 2] = (-3 + 2 * r.nextDouble()).toFloat() }
+            m.add(pts, 200, f)
+            if (f % 2 == 0) floor = m.analyse(headY).floorY
+        }
+        return floor
+    }
+
+    @Test fun aSofaSeenAfterTheFloorDoesNotBecomeTheFloor() {
+        // Worn, 22 November 2026, 11:23: the floor went from 1.53 m to 1.11 m under the cameras in two seconds and
+        // took twelve to come back, with the head where it was. The floor had been found; then only furniture was in
+        // view. Here: floor 1.70 m under the head, the glasses were lifted 0.4 m once (put on), then two minutes of
+        // a sofa seat 0.55 m above the floor.
+        val m = RoomModel(); m.expectedBelowHead = 1.75; madeUpRoom(m, floorY = -1.70)
+        repeat(6) { m.analyse(0.0) }
+        m.analyse(0.4)
+        assertEquals(-1.70, m.analyse(0.0).floorY, 0.03)
+        val after = sofaOnly(m, -1.15, 40, 240, 0.0)
+        assertEquals("the floor stays the floor", -1.70, after, 0.04)
+    }
+
+    @Test fun aLowerLevelSeenLaterIsTheFloor() {
+        // The sofa is seen first and, after its half minute, believed; then the real floor comes into view: the
+        // lowest level with enough under it is the floor, and it is taken quickly.
+        val m = RoomModel(); m.expectedBelowHead = 1.75
+        val first = sofaOnly(m, -1.15, 0, 120, 0.0)
+        assertEquals(-1.15, first, 0.04)
+        madeUpRoom(m, floorY = -1.70); var f = Double.NaN
+        repeat(4) { f = m.analyse(0.0).floorY }
+        assertEquals(-1.70, f, 0.04)
+    }
+
+    @Test fun glassesPickedUpFromTheFloorAfterALossDoNotSinkTheFloor() {
+        // Worn, 22 November 2026, 13:42: position came back while the glasses lay on the real floor, the floor was
+        // put 1.64 m under them, and on the head they stood 3.2 m above it. Here the world has not moved at all.
+        val m = RoomModel(); m.expectedBelowHead = 1.75; madeUpRoom(m, floorY = -1.70)
+        repeat(6) { m.analyse(0.0) }
+        m.regained(-1.65)                                   // lying on the floor
+        var f = m.analyse(-1.65).floorY
+        for (h in listOf(-1.2, -0.8, -0.4, 0.0, 0.0)) f = m.analyse(h).floorY      // lifted to the head, nothing seen yet
+        assertTrue("the head is not more than a person above the floor: " + (0.0 - f), 0.0 - f < 1.75 + 0.36)
+        madeUpRoom(m, floorY = -1.70)
+        f = m.analyse(0.0).floorY
+        assertEquals("the first sight of the floor is taken", -1.70, f, 0.04)
+    }
+
     @Test fun aRayMeetsTheTableOnlyOverTheTable() {
         val top = RoomSurface(RoomSurface.Kind.TABLE, 1.0, -0.5, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.8, 0.3, 100)
         assertTrue(top.ny > 0.99)

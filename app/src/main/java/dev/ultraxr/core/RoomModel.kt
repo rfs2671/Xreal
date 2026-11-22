@@ -60,6 +60,12 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
     }
     private val boxes = HashMap<Long, Box>()
     private var floorHeld = Double.NaN; private var floorPending = Double.NaN; private var floorPendingCount = 0
+    /**
+     * Whether the floor held was found by the cameras in the world as it is now. One put under the head after a loss
+     * of position ([regained]) is a stand-in: the first sight of the floor replaces it, and it is never left further
+     * under the head than the wearer usually stands above the floor ([usualBelow]).
+     */
+    private var floorSure = false; private var usualBelow = Double.NaN
     var pointsAdded = 0L; private set
     /**
      * How far under the standing head the floor is expected (the wearer's height setting). A level about there is
@@ -82,7 +88,7 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         return (ix shl 42) or (iy shl 21) or iz
     }
 
-    @Synchronized fun clear() { boxes.clear(); kept.clear(); belowN = 0; headTop = Double.NaN; floorHeld = Double.NaN; floorPending = Double.NaN; floorPendingCount = 0 }
+    @Synchronized fun clear() { boxes.clear(); kept.clear(); belowN = 0; headTop = Double.NaN; floorHeld = Double.NaN; floorPending = Double.NaN; floorPendingCount = 0; floorSure = false; usualBelow = Double.NaN }
 
     /** Drops every point but keeps the floor's height, which stays true while the wearer has not changed the world. */
     @Synchronized fun forgetSurfaces() { boxes.clear(); kept.clear(); floorPending = Double.NaN; floorPendingCount = 0 }
@@ -95,8 +101,9 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
     @Synchronized fun regained(headY: Double) {
         boxes.clear(); kept.clear(); floorPending = Double.NaN; floorPendingCount = 0
         headTop = headY
-        if (belowN >= 3) { val v = below.copyOf(minOf(belowN, below.size)); v.sort(); floorHeld = headY - v[v.size / 2] }
-        else floorHeld = Double.NaN
+        if (belowN >= 3) { val v = below.copyOf(minOf(belowN, below.size)); v.sort(); usualBelow = v[v.size / 2]; floorHeld = headY - usualBelow }
+        else { floorHeld = Double.NaN; usualBelow = Double.NaN }
+        floorSure = false
     }
 
     /** Adds [n] points (x, y, z floats in the world) seen in picture number [frame]. */
@@ -171,6 +178,10 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
     /** Finds the floor, table tops and walls. [headY] is how high the head is now (the floor is looked for below it). */
     @Synchronized fun analyse(headY: Double, headX: Double = Double.NaN, headZ: Double = Double.NaN, lookX: Double = Double.NaN, lookZ: Double = Double.NaN): RoomFindings {
         if (headTop.isNaN() || headY > headTop) headTop = headY
+        // A stand-in floor (see [floorSure]) was put under glasses that may have been anywhere: lying on a table or on
+        // the floor itself (22 November 2026: 1.64 m under glasses on the floor, 3.2 m under the head a moment later).
+        // The wearer is never further above the floor than usual, so it comes up with the head.
+        if (!floorSure && !floorHeld.isNaN() && !usualBelow.isNaN() && headTop - floorHeld > usualBelow + 0.05) floorHeld = headTop - usualBelow
         // The floor is looked for in everything kept (the last minute): its height does not suffer from the estimator's
         // sideways errors. Table tops and walls only in what the last 20 seconds showed.
         val c = boxes.values.filter { it.hits >= MIN_HITS }
@@ -203,14 +214,21 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         // A floor is not believed at once and does not jump about: small changes are followed slowly, a different
         // height has to be found three times running before it replaces the one held.
         if (!found.isNaN()) {
-            val need = if (headTop.isNaN() || abs((headTop - found) - expectedBelowHead) < FLOOR_NEAR_EXPECTED_M) 3 else FAR_FLOOR_FINDS
-            if (floorHeld.isNaN() && (floorPending.isNaN() || abs(found - floorPending) < 0.06)) {
+            val near = headTop.isNaN() || abs((headTop - found) - expectedBelowHead) < FLOOR_NEAR_EXPECTED_M
+            val standIn = !floorHeld.isNaN() && !floorSure
+            val need = if (standIn && near) 1 else if (near) 3 else FAR_FLOOR_FINDS
+            // A level above a floor the cameras have found is furniture, however long it is looked at: the floor is the
+            // lowest level with enough on it (22 November 2026: a sofa seat taken for the floor, 42 cm up for 12 s).
+            // Only a floor that has come to lie further under the head than a person stands gives way to a higher one.
+            val furniture = floorSure && !floorHeld.isNaN() && found > floorHeld + 0.06 && headY - floorHeld < expectedBelowHead + FLOOR_TOO_FAR_M
+            if (furniture) { floorPending = Double.NaN; floorPendingCount = 0 }
+            else if (floorHeld.isNaN() && (floorPending.isNaN() || abs(found - floorPending) < 0.06)) {
                 floorPending = found
-                if (++floorPendingCount >= need) { floorHeld = found; floorPending = Double.NaN; floorPendingCount = 0 }
+                if (++floorPendingCount >= need) { floorHeld = found; floorSure = true; floorPending = Double.NaN; floorPendingCount = 0 }
             } else if (!floorHeld.isNaN() && abs(found - floorHeld) < 0.06) {
-                floorHeld += 0.10 * (found - floorHeld); floorPending = Double.NaN; floorPendingCount = 0
-            } else if (!floorPending.isNaN() && abs(found - floorPending) < 0.06) {
-                if (++floorPendingCount >= need) { floorHeld = found; floorPending = Double.NaN; floorPendingCount = 0 }
+                floorHeld += 0.10 * (found - floorHeld); floorSure = true; floorPending = Double.NaN; floorPendingCount = 0
+            } else if (need == 1 || (!floorPending.isNaN() && abs(found - floorPending) < 0.06)) {
+                if (need == 1 || ++floorPendingCount >= need) { floorHeld = found; floorSure = true; floorPending = Double.NaN; floorPendingCount = 0 }
             } else { floorPending = found; floorPendingCount = 1 }
         }
         val surfaces = ArrayList<RoomSurface>()
@@ -406,6 +424,8 @@ class RoomModel(private val voxel: Double = 0.05, private val capacity: Int = 90
         private const val BIN = 0.025
         const val FLOOR_NEAR_EXPECTED_M = 0.35
         const val FAR_FLOOR_FINDS = 40
+        /** A found floor this much further under the head than the wearer's height is no longer believed against a higher one. */
+        const val FLOOR_TOO_FAR_M = 0.5
         /** Nobody's eyes are closer to the floor than this, sitting or standing; a counter or a desk is. */
         const val MIN_BELOW_HEAD = 1.05
         private const val FLOOR_MIN_BOXES = 36
