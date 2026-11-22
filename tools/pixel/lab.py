@@ -149,6 +149,13 @@ RUNS = {
     "m_new": ("room_map=new" + chr(10), "", ""), "m_find": ("room_map=find" + chr(10), "", ""), "m_findb": ("room_map=find" + chr(10), "", ""),
     "m_grow": ("", "", ""), "m_growb": ("", "", ""),      # the map is added to (the app's own way from 20 November, late)
     "m_off": ("room_map=off" + chr(10), "", ""),
+    # how far apart the two sight lines of a left-right match may pass (the estimator keeps a match under this): as
+    # shipped it is 0.005. On the worn session of 21 November (live-1795272330213) the estimator rose a metre in three
+    # seconds at second 43 to 46 in seven replays of seven with 0.005 (22 November 2026).
+    "q_epi05": ("config.optical_flow_epipolar_error=0.005" + chr(10), "", ""), "q_epi05b": ("config.optical_flow_epipolar_error=0.005" + chr(10), "", ""),
+    "q_epi07": ("config.optical_flow_epipolar_error=0.0075" + chr(10), "", ""), "q_epi07b": ("config.optical_flow_epipolar_error=0.0075" + chr(10), "", ""),
+    "q_epi10": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""), "q_epi10b": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""), "q_epi10c": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""),
+    "q_epi15": ("config.optical_flow_epipolar_error=0.015" + chr(10), "", ""), "q_epi20": ("config.optical_flow_epipolar_error=0.02" + chr(10), "", ""),
 }
 
 def run(args, timeout=120):
