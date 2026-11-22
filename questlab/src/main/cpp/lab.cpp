@@ -36,6 +36,30 @@ static XrInstance inst; static XrSession sess; static XrSpace local, view;
 static std::vector<XrEventDataBuffer> seen;
 static XrSessionState state = XR_SESSION_STATE_UNKNOWN; static bool begun = false;
 static XrTime frameTime = 0;
+// A measurement, once a second: where the head is in each floor-related space an application can ask for, and how
+// far the view is pitched. Read with a tape measure beside it (22 November 2026: a game's floor looked 50 cm high
+// while Ultra XR's own log had the floor 1.6 m under the head).
+static XrSpace probeStage = XR_NULL_HANDLE, probeFloor = XR_NULL_HANDLE; static int probeFrames = 0;
+static void spacesProbe() {
+    if (probeFrames++ % 60 != 0) return;
+    if (probeFrames == 1) {
+        XrReferenceSpaceCreateInfo rs{XR_TYPE_REFERENCE_SPACE_CREATE_INFO}; rs.poseInReferenceSpace = {{0, 0, 0, 1}, {0, 0, 0}};
+        rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE; XrResult a = xrCreateReferenceSpace(sess, &rs, &probeStage);
+        rs.referenceSpaceType = (XrReferenceSpaceType)1000426000 /* LOCAL_FLOOR */; XrResult b = xrCreateReferenceSpace(sess, &rs, &probeFloor);
+        __android_log_print(ANDROID_LOG_INFO, "QuestLab", "SPACES created: STAGE %d, LOCAL_FLOOR %d (0 = success)", (int)a, (int)b);
+    }
+    auto at = [](XrSpace s, XrSpace base, char *out, size_t n) {
+        XrSpaceLocation l{XR_TYPE_SPACE_LOCATION};
+        if (s == XR_NULL_HANDLE || base == XR_NULL_HANDLE || XR_FAILED(xrLocateSpace(s, base, frameTime, &l)) || !(l.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) { snprintf(out, n, "none"); return; }
+        const XrQuaternionf &q = l.pose.orientation;
+        // forward is -z turned by q; its pitch above the horizon
+        float fy = -2.f * (q.y * q.z - q.w * q.x), fx = -2.f * (q.x * q.z + q.w * q.y), fz = -(1.f - 2.f * (q.x * q.x + q.y * q.y));
+        float pitch = std::atan2(fy, std::sqrt(fx * fx + fz * fz)) * 57.29578f;
+        snprintf(out, n, "y %.3f (x %.2f z %.2f) pitch %.1f", l.pose.position.y, l.pose.position.x, l.pose.position.z, pitch);
+    };
+    char a[96], b[96], c[96], d[96]; at(view, local, a, sizeof a); at(view, probeStage, b, sizeof b); at(view, probeFloor, c, sizeof c); at(local, probeStage, d, sizeof d);
+    __android_log_print(ANDROID_LOG_INFO, "QuestLab", "SPACES head in LOCAL: %s | in STAGE: %s | in LOCAL_FLOOR: %s | LOCAL's origin in STAGE: %s", a, b, c, d);
+}
 
 template <class F> static F fn(const char *name) { PFN_xrVoidFunction f = nullptr; xrGetInstanceProcAddr(inst, name, &f); return (F)f; }
 
@@ -62,6 +86,7 @@ static void frame() {
     readInput();
     XrFrameState fs{XR_TYPE_FRAME_STATE}; if (XR_FAILED(xrWaitFrame(sess, nullptr, &fs))) { usleep(20000); return; }
     frameTime = fs.predictedDisplayTime;
+    spacesProbe();
     xrBeginFrame(sess, nullptr);
     XrCompositionLayerPassthroughFB pl{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB}; pl.layerHandle = passLayer; pl.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
     const XrCompositionLayerBaseHeader *layers[2]; uint32_t nl = 0;
