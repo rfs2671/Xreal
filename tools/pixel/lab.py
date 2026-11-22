@@ -205,7 +205,7 @@ def replay(dev, name, out, runs):
         # that run again beside this one (which is then refused as "a replay is already running")
         sh(dev, "am start --activity-clear-task -n %s/.ui.LauncherActivity --es replay %s --es replay_tag %s" % (PKG, name, tag))
         t0 = time.time(); done = ""
-        while time.time() - t0 < 420:
+        while time.time() - t0 < float(os.environ.get("UXR_REPLAY_WAIT", "420")):      # UXR_REPLAY_WAIT: seconds, for a recording longer than six minutes
             time.sleep(15)
             log = sh(dev, "logcat -d | grep -E 'UltraXR *: (replay finished|replayed|replay stopped|hand options|6DoF settings changed)' | tail -4")
             # a start request that arrives twice is answered "a replay is already running": that is not the end of the run

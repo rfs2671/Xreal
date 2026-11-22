@@ -603,6 +603,7 @@ object Tracking : GlassesLink.Listener {
         if (testBlind != null || testLight != 1.0) testPictures(left, right)
         val v = vio
         if (v != 0L) { Native.vioPushStereo(v, tNs, left, right, 480, 640); supervisor.onFrame(System.nanoTime()) }
+        if (link?.replaying != true) lossPictures.onStereo(tNs, left, right)
         pairIndex++
         // While the head is being looked for in the saved map (a new session, or after a loss), the map gets pictures
         // of its own, seven a second: it must not wait for the room's loop (measured 20 November: the map then saw its
@@ -649,6 +650,25 @@ object Tracking : GlassesLink.Listener {
 
     /** The estimator's last seconds before each reset, and a periodic drift line, for diagnosis. */
     val trace = VioTrace { log(it) }
+    /** The cameras' last four seconds, written with the estimator's states when position is lost (core/LossPictures). */
+    private val lossPictures = dev.ultraxr.core.LossPictures()
+    @Volatile private var lossDueNs = 0L; private var lossWhy = ""; private var lossSavedNs = 0L
+    /** Called from the estimator's loop: 0.8 s after a loss was told, what led up to it goes to files/loss-pictures. */
+    private fun saveLossIfDue(now: Long) {
+        if (lossDueNs == 0L || now < lossDueNs) return
+        lossDueNs = 0L
+        val app = appContext ?: return; val why = lossWhy
+        if (link?.replaying == true || (lossSavedNs != 0L && now - lossSavedNs < 10_000_000_000L)) return      // one set in ten seconds at most
+        lossSavedNs = now
+        thread(name = "loss-pictures", isDaemon = true) {
+            try {
+                val dir = File(app.getExternalFilesDir(null), "loss-pictures"); val name = "loss-" + System.currentTimeMillis()
+                val n = lossPictures.write(File(dir, "$name.uxloss"), why); val s = trace.snapshot(File(dir, "$name.csv"), why)
+                dev.ultraxr.core.LossPictures.prune(dir)
+                log("6DoF loss: $n pairs of pictures and $s states saved as $name")
+            } catch (e: Throwable) { log("6DoF loss: not saved: $e") }
+        }
+    }
 
     private fun vioLoop() {
         try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
@@ -668,6 +688,7 @@ object Tracking : GlassesLink.Listener {
                     if (lastResetCount >= 0) {
                         log("6DoF: the estimator began afresh (start " + out[20].toLong() + ", " + out[21].toLong() + " of them its own doing)")
                         head.onVioEpochReset(); slam.let { if (it != 0L) Native.slamNewEpoch(it) }
+                        supervisor.onNewEpoch(now)
                         health.reset(); recovering = true; stableSinceNs = 0L; mapRestoreFix = null; mapSearching = true; synchronized(mapAlign) { mapAlign.restoreClear() }
                         if (seesAgainNs == 0L || now - seesAgainNs > 5_000_000_000L) seesAgainNs = now
                     }
@@ -689,7 +710,7 @@ object Tracking : GlassesLink.Listener {
                     // very state on, and the count of good landmarks starts again from nothing.
                     val fit = !recoveryOn || (if (starveOn) health.update(out[0].toLong(), p, vel, vioFeatures, vioLandmarks, vioStereoMatches) else health.update(out[0].toLong(), p, vel, vioFeatures))
                     if (recoveryOn && !fit && health.why != dev.ultraxr.core.TrackingHealth.Why.SETTLING) {
-                        if (counted || wasUsing) { val said = "6DoF: position unfit (" + (if (health.why == dev.ultraxr.core.TrackingHealth.Why.BLIND) "the cameras see nothing: $vioFeatures corners, $vioLandmarks landmarks, $vioStereoMatches seen by both" else "the estimator says the head flies") + "): held from this state on"; log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said) }
+                        if (counted || wasUsing) { val said = "6DoF: position unfit (" + (if (health.why == dev.ultraxr.core.TrackingHealth.Why.BLIND) "the cameras see nothing: $vioFeatures corners, $vioLandmarks landmarks, $vioStereoMatches seen by both" else "the estimator says the head flies") + "): held from this state on"; log(said); replayLog?.note(link?.replaySeconds ?: 0.0, said); if (lossDueNs == 0L) { lossWhy = said; lossDueNs = now + 800_000_000L } }
                         positionConfidence.reset()
                     }
                     val trusted = counted && fit
@@ -821,6 +842,7 @@ object Tracking : GlassesLink.Listener {
                 } else if (supervisor.onState(now, 0, false, ZERO, ZERO, -1)) resetVio(v)
             }
             if (tick % 5 == 0) mapPartStep()
+            saveLossIfDue(now)
             if (++tick % 100 == 0) {
                 governor()
                 val mode = head.predict(now).mode

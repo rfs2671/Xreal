@@ -342,6 +342,15 @@ class VioSupervisor {
         return true
     }
 
+    /**
+     * The estimator began a world of its own (whoever asked for it): where it was before says nothing about where it
+     * is now. Without this the first state of the new world, which begins at its own origin, was read as a jump from
+     * the old world's last position whenever the head was over [MAX_JUMP] from the old origin, and the estimator was
+     * started a second time: 560 of the 561 "position jump" resets in the S21 Ultra's log of 20 to 22 November 2026
+     * came within three seconds of a restart the app itself had asked for.
+     */
+    fun onNewEpoch(nowNs: Long) { lastP = null; lowFeatureSinceNs = 0; lastStateNs = nowNs }
+
     private fun accept(stateNs: Long, p: DoubleArray) { lastStateNs = maxOf(lastStateNs, stateNs); lastP = p.copyOf() }
     private fun dist(a: DoubleArray, b: DoubleArray) = sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))
 

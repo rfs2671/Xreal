@@ -12,7 +12,8 @@ import kotlin.math.sqrt
  * Changes nothing about tracking.
  */
 class VioTrace(private val log: (String) -> Unit) {
-    // t_ns, p xyz, q xyzw, v xyz, bg xyz, features, process_ms, mean |accel|, mean |gyro|, imu samples
+    // t_ns, p xyz, q xyzw, v xyz, bg xyz, features, process_ms, mean |accel|, mean |gyro|, landmarks, seen by both
+    // cameras, pairs dropped before the estimator so far
     private val ring = ArrayDeque<DoubleArray>()
     private var accelSum = 0.0; private var gyroSum = 0.0; private var imuN = 0
     private var epochStartNs = 0L; private var epochStartP: DoubleArray? = null
@@ -28,9 +29,9 @@ class VioTrace(private val log: (String) -> Unit) {
 
     /** Estimator poll thread, once per fresh state; [out] is the array from Native.vioGetState. */
     fun onState(out: DoubleArray) {
-        val row = DoubleArray(18)
+        val row = DoubleArray(21)
         System.arraycopy(out, 0, row, 0, 14)              // t, p, q, v, bg
-        row[14] = out[14]; row[15] = out[18]
+        row[14] = out[14]; row[15] = out[18]; row[18] = out[23]; row[19] = out[22]; row[20] = out[16]
         synchronized(this) {
             row[16] = if (imuN > 0) accelSum / imuN else Double.NaN; row[17] = if (imuN > 0) gyroSum / imuN else Double.NaN
             accelSum = 0.0; gyroSum = 0.0; imuN = 0
@@ -46,6 +47,20 @@ class VioTrace(private val log: (String) -> Unit) {
             log(String.format(Locale.US, "6DoF status: %.0f s since start, pos %.3f %.3f %.3f, %.3f m from start, path %.2f m, speed now %.2f max %.2f m/s, %d features, gyro bias %.4f %.4f %.4f, |accel| %.3f |gyro| %.3f",
                 (t - epochStartNs) * 1e-9, p[0], p[1], p[2], dist(epochStartP!!, p), pathM, speed, maxSpeed, out[14].toInt(), out[11], out[12], out[13], row[16], row[17]))
         }
+    }
+
+    /** Writes the kept states to [f] and keeps them: the seconds up to a loss, beside its pictures. */
+    fun snapshot(f: File, reason: String): Int {
+        val rows: List<DoubleArray>; synchronized(this) { rows = ring.toList() }
+        if (rows.isEmpty()) return 0
+        f.parentFile?.mkdirs()
+        f.bufferedWriter().use { w -> w.write("# reason: " + reason.replace('\n', ' ') + "\n"); writeRows(w, rows) }
+        return rows.size
+    }
+
+    private fun writeRows(w: java.io.Writer, rows: List<DoubleArray>) {
+        w.write(HEADER + "\n")
+        for (r in rows) { w.write(r[0].toLong().toString()); for (i in 1 until r.size) { w.write(","); w.write(String.format(Locale.US, "%.6f", r[i])) }; w.write("\n") }
     }
 
     /** Writes the kept states to a file and starts a new epoch. Returns a short description, or null. */
@@ -65,8 +80,7 @@ class VioTrace(private val log: (String) -> Unit) {
             val f = File(dir, "trace-" + System.currentTimeMillis() + ".csv")
             f.bufferedWriter().use { w ->
                 w.write(String.format(Locale.US, "# reason: %s; epoch lasted %.1f s; %.3f m from its start\n", reason, seconds, moved))
-                w.write("t_ns,px,py,pz,qx,qy,qz,qw,vx,vy,vz,bgx,bgy,bgz,features,process_ms,accel_norm,gyro_norm\n")
-                for (r in rows) { w.write(r[0].toLong().toString()); for (i in 1 until r.size) { w.write(","); w.write(String.format(Locale.US, "%.6f", r[i])) }; w.write("\n") }
+                writeRows(w, rows)
             }
             String.format(Locale.US, "epoch lasted %.0f s, ended %.2f m from its start, %d states saved to %s", seconds, moved, rows.size, f.name)
         } catch (e: Exception) { "trace not written: $e" }
@@ -76,6 +90,7 @@ class VioTrace(private val log: (String) -> Unit) {
 
     companion object {
         const val KEEP = 600                  // 20 s at 30 states a second
+        const val HEADER = "t_ns,px,py,pz,qx,qy,qz,qw,vx,vy,vz,bgx,bgy,bgz,features,process_ms,accel_norm,gyro_norm,landmarks,stereo,dropped"
         const val SUMMARY_NS = 5_000_000_000L
         const val MAX_FILES = 200
     }

@@ -316,6 +316,37 @@ class CoreTest {
         assertEquals(4L, s.resets)
     }
 
+    @Test fun lossPicturesKeepTheLastPairsOldestFirst() {
+        val lp = dev.ultraxr.core.LossPictures(pairs = 4, every = 3, size = 6)
+        val f = java.io.File.createTempFile("loss", ".uxloss")
+        assertEquals(0, lp.write(f, "nothing yet"))
+        for (k in 0 until 30) lp.onStereo(1000L + k, ByteArray(6) { k.toByte() }, ByteArray(6) { (100 + k).toByte() })      // kept: 0, 3, ..., 27
+        assertEquals(4, lp.held())
+        assertEquals(4, lp.write(f, "why\nit was lost"))
+        val b = f.readBytes(); val head = "UXLOSS1\nwhy it was lost\n".toByteArray()
+        assertEquals(head.size + 4 * (8 + 12), b.size)
+        assertTrue(b.copyOf(head.size).contentEquals(head))
+        for ((i, k) in listOf(18, 21, 24, 27).withIndex()) {
+            val o = head.size + i * 20
+            assertEquals(1000L + k, java.nio.ByteBuffer.wrap(b, o, 8).long)
+            assertEquals(k.toByte(), b[o + 8]); assertEquals((100 + k).toByte(), b[o + 14])
+        }
+        f.delete()
+    }
+
+    /** 22 November 2026: every restart the app asked for was followed by a second one, "position jump", 0.2 s later. */
+    @Test fun supervisorDoesNotTakeANewWorldsOriginForAJump() {
+        val s = VioSupervisor()
+        val z = doubleArrayOf(0.0, 0.0, 0.0)
+        var now = 10_000_000_000L
+        fun step(p: DoubleArray): Boolean { now += 33_000_000L; s.onFrame(now); return s.onState(now, now, true, p, z, 80) }
+        repeat(100) { assertFalse(step(doubleArrayOf(it * 0.012, 0.0, 0.0))) }      // walked 1.2 m from the estimator's origin
+        s.onNewEpoch(now)                                                             // the estimator is started afresh: it begins at its origin
+        repeat(100) { assertFalse("the new world's states are no jump", step(doubleArrayOf(it * 0.001, 0.0, 0.0))) }
+        assertTrue("a jump inside one world still is one", step(doubleArrayOf(3.0, 0.0, 0.0)))
+        assertEquals(1L, s.resets)
+    }
+
     private fun hand(pinchGap: Double, curlIndex: Boolean, curlOthers: Boolean, at: DoubleArray = doubleArrayOf(0.0, 0.0, 0.0), t: Long = 0): Hand {
         val j = FloatArray(63)
         fun set(i: Int, x: Double, y: Double, z: Double) { j[i * 3] = (x + at[0]).toFloat(); j[i * 3 + 1] = (y + at[1]).toFloat(); j[i * 3 + 2] = (z + at[2]).toFloat() }
