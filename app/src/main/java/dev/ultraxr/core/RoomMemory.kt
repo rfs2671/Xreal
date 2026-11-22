@@ -75,7 +75,10 @@ class RoomMemory {
     fun see(appFromMap: Pose, found: RoomFindings) {
         val inv = appFromMap.inverse()
         val now = found.surfaces.filter { it.kind != RoomSurface.Kind.FLOOR }.map { moved(inv, it) }
-        val floor = if (found.floorY.isNaN()) kept.firstOrNull { it.kind == RoomSurface.Kind.FLOOR }
+        // Only a floor the cameras are looking at is kept (support: the boxes on it now). One held from before, or put
+        // under the head after a loss of position, is not: on 22 November 2026 such a stand-in, 1.5 m too low, was
+        // written over the kept floor and given to games as the room's floor in the next session.
+        val floor = if (found.floorY.isNaN() || found.floorSupport <= 0) kept.firstOrNull { it.kind == RoomSurface.Kind.FLOOR }
             else RoomSurface(RoomSurface.Kind.FLOOR, 0.0, found.floorY + inv.p[1], 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 4.0, 4.0, found.floorSupport)
         // of two that are the same wall the one seen more stays where it is and grows to cover the other (RoomTidy): a
         // wall kept for long is not turned by one poor sighting of it
@@ -133,6 +136,7 @@ class RoomMemory {
             val w = line.trim().split(" "); if (w.size != 14) continue
             val kind = when (w[0]) { "floor" -> RoomSurface.Kind.FLOOR; "wall" -> RoomSurface.Kind.WALL; "table" -> RoomSurface.Kind.TABLE; else -> null } ?: continue
             val v = w.drop(1).map { it.toDoubleOrNull() ?: return false }
+            if (kind == RoomSurface.Kind.FLOOR && v[11].toInt() <= 0) continue      // a floor nobody saw (see [see]): not kept
             out.add(RoomSurface(kind, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11].toInt()))
         }
         kept = out; before = out; changed = false

@@ -38,6 +38,16 @@ class RoomMemoryTest {
         assertEquals(w.halfU, w2.halfU, 2e-3)
     }
 
+    @Test fun aFloorNobodySawIsNotKeptAndNotReadBack() {
+        // 22 November 2026: a floor put under the head after a loss of position (no boxes on it) replaced the kept one.
+        val m = RoomMemory(); val id = Pose(doubleArrayOf(0.0, 0.0, 0.0), doubleArrayOf(0.0, 0.0, 0.0, 1.0))
+        m.see(id, found(floor = -1.70))
+        m.see(id, RoomFindings(-3.20, 0, emptyList(), 0, 0))
+        assertTrue("the seen floor stays: " + m.write(), m.write().lines().first().startsWith("floor 0.000 -1.700"))
+        val n = RoomMemory(); n.read("floor 0.000 -2.410 0.000 1.0000 0.0000 0.0000 0.0000 0.0000 1.0000 4.000 4.000 0 0\nwall 1.084 -0.332 -3.052 0.1796 0.0000 0.9837 0.0000 1.0000 0.0000 1.836 1.611 100000 0")
+        assertTrue(n.keptFloorInMap.isNaN())
+    }
+
     @Test fun aKeptWallFoundAgainIsOneWallAndFullyBelieved() {
         val one = RoomMemory(); val map = yUp(0.0, 0.0, 0.0, 0.0)
         one.see(map, found(wall(-2.0, -1.5, 2.0, -1.5), wall(2.0, -1.5, 2.0, 1.5)))
