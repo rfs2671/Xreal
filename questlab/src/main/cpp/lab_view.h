@@ -295,6 +295,9 @@ static void buildGeometry(XrTime t, const XrPosef &head) {
     if (!setupMode) { XrSpaceLocation hl{XR_TYPE_SPACE_LOCATION};
         if (XR_SUCCEEDED(xrLocateSpace(view, local, t, &hl)) && (hl.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
             int first = (int)vtx.size() / 3; const XrVector3f &o = hl.pose.position;
+            { static int n = 0; if (n++ % 30 == 0) { float fy = NAN, fx = 0, fz = 0, fw = 0, fh = 0; int planes = 0;
+                for (auto &p : scene) { if (p.ok) planes++; if (p.ok && p.kind == 0) { fy = p.pose.position.y; fx = p.pose.position.x; fz = p.pose.position.z; fw = p.rect.extent.width; fh = p.rect.extent.height; } }
+                __android_log_print(ANDROID_LOG_INFO, "QuestLab", "BLUEFLOOR head %.2f m above the drawn floor grid (grid y %.2f, head y %.2f in LOCAL; grid centre x %.2f z %.2f, %.1f x %.1f m; head x %.2f z %.2f; %d planes drawn)", o.y - fy, fy, o.y, fx, fz, fw, fh, o.x, o.z, planes); } }
             for (int k = -1; k <= 1; k++) for (int i = 0; i < 72; i++) { float a0 = i * 0.0872665f, a1 = (i + 1) * 0.0872665f, y = o.y + k * 0.02f;
                 lineTo({o.x + 30 * std::cos(a0), y, o.z + 30 * std::sin(a0)}, {o.x + 30 * std::cos(a1), y, o.z + 30 * std::sin(a1)}); }
             batch(GL_LINES, first, 1.0f, 0.1f, 0.1f, 1, 0); } }
