@@ -48,7 +48,7 @@ RUNS = {
     "h_now": ("", ""), "h_nowb": ("", ""),
     # the head given to the renderer with and without the glide between states (TAG-render.csv)
     # the head's place carried by the accelerometer between the estimator's states, and how much of a state's speed is taken
-    "k_now": ("", ""), "k_nowb": ("", ""), "k_carry": ("carry=1" + chr(10), ""), "k_carryb": ("carry=1" + chr(10), ""),
+    "k_now": ("carry=0" + chr(10), ""), "k_nowb": ("carry=0" + chr(10), ""), "k_carry": ("carry=1" + chr(10), ""), "k_carryb": ("carry=1" + chr(10), ""),
     "k_c100": ("carry=1" + chr(10) + "carry_speed=1" + chr(10), ""), "k_c50": ("carry=1" + chr(10) + "carry_speed=0.5" + chr(10), ""), "k_c12": ("carry=1" + chr(10) + "carry_speed=0.12" + chr(10), ""),
     "j_glide": ("", ""), "j_glideb": ("", ""), "j_step": ("glide=0" + chr(10), ""), "j_stepb": ("glide=0" + chr(10), ""),
     # the plain CPU kernels against XNNPACK (the default), and what the time gained buys: three tiles a run

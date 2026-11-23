@@ -18,8 +18,8 @@ def rows(path, n):
     out = []
     for line in open(path).read().splitlines()[1:]:
         c = line.split(",")
-        if len(c) == n:
-            out.append([float(x) for x in c])
+        if len(c) >= n and c[n - 1] != "":
+            out.append([float(x) for x in c[:n]])
     return np.array(out)
 
 def main():

@@ -50,7 +50,7 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
      * 120 ms a state is old. A low-pass on the place (1 euro filter, seven settings) made it worse.
      */
     @Volatile var blendOn = false
-    @Volatile var speedShare = 0.25
+    @Volatile var speedShare = 1.0
     private val histA = DoubleArray(HIST * 3)     // the accelerometer's reading at each sample, less its bias
     private val histP = DoubleArray(HIST * 3)     // the carried place and speed after each sample
     private val histV = DoubleArray(HIST * 3)
@@ -58,6 +58,8 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     private val propP = DoubleArray(3); private val propV = DoubleArray(3)
     /** How many samples the place was carried by, and how many states corrected it (for the log). */
     @Volatile var carried = 0L; private set
+    /** For the replay's record: how far the last state moved the carried place (mm), whether its time was found in the remembered path (1/0), how old it was (ms), and how many motion samples so far came too late to carry by. */
+    val carryNote = DoubleArray(4)
 
     // --- visual-inertial state, y-up
     private var vioNs = 0L
@@ -118,7 +120,11 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         histQ[i * 4] = qGI[0]; histQ[i * 4 + 1] = qGI[1]; histQ[i * 4 + 2] = qGI[2]; histQ[i * 4 + 3] = qGI[3]
         histA[i * 3] = accel[0] - accelBias[0]; histA[i * 3 + 1] = accel[1] - accelBias[1]; histA[i * 3 + 2] = accel[2] - accelBias[2]
         // The place is carried while the last state is young enough to carry from; past that it stays, as before.
-        if (blendOn && haveVio && haveGravity && dt > 0 && dt < 0.02 && tNs - vioNs < (MAX_POSITION_EXTRAPOLATION_S * 1e9).toLong()) {
+        if (blendOn && haveVio && dt >= 0.02) carryNote[3] += 1.0
+        // Samples go missing for 20 to 30 ms at a time (31 times in 108 s of the worn recording of 21 November 2026). The
+        // place is carried across such a gap too, by the speed and this sample's acceleration: left where it was, a
+        // head walking at 0.7 m/s was 15 to 23 mm behind after each gap, and the next state's correction showed as a jump.
+        if (blendOn && haveVio && haveGravity && dt > 0 && dt < MAX_POSITION_EXTRAPOLATION_S && tNs - vioNs < (MAX_POSITION_EXTRAPOLATION_S * 1e9).toLong()) {
             val a = Q.rotate(Q.mul(corr, Q.mul(Z_TO_Y, qGI)), doubleArrayOf(histA[i * 3], histA[i * 3 + 1], histA[i * 3 + 2]))
             a[1] -= G_ESTIMATOR
             for (k in 0..2) { propV[k] += a[k] * dt; propP[k] += propV[k] * dt }
@@ -138,13 +144,25 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         var back = 0
         while (back < n - 1 && histT[((histN - 1 - back) % HIST).toInt()] > tNs) back++
         val m = ((histN - 1 - back) % HIST).toInt()
-        // the state is older than what is remembered (or nothing is): the path starts from the state itself
-        val known = n > 0 && abs(histT[m] - tNs) < 20_000_000L
+        // The carried path at the state's time: between the two samples around it (a state may fall into a gap of the
+        // motion samples; taken from the sample before alone it was up to 30 ms of walking off).
+        val span = (MAX_POSITION_EXTRAPOLATION_S * 1e9).toLong()
+        val known = n > 0 && histT[m] <= tNs && (if (back > 0) histT[((histN - back) % HIST).toInt()] - histT[m] < span else tNs - histT[m] < 20_000_000L)
+        carryNote[1] = if (known) 1.0 else 0.0
         val dp = DoubleArray(3); val dv = DoubleArray(3); val moved = DoubleArray(3)
-        val s = if (known) share else 1.0
-        for (k in 0..2) { dp[k] = pY[k] - (if (known) histP[m * 3 + k] else propP[k]); dv[k] = s * (vY[k] - (if (known) histV[m * 3 + k] else propV[k])) }
-        if (!known) { for (k in 0..2) { moved[k] = pY[k] - propP[k]; propP[k] = pY[k]; propV[k] = vY[k] }; return moved }
-        for (b in back downTo 0) {
+        if (!known) {
+            // the path starts from the state itself, brought to the newest sample at the state's speed
+            val d = ((lastImuNs - tNs) * 1e-9).coerceIn(0.0, MAX_POSITION_EXTRAPOLATION_S)
+            for (k in 0..2) { val to = pY[k] + vY[k] * d; moved[k] = to - propP[k]; propP[k] = to; propV[k] = vY[k] }
+            return moved
+        }
+        val m2 = if (back > 0) ((histN - back) % HIST).toInt() else m
+        val f = if (m2 != m) (tNs - histT[m]).toDouble() / (histT[m2] - histT[m]).toDouble() else 0.0
+        for (k in 0..2) {
+            dp[k] = pY[k] - (histP[m * 3 + k] + (histP[m2 * 3 + k] - histP[m * 3 + k]) * f)
+            dv[k] = share * (vY[k] - (histV[m * 3 + k] + (histV[m2 * 3 + k] - histV[m * 3 + k]) * f))
+        }
+        for (b in back - 1 downTo 0) {
             val i = ((histN - 1 - b) % HIST).toInt(); val d = (histT[i] - tNs) * 1e-9
             for (k in 0..2) { histP[i * 3 + k] += dp[k] + dv[k] * d; histV[i * 3 + k] += dv[k] }
         }
@@ -202,6 +220,7 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             val now = maxOf(lastImuNs, tNs)
             val g = glideAt(now)
             val moved = correctCarried(tNs, pY, vY, speedShare)
+            carryNote[0] = 1e3 * Math.sqrt(moved[0] * moved[0] + moved[1] * moved[1] + moved[2] * moved[2]); carryNote[2] = (lastImuNs - tNs) * 1e-6
             for (i in 0..2) glide[i] = g[i] - moved[i]
             glideNs = now
             if (!glideOn || glide[0] * glide[0] + glide[1] * glide[1] + glide[2] * glide[2] > GLIDE_MAX_M * GLIDE_MAX_M) { glide[0] = 0.0; glide[1] = 0.0; glide[2] = 0.0 }
