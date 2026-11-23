@@ -969,6 +969,7 @@ object Tracking : GlassesLink.Listener {
         slamFoundSeen = -1.0; slamEpochSeen = -1.0; mapFound = 0; mapResults = 0; mapFoundNs = 0L
         val rig = slamRig; val f = mapFile()
         if (!roomMapOn || rig == null || f == null || !settings.roomScan) return@synchronized
+        if (fresh) { mapFreshCount++; try { File(f.parentFile, "kept_places.txt").delete() } catch (_: Exception) {} }
         if (fresh && f.isFile) f.delete()
         synchronized(roomMemory) {
             roomMemory.clear(); roomMemorySaid = false
@@ -1007,6 +1008,20 @@ object Tracking : GlassesLink.Listener {
     // OpenCV thread and the worker on the small cores, 36 to 38 ms, 29.9 states a second, and the hands no slower.
     private const val SLAM_DEFAULTS = "Ultra/Cores=little\nUltra/CvThreads=1\n"
 
+    /** Counts the maps begun afresh in this run of the app: what was held in an older map's coordinates is void after a change. */
+    @Volatile var mapFreshCount = 0; private set
+    /** A place kept in the saved map's coordinates under [name] (x, y, z), for things that are to be where they were left after the app is started again. */
+    fun keptPlace(name: String): DoubleArray? = try {
+        File(appContext?.getExternalFilesDir(null), "kept_places.txt").takeIf { it.isFile }?.readLines()?.firstOrNull { it.startsWith("$name ") }?.split(" ")?.drop(1)?.mapNotNull { it.toDoubleOrNull() }?.takeIf { it.size == 3 }?.toDoubleArray()
+    } catch (_: Exception) { null }
+    fun keepPlace(name: String, m: DoubleArray) {
+        try {
+            val f = File(appContext?.getExternalFilesDir(null) ?: return, "kept_places.txt")
+            val others = if (f.isFile) f.readLines().filter { it.isNotBlank() && !it.startsWith("$name ") } else emptyList()
+            f.writeText((others + (name + " " + m[0] + " " + m[1] + " " + m[2])).joinToString("\n") + "\n")
+        } catch (e: Exception) { log("kept place not written: $e") }
+    }
+
     /** Forgets the saved map and makes a new one from now on. */
     fun newRoomMap() { thread(name = "room-map", isDaemon = true) { openRoomMap(true) } }
 
@@ -1040,6 +1055,8 @@ object Tracking : GlassesLink.Listener {
     /** The hand tracker's pictures as they come until the tone curve is measured through the whole tracker. */
     private const val HAND_TONE = 0.0
     private const val MAP_MIN_PLACES = 8
+    private const val ROOM_NEW_AFTER = 60L
+    @Volatile private var newRoomPending = false
 
     /** One room picture and the estimator's pose for it go to the map; what the map has found since is taken up. */
     private val mapPicLock = Object(); private val mapPicLeft = ByteArray(480 * 640); private val mapPicRight = ByteArray(480 * 640)
@@ -1092,6 +1109,21 @@ object Tracking : GlassesLink.Listener {
         if (st[1] > slamFoundSeen) { mapFound += (st[1] - slamFoundSeen).toLong(); if (slamFinding) mapFoundNs = System.nanoTime() }
         if (slamMode == 2 && reading) mapFoundNs = System.nanoTime()
         slamFoundSeen = st[1]
+        // A saved map of some other room (or of this one in another light) is never recognised, and a session that never
+        // recognises it adds nothing to it: worn on 23 November 2026, 199 pictures in 85 seconds were looked at against a map
+        // of 187 places and none was recognised, as in every replay of the recordings of 22 and 23 November, while replays of
+        // the 17, 18 and 21 November recordings found the head in it within 4.6 to 6.2 seconds. So after $ROOM_NEW_AFTER pictures
+        // with none recognised this is taken to be a room not yet scanned: the saved map, surfaces and mesh are kept once
+        // over as *.prev and a new map is begun from here.
+        if (slamMode == 2 && mapFound == 0L && mapResults >= ROOM_NEW_AFTER && !roomMapReadOnly && !newRoomPending) {
+            newRoomPending = true
+            log("room map: " + mapResults + " pictures and the saved map of " + mapPlaces + " places was not recognised; it is kept as room_map.db.prev and this room is scanned afresh")
+            thread(name = "room-map", isDaemon = true) {
+                try { for (f in listOf(mapFile(), roomMemoryFile(), roomMeshFile())) if (f != null && f.isFile) f.copyTo(File(f.path + ".prev"), overwrite = true) } catch (e: Exception) { log("room map: the old one could not be kept: " + e) }
+                try { openRoomMap(true) } finally { newRoomPending = false }
+            }
+            return
+        }
         // for the log of a worn session: what the map is doing, every ten seconds
         val nowNs = System.nanoTime()
         if (nowNs - mapSaidNs > 10_000_000_000L) {

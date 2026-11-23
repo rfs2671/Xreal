@@ -119,6 +119,8 @@ class HomeScene : BaseScene() {
     private var ball: dev.ultraxr.core.GrabBall? = null
     private var press: dev.ultraxr.core.PressTarget? = null
     private var saidHeld = -1; private var saidPresses = 0
+    /** The ball's place in the saved room map's coordinates: with it the ball is where it was left when the room is recognised again. */
+    private var ballInMap: DoubleArray? = null; private var ballMapVersion = -1; private var ballMapFresh = -1; private var ballAsked = false
 
     override fun update(dt: Double, head: HeadTracker.State) {
         time += dt
@@ -131,6 +133,24 @@ class HomeScene : BaseScene() {
         readHands(head)
         val now = System.nanoTime()
         ball?.update(probes, now); press?.update(probes, now)
+        ball?.let { b ->
+            val am = Tracking.appFromMap(); val mv = Tracking.mapVersion
+            if (Tracking.mapFreshCount != ballMapFresh) { if (ballMapFresh >= 0) { ballInMap = null; ballAsked = true }; ballMapFresh = Tracking.mapFreshCount }
+            if (am != null && b.heldBy < 0) {
+                if (!ballAsked) {
+                    ballAsked = true
+                    Tracking.keptPlace("ball")?.let { ballInMap = it; Tracking.log("ball: back where it was left in the room (" + dev.ultraxr.core.Fmt.f(it[0], 2) + " " + dev.ultraxr.core.Fmt.f(it[1], 2) + " " + dev.ultraxr.core.Fmt.f(it[2], 2) + " in the map)") }
+                }
+                val m = ballInMap
+                val at = m?.let { dev.ultraxr.core.MapAlign.fromMap(am, doubleArrayOf(it[0], it[1], it[2], 0.0)) }
+                val off = at?.let { Math.sqrt((it[0] - b.p[0]) * (it[0] - b.p[0]) + (it[1] - b.p[1]) * (it[1] - b.p[1]) + (it[2] - b.p[2]) * (it[2] - b.p[2])) } ?: Double.MAX_VALUE
+                if (at != null && (mv != ballMapVersion || saidHeld < 0 && off < 0.5 && off > 1e-4)) b.place(doubleArrayOf(at[0], at[1], at[2]))      // the map's place in this session became known or was corrected: the ball goes with the room
+                else if (at == null || off > 1e-3) {      // newly made, or moved by a hand and let go: kept from here
+                    val k = dev.ultraxr.core.MapAlign.toMap(am, b.p, 0.0); ballInMap = doubleArrayOf(k[0], k[1], k[2]); Tracking.keepPlace("ball", ballInMap!!)
+                }
+                ballMapVersion = mv
+            }
+        }
         // what was done with them goes to the log, so that a worn try can be read afterwards
         ball?.let { b ->
             if (b.heldBy != saidHeld) {
