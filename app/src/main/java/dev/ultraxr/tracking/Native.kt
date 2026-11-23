@@ -30,6 +30,8 @@ object Native {
     // --- hands (Mercury)
     /** [calibPath] is the path of a calibration JSON file; [modelDir] holds the two .onnx models. */
     @JvmStatic external fun handsCreate(calibPath: String, modelDir: String, threads: Int): Long
+    /** Keeps the calling thread, and the threads it starts from now on, to the fast cores (or lets it onto all again). The cores as a bit mask; 0: nothing done. */
+    @JvmStatic external fun fastCores(on: Boolean): Int
     @JvmStatic external fun handsDestroy(handle: Long)
     /**
      * Runs hand tracking on one stereo pair (blocking). Fills [out] with 2 x 21 x 3 floats

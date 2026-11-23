@@ -1,6 +1,8 @@
 // JNI glue between dev.ultraxr.tracking.Native and the two tracking libraries:
 // libultra_vio.so (Basalt) and libultra_hands.so (Monado's Mercury via XR Gate's C API).
 #include <jni.h>
+#include <sched.h>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -94,6 +96,27 @@ JNIEXPORT void JNICALL Java_dev_ultraxr_tracking_Native_vioReset(JNIEnv *, jclas
 JNIEXPORT jstring JNICALL Java_dev_ultraxr_tracking_Native_vioVersion(JNIEnv *env, jclass) { return env->NewStringUTF(uvio_version()); }
 
 // ---------------------------------------------------------------- hands
+
+// The calling thread, and every thread it starts from now on, is kept to the phone's fast cores (on) or let onto all
+// of them again (off). Measured on the S21 Ultra, 22 November 2026, the hand tracker on ten recorded seconds with
+// both hands tracked: 61 ms a pair where Android puts its threads, 38 ms on cores 4 to 7, 112 ms on cores 0 to 3
+// (the fit of a hand alone: 6.1 ms against 1.1). A core counts as fast when its top frequency is at least 80 % of
+// the fastest core's. Returns the cores as a bit mask, 0 if nothing was done.
+JNIEXPORT jint JNICALL Java_dev_ultraxr_tracking_Native_fastCores(JNIEnv *, jclass, jboolean on) {
+    long top[64]; int n = 0; long best = 0;
+    for (; n < 64; n++) {
+        char path[96]; snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", n);
+        FILE *f = fopen(path, "r");
+        if (!f) break;
+        long v = 0; if (fscanf(f, "%ld", &v) != 1) v = 0; fclose(f);
+        top[n] = v; if (v > best) best = v;
+    }
+    if (n < 2 || best <= 0) return 0;
+    cpu_set_t set; CPU_ZERO(&set); int mask = 0, count = 0;
+    for (int i = 0; i < n; i++) if (!on || top[i] * 10 >= best * 8) { CPU_SET(i, &set); if (i < 31) mask |= 1 << i; count++; }
+    if (count == 0 || (on && count == n)) return 0;      // every core as fast as the next: nothing to choose
+    return sched_setaffinity(0, sizeof(set), &set) == 0 ? mask : 0;
+}
 
 JNIEXPORT jlong JNICALL Java_dev_ultraxr_tracking_Native_handsCreate(JNIEnv *env, jclass, jstring calib, jstring models, jint threads) {
     const std::string c = to_string(env, calib), m = to_string(env, models);

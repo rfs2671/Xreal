@@ -470,7 +470,11 @@ object Tracking : GlassesLink.Listener {
             // Mercury reads its calibration from a file path, not from text; same layout as Basalt's.
             val calibFile = File(dir, "mercury_calib.json")
             if (calib.isNotEmpty()) calibFile.writeText(calib) else app.assets.open("calibration/mercury_calib.json").use { i -> calibFile.outputStream().use { o -> i.copyTo(o) } }
-            val h = Native.handsCreate(calibFile.absolutePath, dir.absolutePath, 2)
+            // The library's own threads are started here and stay on the cores this thread is on while it starts them.
+            val cores = if (handOptions.fastCores) try { Native.fastCores(true) } catch (_: Throwable) { 0 } else 0
+            val h = try { Native.handsCreate(calibFile.absolutePath, dir.absolutePath, 2) } finally { if (cores != 0) try { Native.fastCores(false) } catch (_: Throwable) {} }
+            handCores = cores
+            log(if (cores != 0) "hand tracking on the fast cores (mask " + Integer.toBinaryString(cores) + ")" else "hand tracking on any core")
             if (h == 0L) { handsError = Native.lastError(); log("hand tracking init failed: $handsError") }
             else { handsError = ""; handsHandle = h; log("hand tracking ready: ${Native.handsVersion()}") }
         } catch (e: Throwable) { handsError = e.toString(); log("hand tracking init failed: $e") }
@@ -1481,8 +1485,10 @@ object Tracking : GlassesLink.Listener {
 
     private const val WORK_PRIORITY = 0
     @Volatile private var workPriority = WORK_PRIORITY
+    @Volatile private var handCores = 0
     private fun handsLoop() {
         try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
+        var pinned = 0
         val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)
         val out = FloatArray(2 * Hand.JOINTS * 3)
         val out26 = FloatArray(2 * 26 * 7)
@@ -1496,6 +1502,7 @@ object Tracking : GlassesLink.Listener {
             }
             val h = handsHandle
             if (h == 0L) continue
+            if (pinned != handCores) { pinned = handCores; try { Native.fastCores(pinned != 0) } catch (_: Throwable) {} }      // this thread runs the fit
             val t0 = System.nanoTime()
             // A hand in front of a bright window (worn, 21 November 2026: the arm stretched out before a doorway full of
             // daylight) is a dark shape whose fingers the models do not make out. The hand tracker's own copies of the
