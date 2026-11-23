@@ -76,6 +76,10 @@ JNIEXPORT jlong JNICALL Java_dev_ultraxr_tracking_Native_vioGetState(JNIEnv *env
                            s.last_process_ms, (ok && s.valid) ? 1.0 : 0.0, static_cast<double>(s.reset_count),
                            static_cast<double>(s.auto_resets)};
     env->SetDoubleArrayRegion(out, 0, 22, d);
+    if (env->GetArrayLength(out) >= 27) {   // and the accelerometer's bias
+        const jdouble b[3] = {s.ba[0], s.ba[1], s.ba[2]};
+        env->SetDoubleArrayRegion(out, 24, 3, b);
+    }
     if (env->GetArrayLength(out) >= 24) {   // newer callers also get the stereo match and landmark counts
         const jdouble e[2] = {static_cast<double>(s.stereo_matches), static_cast<double>(s.landmarks)};
         env->SetDoubleArrayRegion(out, 22, 2, e);

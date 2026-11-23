@@ -33,6 +33,9 @@ object Tracking : GlassesLink.Listener {
     lateinit var settings: Settings; private set
     var link: GlassesLink? = null; private set
     @Volatile var head = HeadTracker(); private set
+    /** vio_options.txt: carry=1 has the accelerometer carry the head's place between states ([HeadTracker.blendOn]); carry_speed is [HeadTracker.speedShare]. */
+    @Volatile private var headBlend = false
+    @Volatile private var headSpeedShare = 0.25
     val supervisor = VioSupervisor()
     private val observers = CopyOnWriteArrayList<Observer>()
     private val logLines = ArrayDeque<String>()
@@ -434,6 +437,8 @@ object Tracking : GlassesLink.Listener {
                     testNoise = lines.firstOrNull { it.startsWith("test_blind_noise=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: 0
                     starveOn = lines.none { it.replace(" ", "") == "starve=0" }
                     head.glideOn = lines.none { it.replace(" ", "") == "glide=0" }
+                    headBlend = lines.any { it.replace(" ", "") == "carry=1" }; headSpeedShare = lines.firstOrNull { it.startsWith("carry_speed=") }?.substringAfter('=')?.trim()?.toDoubleOrNull()?.coerceIn(0.02, 1.0) ?: 0.25
+                    head.blendOn = headBlend; head.speedShare = headSpeedShare
                     handTone = lines.firstOrNull { it.startsWith("hand_tone=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: HAND_TONE
                     handToneLut = handTone.takeIf { it > 0 }?.let { tau -> ByteArray(256) { i -> (255.0 * (1 - Math.exp(-i / tau)) / (1 - Math.exp(-255.0 / tau))).toInt().coerceIn(0, 255).toByte() } }
                     if (testBlind != null || testLight != 1.0) log("test: " + (testBlind?.let { "the cameras see nothing from " + it[0] + " to " + it[1] + " s of a replay; " } ?: "") + (if (testLight != 1.0) "pictures at $testLight of their brightness" else ""))
@@ -525,6 +530,7 @@ object Tracking : GlassesLink.Listener {
         stereoRig = try { dev.ultraxr.core.StereoRig.fromBasalt(calibJson) } catch (e: Exception) { log("room: calibration not usable: $e"); null }
         // Head origin between the two cameras.
         head = HeadTracker(doubleArrayOf((c0.p[0] + c1.p[0]) / 2, (c0.p[1] + c1.p[1]) / 2, (c0.p[2] + c1.p[2]) / 2))
+        head.blendOn = headBlend; head.speedShare = headSpeedShare
         // A recentre moves the app's world; the room found so far moves with it.
         head.onWorldMoved = { moved ->
             // a step of a centimetre or two towards the saved map is drift being taken out: the room model's boxes are
@@ -677,7 +683,7 @@ object Tracking : GlassesLink.Listener {
 
     private fun vioLoop() {
         try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
-        val out = DoubleArray(24).also { it[22] = -1.0; it[23] = -1.0 }   // 22, 23: stereo matches, landmarks (-1 = not reported)
+        val out = DoubleArray(27).also { it[22] = -1.0; it[23] = -1.0 }   // 22, 23: stereo matches, landmarks (-1 = not reported); 24 to 26: the accelerometer's bias
         var lastSeq = 0L
         var lastResetCount = -1.0
         var lastMode = HeadTracker.Mode.NONE
@@ -810,7 +816,7 @@ object Tracking : GlassesLink.Listener {
                     if (restarted) wasUsing = false
                     else if (supervisor.onState(now, out[0].toLong(), true, p, vel, vioFeatures)) { resetVio(v); wasUsing = false }
                     else if (use) {
-                        head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13])); wasUsing = true
+                        head.onVio(out[0].toLong(), p, q, vel, doubleArrayOf(out[11], out[12], out[13]), doubleArrayOf(out[24], out[25], out[26])); wasUsing = true
                         // After more than two seconds without position the wearer may be somewhere else: what was
                         // found of the room is dropped (the floor's height is kept until a new one is found).
                         // Worn, 21 November 2026: position was away for 0.9 s as a game started, the head was held where it
@@ -1282,6 +1288,7 @@ object Tracking : GlassesLink.Listener {
         positionConfidence.reset()
         thread(name = "replay-render", isDaemon = true) {      // stands in for the renderer: the head 60 times a second, on the recording's own clock
             val t0 = System.nanoTime(); var n = 0L
+            head.onState = { tNs, at -> try { rl.state((tNs - t0) / 1e9, at) } catch (_: Throwable) {} }
             while (replayLog === rl) {
                 val now = System.nanoTime(); val s = head.predict(now)
                 try { rl.render((now - t0) / 1e9, s.pose.p, s.pose.q, s.mode == HeadTracker.Mode.SIX_DOF) } catch (_: Throwable) { break }

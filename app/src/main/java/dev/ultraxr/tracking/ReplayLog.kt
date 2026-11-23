@@ -31,6 +31,9 @@ class ReplayLog(dir: File, tag: String) {
     private val room = PrintWriter(File(dir, "$tag-room.csv")).also { it.println("t,points_in_picture,find_ms,boxes,confirmed,head_y,floor_y,floor_below_head,floor_support,tables,walls") }
     /** The head as the renderer is given it, asked for 60 times a second: what steadiness of the picture is measured on. */
     private val render = PrintWriter(File(dir, "$tag-render.csv")).also { it.println("t,x,y,z,qx,qy,qz,qw,six_dof") }
+    /** Every state the head tracker used: its own time on the same clock as the renderer's rows, and where it has the head. */
+    private val states = PrintWriter(File(dir, "$tag-states.csv")).also { it.println("t,x,y,z") }
+    @Synchronized fun state(t: Double, p: DoubleArray) { states.println(String.format(Locale.US, "%.4f,%.5f,%.5f,%.5f", t, p[0], p[1], p[2])) }
     @Synchronized fun render(t: Double, p: DoubleArray, q: DoubleArray, sixDof: Boolean) {
         render.println(String.format(Locale.US, "%.4f,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%d", t, p[0], p[1], p[2], q[0], q[1], q[2], q[3], if (sixDof) 1 else 0))
     }
@@ -87,6 +90,6 @@ class ReplayLog(dir: File, tag: String) {
     @Synchronized fun close(summary: String) {
         notes.println(summary)
         notes.println("hand results $handResults, left found ${handFound[0]}, right found ${handFound[1]}")
-        vio.close(); hands.close(); notes.close(); app.close(); joints.close(); room.close(); render.close()
+        vio.close(); hands.close(); notes.close(); app.close(); joints.close(); room.close(); render.close(); states.close()
     }
 }

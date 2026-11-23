@@ -37,6 +37,28 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     private val histQ = DoubleArray(HIST * 4)
     private var histN = 0L
 
+    // --- the head's place and speed carried forward by the accelerometer between the estimator's states (y-up, its world)
+    /**
+     * On: between two states of the estimator the head's place follows the accelerometer, and a state corrects the
+     * place outright and the speed by [speedShare] of what it differs by. Off: the place is the last state's, moved
+     * on at that state's speed.
+     *
+     * Worn, 23 November 2026: a ball fixed in the room "shook". Three saved worn stretches of the estimator's states
+     * (20 s each): with the head still the place given to the renderer is off by 0.3 mm from frame to frame, moving
+     * by 1.6 to 1.8 mm, which at 0.45 m is 4 to 9 pixels. Two things make it: the estimator's speed is 30 to 150 mm/s
+     * off from one state to the next, and the head's acceleration (1 m/s2, 2 at times) is left out for the 50 to
+     * 120 ms a state is old. A low-pass on the place (1 euro filter, seven settings) made it worse.
+     */
+    @Volatile var blendOn = false
+    @Volatile var speedShare = 0.25
+    private val histA = DoubleArray(HIST * 3)     // the accelerometer's reading at each sample, less its bias
+    private val histP = DoubleArray(HIST * 3)     // the carried place and speed after each sample
+    private val histV = DoubleArray(HIST * 3)
+    private val accelBias = DoubleArray(3)
+    private val propP = DoubleArray(3); private val propV = DoubleArray(3)
+    /** How many samples the place was carried by, and how many states corrected it (for the log). */
+    @Volatile var carried = 0L; private set
+
     // --- visual-inertial state, y-up
     private var vioNs = 0L
     private var vioP = doubleArrayOf(0.0, 0.0, 0.0)
@@ -94,12 +116,47 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         val i = (histN % HIST).toInt()
         histT[i] = tNs
         histQ[i * 4] = qGI[0]; histQ[i * 4 + 1] = qGI[1]; histQ[i * 4 + 2] = qGI[2]; histQ[i * 4 + 3] = qGI[3]
+        histA[i * 3] = accel[0] - accelBias[0]; histA[i * 3 + 1] = accel[1] - accelBias[1]; histA[i * 3 + 2] = accel[2] - accelBias[2]
+        // The place is carried while the last state is young enough to carry from; past that it stays, as before.
+        if (blendOn && haveVio && haveGravity && dt > 0 && dt < 0.02 && tNs - vioNs < (MAX_POSITION_EXTRAPOLATION_S * 1e9).toLong()) {
+            val a = Q.rotate(Q.mul(corr, Q.mul(Z_TO_Y, qGI)), doubleArrayOf(histA[i * 3], histA[i * 3 + 1], histA[i * 3 + 2]))
+            a[1] -= G_ESTIMATOR
+            for (k in 0..2) { propV[k] += a[k] * dt; propP[k] += propV[k] * dt }
+            carried++
+        }
+        for (k in 0..2) { histP[i * 3 + k] = propP[k]; histV[i * 3 + k] = propV[k] }
         histN++
     }
 
+    /**
+     * A state of the estimator's ([pY], [vY] at [tNs]) corrects the carried place and speed: the place by all of what
+     * the carried path differs by at the state's own time, the speed by [share] of it, and the path since then with
+     * them. Returns how far the place now moved (the caller glides that out).
+     */
+    private fun correctCarried(tNs: Long, pY: DoubleArray, vY: DoubleArray, share: Double): DoubleArray {
+        val n = minOf(histN, HIST.toLong()).toInt()
+        var back = 0
+        while (back < n - 1 && histT[((histN - 1 - back) % HIST).toInt()] > tNs) back++
+        val m = ((histN - 1 - back) % HIST).toInt()
+        // the state is older than what is remembered (or nothing is): the path starts from the state itself
+        val known = n > 0 && abs(histT[m] - tNs) < 20_000_000L
+        val dp = DoubleArray(3); val dv = DoubleArray(3); val moved = DoubleArray(3)
+        val s = if (known) share else 1.0
+        for (k in 0..2) { dp[k] = pY[k] - (if (known) histP[m * 3 + k] else propP[k]); dv[k] = s * (vY[k] - (if (known) histV[m * 3 + k] else propV[k])) }
+        if (!known) { for (k in 0..2) { moved[k] = pY[k] - propP[k]; propP[k] = pY[k]; propV[k] = vY[k] }; return moved }
+        for (b in back downTo 0) {
+            val i = ((histN - 1 - b) % HIST).toInt(); val d = (histT[i] - tNs) * 1e-9
+            for (k in 0..2) { histP[i * 3 + k] += dp[k] + dv[k] * d; histV[i * 3 + k] += dv[k] }
+        }
+        val d = (lastImuNs - tNs) * 1e-9
+        for (k in 0..2) { moved[k] = dp[k] + dv[k] * d; propP[k] += moved[k]; propV[k] += dv[k] }
+        return moved
+    }
+
     /** State from the visual-inertial estimator: body in its z-up world, on the host clock. */
-    @Synchronized fun onVio(tNs: Long, p: DoubleArray, q: DoubleArray, v: DoubleArray, gyroBiasEst: DoubleArray?) {
+    @Synchronized fun onVio(tNs: Long, p: DoubleArray, q: DoubleArray, v: DoubleArray, gyroBiasEst: DoubleArray?, accelBiasEst: DoubleArray? = null) {
         if (!p.all { it.isFinite() } || !q.all { it.isFinite() }) return
+        accelBiasEst?.let { if (it.all { b -> b.isFinite() && abs(b) < 1.5 }) { accelBias[0] = it[0]; accelBias[1] = it[1]; accelBias[2] = it[2] } }
         val gyroAt = gyroOrientationAt(tNs) ?: return
         val pY = Q.rotate(Z_TO_Y, p); val vY = Q.rotate(Z_TO_Y, v)
         val qY = Q.normalize(Q.mul(Z_TO_Y, q))
@@ -133,6 +190,21 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             epochs++
             corr = newCorr; corrTo = newCorr
             glide[0] = 0.0; glide[1] = 0.0; glide[2] = 0.0
+            // the carried path starts afresh in the new world: from this state, at its speed
+            for (k in 0..2) { propP[k] = pY[k]; propV[k] = vY[k] }
+            run {
+                val n = minOf(histN, HIST.toLong()).toInt()
+                for (b in 0 until n) { val i = ((histN - 1 - b) % HIST).toInt(); val d = (histT[i] - tNs) * 1e-9; for (k in 0..2) { histP[i * 3 + k] = pY[k] + vY[k] * d; histV[i * 3 + k] = vY[k] } }
+                val d = ((lastImuNs - tNs) * 1e-9).coerceIn(0.0, MAX_POSITION_EXTRAPOLATION_S); for (k in 0..2) propP[k] = pY[k] + vY[k] * d
+            }
+        } else if (blendOn) {
+            corrTo = newCorr; if (!glideOn) corr = newCorr
+            val now = maxOf(lastImuNs, tNs)
+            val g = glideAt(now)
+            val moved = correctCarried(tNs, pY, vY, speedShare)
+            for (i in 0..2) glide[i] = g[i] - moved[i]
+            glideNs = now
+            if (!glideOn || glide[0] * glide[0] + glide[1] * glide[1] + glide[2] * glide[2] > GLIDE_MAX_M * GLIDE_MAX_M) { glide[0] = 0.0; glide[1] = 0.0; glide[2] = 0.0 }
         } else if (!glideOn) {
             // Blend the correction a little to hide estimator jitter between frames.
             corr = Q.normalize(Q.slerp(corr, newCorr, 0.5))
@@ -152,10 +224,15 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             if (glide[0] * glide[0] + glide[1] * glide[1] + glide[2] * glide[2] > GLIDE_MAX_M * GLIDE_MAX_M) { glide[0] = 0.0; glide[1] = 0.0; glide[2] = 0.0 }
         }
         gyroBiasEst?.let { if (it.all { b -> b.isFinite() && abs(b) < 0.2 }) { gyroBias[0] = it[0]; gyroBias[1] = it[1]; gyroBias[2] = it[2] } }
+        // (with the switch off the carried path is kept at the state all the same, so that it can be switched on at any time)
+        if (!blendOn) for (k in 0..2) { propP[k] = pY[k]; propV[k] = vY[k] }
         vioNs = tNs; vioP = pY; vioV = vY; heldP = pY; heldValid = true
         haveVio = true
         vioStates++
+        onState?.invoke(tNs, (fix * (Pose(pY, Q.normalize(Q.mul(newCorr, Q.mul(Z_TO_Y, gyroAt)))) * Pose(headInImu, IMU_TO_HEAD))).p)
     }
+    /** Told of every state that is used: its time and where it has the head in the app's world (a replay's measure of what the renderer was given). */
+    @Volatile var onState: ((Long, DoubleArray) -> Unit)? = null
     private var heldValid = false
     /** What the last state changed in the head's place, dying away ([GLIDE_S]); and the turn the correction is on its way to. */
     private val glide = DoubleArray(3); private var glideNs = 0L; private var corrTo: DoubleArray? = null
@@ -213,8 +290,13 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         val qBody = Q.normalize(Q.mul(corr, Q.mul(Z_TO_Y, qNow)))
         val age = if (haveVio) tNs - vioNs else Long.MAX_VALUE
         val sixDof = haveVio && age < VIO_STALE_NS
-        val vel = if (sixDof) vioV else doubleArrayOf(0.0, 0.0, 0.0)
-        val pBody = if (sixDof) {
+        val vel = if (!sixDof) doubleArrayOf(0.0, 0.0, 0.0) else if (blendOn) propV.copyOf() else vioV
+        val pBody = if (sixDof && blendOn) {
+            // carried to the newest motion sample; from there to the time asked for at the carried speed
+            val dt = if (lastImuNs - vioNs < (MAX_POSITION_EXTRAPOLATION_S * 1e9).toLong()) ahead else 0.0
+            val g = if (glideOn) glideAt(tNs) else ZERO3
+            doubleArrayOf(propP[0] + vel[0] * dt + g[0], propP[1] + vel[1] * dt + g[1], propP[2] + vel[2] * dt + g[2]).also { heldP = it }
+        } else if (sixDof) {
             val dt = (age * 1e-9).coerceIn(0.0, MAX_POSITION_EXTRAPOLATION_S)
             val g = if (glideOn) glideAt(tNs) else ZERO3
             doubleArrayOf(vioP[0] + vel[0] * dt + g[0], vioP[1] + vel[1] * dt + g[1], vioP[2] + vel[2] * dt + g[2]).also { heldP = it }
@@ -286,6 +368,8 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         /** Past this many degrees between the estimator's down and the accelerometer's, the estimator's tilt is not used. */
         const val VIO_TILT_LIMIT_DEG = 25.0
         private const val G = 9.80665
+        /** The estimator's own figure for gravity (Basalt's constant): its accelerometer bias is right against this one. */
+        private const val G_ESTIMATOR = 9.81
         const val VIO_STALE_NS = 400_000_000L
         const val MAX_GYRO_EXTRAPOLATION_S = 0.05
         const val MAX_POSITION_EXTRAPOLATION_S = 0.12

@@ -226,6 +226,49 @@ class CoreTest {
         assertEquals(-0.6, end, 0.004)
     }
 
+    @Test fun theAccelerometerCarriesTheHeadsPlaceBetweenStates() {
+        // The head sways 5 cm each way one and a half times a second (4.4 m/s2 at the turns). Every state arrives
+        // 50 ms after its picture with its speed 5 cm/s wrong, one way and then the other, and its place 1 mm wrong.
+        // The accelerometer reads true but for a bias of 0.1 m/s2 that nobody has told the head tracker of.
+        val w = 2 * Math.PI * 1.5
+        fun y(sec: Double) = 0.05 * Math.sin(w * sec)
+        fun run(carry: Boolean): Pair<Double, Double> {
+            val t = HeadTracker(); t.blendOn = carry
+            still(t, 1, 400); t.predict(400_000_000L)
+            var sum = 0.0; var n = 0; var shake = 0.0; var lastE = Double.NaN; var k = 0
+            for (ms in 400..4400) {
+                val sec = (ms - 400) / 1000.0
+                t.onImu(ms * 1_000_000L, floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, (-0.05 * w * w * Math.sin(w * sec) + 0.1).toFloat(), 9.81f))
+                if ((ms - 400) % 33 == 17 && ms >= 450) {
+                    val s = sec - 0.050; val wrong = if (k++ % 2 == 0) 1.0 else -1.0
+                    t.onVio((ms - 50) * 1_000_000L, doubleArrayOf(0.0, y(s) + 0.001 * wrong, 0.0), Q.identity(), doubleArrayOf(0.0, 0.05 * w * Math.cos(w * s) + 0.05 * wrong, 0.0), null)
+                }
+                if (ms % 16 == 0 && ms > 1400) {
+                    val e = t.predict(ms * 1_000_000L).pose.p[2] - y(sec)
+                    sum += e * e; n++; if (!lastE.isNaN()) shake += (e - lastE) * (e - lastE); lastE = e
+                }
+            }
+            return Math.sqrt(sum / n) to Math.sqrt(shake / n)
+        }
+        val (errNow, shakeNow) = run(false); val (err, shake) = run(true)
+        assertTrue("off by $errNow m without, $err m with", errNow > 0.004 && err < errNow * 0.5)
+        assertTrue("shakes $shakeNow m a frame without, $shake m with", shake < shakeNow * 0.5)
+    }
+
+    @Test fun theCarriedPlaceStaysWhenTheStatesStop() {
+        val t = HeadTracker(); t.blendOn = true
+        still(t, 1, 400); t.predict(400_000_000L)
+        t.onVio(400_000_000L, doubleArrayOf(0.0, 0.0, 0.0), Q.identity(), doubleArrayOf(0.0, 0.5, 0.0), null)
+        // the accelerometer says the head speeds up, and no further state comes: the place may be carried for 0.12 s and no longer
+        for (ms in 401..700) t.onImu(ms * 1_000_000L, floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 3f, 9.81f))
+        val p = t.predict(700_000_000L); val far = Math.abs(p.pose.p[2])
+        assertTrue("carried $far m", far < 0.5 * 0.12 + 0.5 * 3 * 0.12 * 0.12 + 0.03)
+        assertEquals(HeadTracker.Mode.SIX_DOF, p.mode)
+        for (ms in 701..900) t.onImu(ms * 1_000_000L, floatArrayOf(0f, 0f, 0f), floatArrayOf(0f, 3f, 9.81f))
+        assertEquals(HeadTracker.Mode.ORIENTATION_ONLY, t.predict(900_000_000L).mode)
+        assertEquals(far, Math.abs(t.predict(900_000_000L).pose.p[2]), 1e-9)
+    }
+
     @Test fun positionComesFromVioAndIsPredictedForward() {
         val t = HeadTracker()
         still(t, 1, 400); t.predict(400_000_000L)
