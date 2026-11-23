@@ -316,6 +316,56 @@ class CoreTest {
         assertEquals(4L, s.resets)
     }
 
+    private fun probe(right: Boolean, at: DoubleArray, pinching: Boolean, dir: DoubleArray? = null) = dev.ultraxr.core.HandProbe(right, at, pinching, at, dir)
+
+    @Test fun theBallIsTakenByAPinchAtItAndStaysWhereItIsLetGo() {
+        val b = dev.ultraxr.core.GrabBall(doubleArrayOf(0.0, 1.5, -0.45)); var now = 0L
+        fun step(vararg h: dev.ultraxr.core.HandProbe) { now += 33_000_000L; b.update(h.toList(), now) }
+        // nothing near: it does not move, whatever the hands do elsewhere
+        step(probe(true, doubleArrayOf(0.4, 1.2, -0.3), false)); step(probe(true, doubleArrayOf(0.4, 1.2, -0.3), true)); step(probe(true, doubleArrayOf(0.5, 1.3, -0.3), true))
+        assertEquals(-1, b.heldBy); assertEquals(0, b.grabs); near(b.p, doubleArrayOf(0.0, 1.5, -0.45), 1e-12)
+        // an open hand at it: it could be taken, and is not yet
+        step(probe(true, doubleArrayOf(0.4, 1.2, -0.3), false)); step(probe(true, doubleArrayOf(0.03, 1.5, -0.45), false))
+        assertEquals(1, b.hover); assertEquals(-1, b.heldBy)
+        // the pinch begins there: taken, and it goes where the fingers go, keeping its place against them
+        step(probe(true, doubleArrayOf(0.03, 1.5, -0.45), true)); assertEquals(1, b.heldBy); assertFalse(b.far)
+        step(probe(true, doubleArrayOf(0.33, 1.3, -0.35), true)); near(b.p, doubleArrayOf(0.30, 1.3, -0.35), 1e-9)
+        // the hand is not seen for a quarter of a second (outside the cameras for a moment): still held
+        repeat(7) { step() }; assertEquals(1, b.heldBy)
+        step(probe(true, doubleArrayOf(0.43, 1.1, -0.35), true)); near(b.p, doubleArrayOf(0.40, 1.1, -0.35), 1e-9)
+        // let go: it stays there
+        step(probe(true, doubleArrayOf(0.43, 1.1, -0.35), false)); assertEquals(-1, b.heldBy)
+        step(probe(true, doubleArrayOf(0.1, 1.6, -0.2), false)); near(b.p, doubleArrayOf(0.40, 1.1, -0.35), 1e-9)
+        assertEquals(1, b.grabs); assertTrue(b.draggedM > 0.4)
+        // a hand that is gone for longer lets go by itself
+        step(probe(false, doubleArrayOf(0.43, 1.1, -0.35), false)); step(probe(false, doubleArrayOf(0.43, 1.1, -0.35), true)); assertEquals(0, b.heldBy)
+        repeat(14) { step() }; assertEquals(-1, b.heldBy)
+    }
+
+    @Test fun theBallIsTakenFromAfarByTheRayAndKeepsItsDistance() {
+        val b = dev.ultraxr.core.GrabBall(doubleArrayOf(0.0, 1.5, -2.0)); var now = 0L
+        fun step(vararg h: dev.ultraxr.core.HandProbe) { now += 33_000_000L; b.update(h.toList(), now) }
+        val hand = doubleArrayOf(0.2, 1.2, -0.4); fun to(x: Double, y: Double, z: Double): DoubleArray { val v = doubleArrayOf(x - hand[0], y - hand[1], z - hand[2]); val n = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); return doubleArrayOf(v[0] / n, v[1] / n, v[2] / n) }
+        // pointing past it, pinching: nothing
+        step(probe(true, hand, false, to(1.0, 1.5, -2.0))); step(probe(true, hand, true, to(1.0, 1.5, -2.0))); assertEquals(-1, b.heldBy)
+        step(probe(true, hand, false, to(0.0, 1.5, -2.0))); assertEquals(1, b.hover)
+        step(probe(true, hand, true, to(0.0, 1.5, -2.0))); assertEquals(1, b.heldBy); assertTrue(b.far)
+        val reach = Math.sqrt(0.2 * 0.2 + 0.3 * 0.3 + 1.6 * 1.6)
+        val d2 = to(0.8, 1.9, -1.5); step(probe(true, hand, true, d2))
+        near(b.p, doubleArrayOf(hand[0] + d2[0] * reach, hand[1] + d2[1] * reach, hand[2] + d2[2] * reach), 1e-6)
+        step(probe(true, hand, false, d2)); assertEquals(-1, b.heldBy)
+    }
+
+    @Test fun aThingIsPressedOnceForEachPinchBegunOnIt() {
+        val t = dev.ultraxr.core.PressTarget(doubleArrayOf(0.0, 1.5, -1.4)); var now = 0L
+        val hand = doubleArrayOf(0.1, 1.2, -0.4); val on = doubleArrayOf(-0.1, 0.3, -1.0).let { v -> val n = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); doubleArrayOf(v[0] / n, v[1] / n, v[2] / n) }
+        fun step(pinching: Boolean, dir: DoubleArray) { now += 33_000_000L; t.update(listOf(probe(true, hand, pinching, dir)), now) }
+        step(false, on); assertEquals(1, t.hover); assertEquals(0, t.presses)
+        step(true, on); step(true, on); step(true, on); assertEquals(1, t.presses)       // held: once
+        step(false, on); step(true, on); assertEquals(2, t.presses)
+        step(false, doubleArrayOf(1.0, 0.0, 0.0)); step(true, doubleArrayOf(1.0, 0.0, 0.0)); assertEquals(2, t.presses)      // pinched elsewhere
+    }
+
     @Test fun lossPicturesKeepTheLastPairsOldestFirst() {
         val lp = dev.ultraxr.core.LossPictures(pairs = 4, every = 3, size = 6)
         val f = java.io.File.createTempFile("loss", ".uxloss")
