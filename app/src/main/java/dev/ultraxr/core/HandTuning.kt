@@ -17,7 +17,7 @@ package dev.ultraxr.core
  *   tiles_min_conf=0.5 the least confidence a tile's detection needs
  *   keep=0|1           a tracked hand goes on with one camera while the other is unsure of it for a frame (0: the
  *                      upstream rule, the hand is dropped at once; unset: the library's default, on)
- *   verify=0|1         a hand a tile found is looked at again before it is believed (unset: on)
+ *   verify=0|1         a hand a tile found is looked at again before it is believed (unset: off)
  *   one_view=0|1       a find that passed its second looks twice may begin a hand from one camera; the hand is
  *                      reported once both cameras have been sure of it (unset: on)
  *   xnnpack=2          the threads of XNNPACK, the faster CPU kernels the models run on (0: the plain kernels; unset: the

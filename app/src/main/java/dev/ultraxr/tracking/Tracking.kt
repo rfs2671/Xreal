@@ -463,7 +463,13 @@ object Tracking : GlassesLink.Listener {
             env("ULTRA_HANDS_TILES", handOptions.tiles?.toString())
             env("ULTRA_HANDS_TILES_MIN_CONF", handOptions.tilesMinConf?.toString())
             env("ULTRA_HANDS_KEEP", onOff(handOptions.keep))
-            env("ULTRA_HANDS_VERIFY", onOff(handOptions.verify))
+            // Off since 23 November 2026. The second looks were there to keep things that are not hands from beginning; a new
+            // hand now has to settle before it is shown, which does that. Cold starts on the recording of 22 November (48 moments
+            // with a hand plainly in both pictures): a hand within a second in 29 with them off against 19, never within four in 1
+            // against 8, both hands within four seconds in 10 of 12 against none. Where the two differ over the whole recording
+            // the pictures show a hand each time. On the labelled recording of 17 November a hand is reported where the labels
+            // have none in 9 % and 1 % of results (two runs) against 3 % and 1 %. verify=1 in hand_options.txt brings them back.
+            env("ULTRA_HANDS_VERIFY", onOff(handOptions.verify ?: false))
             env("ULTRA_HANDS_ONE_VIEW", onOff(handOptions.oneView))
             env("ULTRA_HANDS_XNNPACK", handOptions.xnnpack?.toString())
             env("ULTRA_HANDS_STEREO_SEEN", onOff(handOptions.begin)); env("ULTRA_HANDS_SETTLE", onOff(handOptions.begin))
