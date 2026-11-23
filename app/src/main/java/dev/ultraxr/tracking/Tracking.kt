@@ -433,7 +433,7 @@ object Tracking : GlassesLink.Listener {
                 try {
                     val lines = File(app.getExternalFilesDir(null), "vio_options.txt").takeIf { it.isFile }?.readLines().orEmpty()
                     recoveryOn = lines.none { it.replace(" ", "") == "recovery=0" }
-                    mapGlide = lines.none { it.replace(" ", "") == "map_glide=0" }; restartAfterLoss = lines.any { it.replace(" ", "") == "restart_after_loss=1" }; roomMeshOn = lines.any { it.replace(" ", "") == "room_mesh=1" }
+                    mapGlide = lines.none { it.replace(" ", "") == "map_glide=0" }; restartAfterLoss = lines.any { it.replace(" ", "") == "restart_after_loss=1" }; roomMeshOn = lines.none { it.replace(" ", "") == "room_mesh=0" }
                     testBlind = lines.firstOrNull { it.startsWith("test_blind=") }?.substringAfter('=')?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }?.takeIf { it.size == 2 }?.toDoubleArray()
                     testLight = lines.firstOrNull { it.startsWith("test_light=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: 1.0
                     testNoise = lines.firstOrNull { it.startsWith("test_blind_noise=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: 0
@@ -1219,7 +1219,10 @@ object Tracking : GlassesLink.Listener {
     @Volatile var recoveries = 0; private set
     private const val MAP_FIRST_NS = 1_500_000_000L
     /** The mesh kept with the map, furniture, and dropping of kept surfaces seen through: on with "room_mesh=1" in vio_options.txt until its cost on the phone is measured. */
-    @Volatile private var roomMeshOn = false
+    // On since 23 November 2026: replayed twice each way on the S21 Ultra (150 s), the estimator took 17.7 and 17.2 ms a frame with it
+    // against 16.8 and 17.0 without, the hands 24.5 and 25.0 ms against 23.3 and 24.5, and neither gave fewer results a second.
+    // Both runs found the same table (0.45 x 1.0 m, 0.73 to 0.75 m high) and tall furniture. room_mesh=0 turns it off.
+    @Volatile private var roomMeshOn = true
     @Volatile var mapGlideParts = 0; private set
     @Volatile private var mapTestSlip: DoubleArray? = null; private var mapSlipDone = false
     /** For the diagnostics: corrections of the world against the saved map so far in this session. */
