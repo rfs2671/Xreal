@@ -1,0 +1,205 @@
+--- a/src/xrt/tracking/hand/mercury/hg_model.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
+@@ -1191,6 +1191,103 @@
+ 	int at = -1000;
+ } ultra_passed[2][2];
+ 
++// What the tiles of each view last found for each hand, before any second look: where, and at which run of the detector.
++static struct UltraSeen
++{
++	float x = 0, y = 0;
++	int at = -1000;
++} ultra_seen[2][2];
++static std::mutex ultra_seen_mutex;
++
++// A tile's find that the other camera's tiles bear out: within a second the other camera found the same hand, and the
++// two sight lines meet within 5 cm of each other between 12 and 85 cm from the cameras, where a hand of the wearer's
++// is and a thing across the room is not. Cold starts on the wearer's recording of 22 November 2026 (48 moments with a
++// hand plainly in both pictures, four seconds each): the whole-picture detector saw nothing of a low hand in any
++// frame, the tiles found it nine times in four seconds, first in one camera and then in the other, and all nine
++// failed the three-of-four second looks; no hand began in 23 of the 48. Such a find needs no second looks and may
++// begin the hand from its one view.
++//   ULTRA_HANDS_STEREO_SEEN=0   off
++static bool
++ultra_stereo_seen(ht_view *view, int hand, float px, float py)
++{
++	static const bool on = []() {
++		const char *e = std::getenv("ULTRA_HANDS_STEREO_SEEN");
++		return e == nullptr || e[0] != '0';
++	}();
++	HandTracking *hgt = view->hgt;
++	const int v = view->view & 1;
++	UltraSeen other;
++	{
++		std::lock_guard<std::mutex> lock(ultra_seen_mutex);
++		other = ultra_seen[!v][hand];
++		ultra_seen[v][hand].x = px;
++		ultra_seen[v][hand].y = py;
++		ultra_seen[v][hand].at = hgt->detection_counter;
++	}
++	if (!on) {
++		return false;
++	}
++	const int age = hgt->detection_counter - other.at;
++	if (age < 0 || age > 30) {
++		return false;
++	}
++	ht_view *vo = &hgt->views[!v];
++	Eigen::Vector3f da = Eigen::Vector3f::Zero(), db = Eigen::Vector3f::Zero();
++	if (!t_camera_models_unproject_and_flip(&view->hgdist, px, py, &da.x(), &da.y(), &da.z()) ||
++	    !t_camera_models_unproject_and_flip(&vo->hgdist, other.x, other.y, &db.x(), &db.y(), &db.z())) {
++		return false;
++	}
++	da.normalize();
++	db.normalize();
++	// Both sight lines in the left camera's frame (a point of the left camera's is q p + t in the right one's).
++	const Eigen::Quaternionf q = map_quat(hgt->left_in_right.orientation);
++	const Eigen::Vector3f t = map_vec3(hgt->left_in_right.position);
++	Eigen::Vector3f o1 = Eigen::Vector3f::Zero(), d1 = da, o2 = q.conjugate() * (-t), d2 = q.conjugate() * db;
++	if (v == 1) {
++		o1 = q.conjugate() * (-t);
++		d1 = q.conjugate() * da;
++		o2 = Eigen::Vector3f::Zero();
++		d2 = db;
++	}
++	const Eigen::Vector3f w = o1 - o2;
++	const float b = d1.dot(d2), d = d1.dot(w), e = d2.dot(w);
++	const float den = 1.0f - b * b;
++	if (den < 1e-5f) {
++		return false;
++	}
++	const float s1 = (b * e - d) / den, s2 = (e - b * d) / den;
++	if (s1 <= 0.0f || s2 <= 0.0f) {
++		return false;
++	}
++	const float miss = ((o1 + s1 * d1) - (o2 + s2 * d2)).norm();
++	bool ok = s1 >= 0.12f && s1 <= 0.85f && s2 >= 0.12f && s2 <= 0.85f && miss <= 0.05f;
++	// Not the other hand over again: on the recording of 17 November the left hand, held up and tracked, was found
++	// by the tiles as a right hand too, and reported as both for 13 s. A find within 12 cm of any joint of the other
++	// hand, where that one is tracked, is that hand.
++	if (ok && hgt->last_frame_hand_detected[!hand]) {
++		const Eigen::Vector3f at = ((o1 + s1 * d1) + (o2 + s2 * d2)) * 0.5f;
++		float nearest = 1e9f;
++		for (int i = 0; i < 21; i++) {
++			const Eigen::Vector3f k = hgt->pose_predicted_keypoints[!hand].col(i);
++			if (k.allFinite()) {
++				nearest = std::min(nearest, (k - at).norm());
++			}
++		}
++		if (std::getenv("ULTRA_HANDS_DEBUG") != nullptr) {
++			const Eigen::Vector3f k0 = hgt->pose_predicted_keypoints[!hand].col(0);
++			fprintf(stderr, "ultra stereo: the find is at %.2f %.2f %.2f, the other hand's wrist at %.2f %.2f %.2f, its nearest joint %.2f m off\n", at.x(), at.y(), at.z(), k0.x(), k0.y(), k0.z(), nearest);
++		}
++		if (nearest < 0.12f) {
++			ok = false;
++		}
++	}
++	if (std::getenv("ULTRA_HANDS_DEBUG") != nullptr) {
++		fprintf(stderr, "ultra stereo: t %.3f view %d hand %d at %.0f,%.0f and the other view's %.0f,%.0f of %d runs ago: %.2f m and %.2f m off, within %.3f m -> %d\n",
++		        (double)hgt->current_frame_timestamp / 1e9 - 1.0, v, hand, px, py, other.x, other.y, age, s1, s2, miss, ok ? 1 : 0);
++	}
++	return ok;
++}
++
+ static void
+ ultra_tiles_pass(hand_detection_run_info *info)
+ {
+@@ -1272,6 +1369,16 @@
+ 					continue;
+ 				}
+ 			}
++			if (ultra_stereo_seen(view, h, px, py)) {
++				out[h].ultra_twice = true;
++				out[h].ultra_stereo = true;
++				out[h].center_px.x = px;
++				out[h].center_px.y = py;
++				out[h].size_px = out[h].size_px * view->hgdist.fx / T.f;
++				info->outputs[h] = out[h];
++				best[h] = conf;
++				continue;
++			}
+ 			auto &failed = ultra_failed[view->view & 1][h];
+ 			if (failed.until - hgt->detection_counter > 15) {
+ 				failed.until = 0;
+--- a/src/xrt/tracking/hand/mercury/hg_sync.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+@@ -24,6 +24,11 @@
+ 
+ #include <numeric>
+ 
++// libultra_hands: has a newly begun hand's fit settled yet (see where the fit is run)?
++static bool ultra_settled[2] = {true, true};
++static bool ultra_begun_by_stereo[2] = {false, false};
++static int ultra_settle_fits[2] = {0, 0}, ultra_settle_good[2] = {0, 0};
++
+ #include <cerrno>
+ #include <cstdint>
+ #include <cfloat>
+@@ -1135,6 +1140,7 @@
+ 				hgt->views[0].regions_of_interest_this_frame[hand_idx] = infos[0].outputs[hand_idx];
+ 				hgt->views[1].regions_of_interest_this_frame[hand_idx] = infos[1].outputs[hand_idx];
+ 				accepted = true;
++				ultra_begun_by_stereo[hand_idx] = infos[0].outputs[hand_idx].ultra_stereo || infos[1].outputs[hand_idx].ultra_stereo;
+ 			}
+ 		} else {
+ 			reject_reason = 4;
+@@ -1791,6 +1797,39 @@
+ 
+ 
+ 
++		// libultra_hands: a hand that has just begun is shown only once its fit has settled, and let go if it does not.
++		// The dark stand beside the wearer's laptop, 40 cm off, is found by the tiles of both cameras as a right hand
++		// (17 November's recording, from second 29.6) and the keypoint model agrees; its fit's error stayed over 0.3
++		// for 60 fits and more. The wearer's hands had five fits in a row under 0.3 within 5 to 15 fits of beginning
++		// in 18 of 19 tracks (17 and 22 November). So: five fits in a row under 0.3 before a new hand is reported,
++		// and a hand that has not got there in 30 fits is dropped. It is asked of every new hand: asked only of
++		// hands begun on the other camera's word, the stand was back in 16 % of the frames with no hand (2 % with
++		// this, 2 % before any of it), begun some other way. ULTRA_HANDS_SETTLE=0: not asked.
++		{
++			static const bool ultra_settle_on = []() {
++				const char *e = std::getenv("ULTRA_HANDS_SETTLE");
++				return e == nullptr || e[0] != '0';
++			}();
++			if (!hgt->last_frame_hand_detected[hand_idx]) {
++				ultra_settled[hand_idx] = !ultra_settle_on;
++				ultra_settle_fits[hand_idx] = 0;
++				ultra_settle_good[hand_idx] = 0;
++			}
++			if (!ultra_settled[hand_idx]) {
++				ultra_settle_fits[hand_idx]++;
++				ultra_settle_good[hand_idx] = reprojection_error < 0.3f ? ultra_settle_good[hand_idx] + 1 : 0;
++				if (ultra_settle_good[hand_idx] >= 5) {
++					ultra_settled[hand_idx] = true;
++				} else if (ultra_settle_fits[hand_idx] >= 30) {
++					hgt->this_frame_hand_detected[hand_idx] = false;
++					if (hgt->xr_tracking_diag.enabled()) {
++						hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::reprojection_rejected);
++					}
++					continue;
++				}
++			}
++		}
++
+ 		if (xr_mercury_quality::reject_fit(hgt->xr_quality_filter, quality_sample, reprojection_error)) {
+ 			hgt->this_frame_hand_detected[hand_idx] = false;
+ 			if (hgt->xr_tracking_diag.enabled()) {
+@@ -1901,7 +1940,7 @@
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
+ 		// Don't send the hand to OpenXR until it's been tracked for 4 frames
+ 		if (hgt->hand_tracked_for_num_frames[hand_idx] < hgt->tuneable_values.num_frames_before_display ||
+-		    !hgt->ultra_both_views_seen[hand_idx]) {
++		    !hgt->ultra_both_views_seen[hand_idx] || !ultra_settled[hand_idx]) {
+ 			out_xrt_hands[hand_idx]->is_active = false;
+ 			if (hgt->xr_tracking_diag.enabled() && hgt->this_frame_hand_detected[hand_idx]) {
+ 				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::display_warmup);
+--- a/src/xrt/tracking/hand/mercury/hg_sync.hpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.hpp
+@@ -181,6 +181,8 @@
+ 
+ 	// libultra_hands: a tile found this, and its second looks agreed twice in the same place within a moment.
+ 	bool ultra_twice = false;
++	// libultra_hands: it was let through because the other camera's tiles had seen the same thing at arm's reach.
++	bool ultra_stereo = false;
+ 
+ 	// XR/Mercury offline diagnostics: keep the raw detector outputs before
+ 	// Mercury thresholding/gating converts them into found/confidence booleans.

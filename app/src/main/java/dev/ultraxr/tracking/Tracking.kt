@@ -459,6 +459,7 @@ object Tracking : GlassesLink.Listener {
             env("ULTRA_HANDS_VERIFY", onOff(handOptions.verify))
             env("ULTRA_HANDS_ONE_VIEW", onOff(handOptions.oneView))
             env("ULTRA_HANDS_XNNPACK", handOptions.xnnpack?.toString())
+            env("ULTRA_HANDS_STEREO_SEEN", onOff(handOptions.begin)); env("ULTRA_HANDS_SETTLE", onOff(handOptions.begin))
             log("hand options: $handOptions")
             val dir = File(app.filesDir, "hand-models").apply { mkdirs() }
             for (name in app.assets.list("hand-models").orEmpty()) {

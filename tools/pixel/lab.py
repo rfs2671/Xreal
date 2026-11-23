@@ -157,6 +157,8 @@ RUNS = {
     "q_epi10": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""), "q_epi10b": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""), "q_epi10c": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""),
     # the hand tracker's threads kept to the fast cores (the default from 22 November) against where Android puts them
     "c_fast": ("", ""), "c_fastb": ("", ""), "c_any": ("", "fast_cores=0" + chr(10)), "c_anyb": ("", "fast_cores=0" + chr(10)),
+    # how a hand begins: the way from 22 November (the default) against the way of before
+    "b_new": ("", ""), "b_newb": ("", ""), "b_newc": ("", ""), "b_old": ("", "begin=0" + chr(10)), "b_oldb": ("", "begin=0" + chr(10)), "b_oldc": ("", "begin=0" + chr(10)),
     "q_epi15": ("config.optical_flow_epipolar_error=0.015" + chr(10), "", ""), "q_epi20": ("config.optical_flow_epipolar_error=0.02" + chr(10), "", ""),
 }
 

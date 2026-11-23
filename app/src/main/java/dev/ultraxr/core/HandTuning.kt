@@ -22,6 +22,8 @@ package dev.ultraxr.core
  *                      reported once both cameras have been sure of it (unset: on)
  *   xnnpack=2          the threads of XNNPACK, the faster CPU kernels the models run on (0: the plain kernels; unset: the
  *                      library's default, 2)
+ *   begin=0|1          a hand the tiles of both cameras saw at arm's reach within a second begins without the second
+ *                      looks, and a new hand is reported once its fit has settled (unset: on; 0: as before 22 November)
  *   fast_cores=0|1     the hand tracker's threads are kept to the phone's fast cores (unset: off. Replayed in the app,
  *                      22 November 2026: a result with a hand 36 to 38 ms against 39 to 42, the head tracker 2 ms slower,
  *                      and no more seconds with a hand tracked: 42 and 47 of 63 against 49 and 52)
@@ -29,7 +31,7 @@ package dev.ultraxr.core
  *                      application with a tighter threshold of its own (a browser) sees the pinch too
  */
 data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean? = null, val pressM: Float = PinchState.PRESS_M, val releaseM: Float = PinchState.RELEASE_M, val snap: Boolean = true, val steady: Boolean = true, val steadyTurn: Boolean = true,
-    val tiles: Int? = null, val tilesMinConf: Float? = null, val keep: Boolean? = null, val verify: Boolean? = null, val oneView: Boolean? = null, val xnnpack: Int? = null, val fastCores: Boolean = false) {
+    val tiles: Int? = null, val tilesMinConf: Float? = null, val keep: Boolean? = null, val verify: Boolean? = null, val oneView: Boolean? = null, val xnnpack: Int? = null, val fastCores: Boolean = false, val begin: Boolean? = null) {
     companion object {
         fun parse(text: String?): HandOptions {
             var o = HandOptions()
@@ -49,6 +51,7 @@ data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean?
                     "verify" -> o.copy(verify = v == "1")
                     "one_view" -> o.copy(oneView = v == "1")
                     "fast_cores" -> o.copy(fastCores = v == "1")
+                    "begin" -> o.copy(begin = v == "1")
                     "xnnpack" -> v.toIntOrNull()?.takeIf { it in 0..8 }?.let { o.copy(xnnpack = it) } ?: o
                     "tiles_min_conf" -> v.toFloatOrNull()?.takeIf { it in 0f..1f }?.let { o.copy(tilesMinConf = it) } ?: o
                     else -> o
