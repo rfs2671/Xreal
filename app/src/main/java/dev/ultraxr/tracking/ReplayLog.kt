@@ -32,8 +32,8 @@ class ReplayLog(dir: File, tag: String) {
     /** The head as the renderer is given it, asked for 60 times a second: what steadiness of the picture is measured on. */
     private val render = PrintWriter(File(dir, "$tag-render.csv")).also { it.println("t,x,y,z,qx,qy,qz,qw,six_dof") }
     /** Every state the head tracker used: its own time on the same clock as the renderer's rows, and where it has the head. */
-    private val states = PrintWriter(File(dir, "$tag-states.csv")).also { it.println("t,x,y,z,moved_mm,found,age_ms,late_samples") }
-    @Synchronized fun state(t: Double, p: DoubleArray, note: DoubleArray) { states.println(String.format(Locale.US, "%.4f,%.5f,%.5f,%.5f,%.2f,%.0f,%.1f,%.0f", t, p[0], p[1], p[2], note[0], note[1], note[2], note[3])) }
+    private val states = PrintWriter(File(dir, "$tag-states.csv")).also { it.println("t,x,y,z,moved_mm,found,age_ms,late_samples,turn_deg") }
+    @Synchronized fun state(t: Double, p: DoubleArray, note: DoubleArray) { states.println(String.format(Locale.US, "%.4f,%.5f,%.5f,%.5f,%.2f,%.0f,%.1f,%.0f,%.4f", t, p[0], p[1], p[2], note[0], note[1], note[2], note[3], note[4]) + (5 until note.size).joinToString("") { String.format(Locale.US, ",%.4f", note[it]) }) }
     @Synchronized fun render(t: Double, p: DoubleArray, q: DoubleArray, sixDof: Boolean) {
         render.println(String.format(Locale.US, "%.4f,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%d", t, p[0], p[1], p[2], q[0], q[1], q[2], q[3], if (sixDof) 1 else 0))
     }

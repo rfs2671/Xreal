@@ -59,7 +59,11 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     /** How many samples the place was carried by, and how many states corrected it (for the log). */
     @Volatile var carried = 0L; private set
     /** For the replay's record: how far the last state moved the carried place (mm), whether its time was found in the remembered path (1/0), how old it was (ms), and how many motion samples so far came too late to carry by. */
-    val carryNote = DoubleArray(4)
+    /** For the replay's record, when asked for: the same change of the turn's correction had the state been taken as [probeMs] later, one figure per entry. */
+    @Volatile var probeOn = false
+    val probeMs = doubleArrayOf(-16.0, -12.0, -8.0, -6.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0)
+    private val probeWas = arrayOfNulls<DoubleArray>(17)
+    val carryNote = DoubleArray(5 + 17)     // and, last, by how many degrees the state changed the turn's correction
 
     // --- visual-inertial state, y-up
     private var vioNs = 0L
@@ -175,7 +179,9 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     @Synchronized fun onVio(tNs: Long, p: DoubleArray, q: DoubleArray, v: DoubleArray, gyroBiasEst: DoubleArray?, accelBiasEst: DoubleArray? = null) {
         if (!p.all { it.isFinite() } || !q.all { it.isFinite() }) return
         accelBiasEst?.let { if (it.all { b -> b.isFinite() && abs(b) < 1.5 }) { accelBias[0] = it[0]; accelBias[1] = it[1]; accelBias[2] = it[2] } }
-        val gyroAt = gyroOrientationAt(tNs) ?: return
+        // Between the two samples around the state's time, not the nearest one: replayed worn recording of 21 November 2026,
+        // each state changed the turn's correction by 0.055 degrees (rms) with the nearest sample and by 0.031 between samples.
+        val gyroAt = gyroOrientationBetween(tNs) ?: gyroOrientationAt(tNs) ?: return
         val pY = Q.rotate(Z_TO_Y, p); val vY = Q.rotate(Z_TO_Y, v)
         val qY = Q.normalize(Q.mul(Z_TO_Y, q))
         var newCorr = Q.normalize(Q.mul(qY, Q.conj(Q.mul(Z_TO_Y, gyroAt))))
@@ -189,6 +195,13 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
             val n = Math.sqrt(newCorr[1] * newCorr[1] + newCorr[3] * newCorr[3])
             newCorr = if (n > 1e-6) doubleArrayOf(0.0, newCorr[1] / n, 0.0, newCorr[3] / n) else corr
         } else vioTiltBad = 0
+        if (probeOn) for (j in probeMs.indices) {
+            val g = gyroOrientationBetween(tNs + (probeMs[j] * 1e6).toLong()) ?: continue
+            val c = Q.normalize(Q.mul(qY, Q.conj(Q.mul(Z_TO_Y, g))))
+            probeWas[j]?.let { was -> val d = Q.mul(c, Q.conj(was)); carryNote[5 + j] = 2.0 * Math.toDegrees(Math.asin(Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).coerceIn(0.0, 1.0))) }
+            probeWas[j] = c
+        }
+        corrTo?.let { was -> val d = Q.mul(newCorr, Q.conj(was)); carryNote[4] = 2.0 * Math.toDegrees(Math.asin(Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).coerceIn(0.0, 1.0))) }
         if (epochPending || !haveVio) {
             val given = pendingFix; pendingFix = null
             if (given != null && !recenterPending) fix = given
@@ -355,6 +368,21 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         val g = gyroOrientationAt(tNs) ?: qGI
         val qBody = Q.normalize(Q.mul(corr, Q.mul(Z_TO_Y, g)))
         return fix * Pose(heldP, qBody)
+    }
+
+    /** The gyro's orientation at [tNs], between the two samples around it. */
+    private fun gyroOrientationBetween(tNs: Long): DoubleArray? {
+        val n = minOf(histN, HIST.toLong()).toInt()
+        if (n < 2) return null
+        var k = 0
+        while (k < n - 1 && histT[((histN - 1 - k) % HIST).toInt()] > tNs) k++
+        val a = ((histN - 1 - k) % HIST).toInt()
+        if (histT[a] > tNs || tNs - histT[a] > 100_000_000L) return null
+        val qa = doubleArrayOf(histQ[a * 4], histQ[a * 4 + 1], histQ[a * 4 + 2], histQ[a * 4 + 3])
+        if (k == 0) return if (tNs - histT[a] < 2_000_000L) qa else null
+        val b = ((histN - k) % HIST).toInt()
+        val qb = doubleArrayOf(histQ[b * 4], histQ[b * 4 + 1], histQ[b * 4 + 2], histQ[b * 4 + 3])
+        return Q.normalize(Q.slerp(qa, qb, (tNs - histT[a]).toDouble() / (histT[b] - histT[a]).toDouble()))
     }
 
     private fun gyroOrientationAt(tNs: Long): DoubleArray? {

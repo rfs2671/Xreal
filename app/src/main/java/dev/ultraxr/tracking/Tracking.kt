@@ -1290,7 +1290,8 @@ object Tracking : GlassesLink.Listener {
         positionConfidence.reset()
         thread(name = "replay-render", isDaemon = true) {      // stands in for the renderer: the head 60 times a second, on the recording's own clock
             val t0 = System.nanoTime(); var n = 0L
-            head.onState = { tNs, at -> try { rl.state((tNs - t0) / 1e9, at, head.carryNote) } catch (_: Throwable) {} }
+            head.probeOn = true
+        head.onState = { tNs, at -> try { rl.state((tNs - t0) / 1e9, at, head.carryNote) } catch (_: Throwable) {} }
             while (replayLog === rl) {
                 val now = System.nanoTime(); val s = head.predict(now)
                 try { rl.render((now - t0) / 1e9, s.pose.p, s.pose.q, s.mode == HeadTracker.Mode.SIX_DOF) } catch (_: Throwable) { break }
