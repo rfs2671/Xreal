@@ -74,9 +74,9 @@ class RoomPlaceTest {
         for (i in 1..4) { t += 40_000_000L; aim = p.update(t, listOf(hand(t, 0.09)), zero, q)!! }
         t += 40_000_000L; aim = p.update(t, listOf(hand(t, 0.015)), zero, q)!!
         assertTrue("fingertips 15 mm apart are a pinch", aim.pinching); assertEquals(1L, p.pinches)
-        // the tracker loses the hand as the fingers touch: the pinch is kept for a quarter of a second, not longer
-        t += 100_000_000L; assertTrue(p.update(t, emptyList(), zero, q)!!.pinching)
-        t += 400_000_000L; assertNull(p.update(t, emptyList(), zero, q))
+        // the tracker loses the hand as the fingers touch: the pinch is kept for 0.4 s (as long as the ball's hold), not longer
+        t += 300_000_000L; assertTrue(p.update(t, emptyList(), zero, q)!!.pinching)
+        t += 300_000_000L; assertNull(p.update(t, emptyList(), zero, q))
         // an old result is no hand
         assertNull(p.update(t, listOf(hand(t - 500_000_000L, 0.09)), zero, q))
         // with both hands in view the one that pinches points

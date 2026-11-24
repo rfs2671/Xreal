@@ -35,31 +35,15 @@ abstract class BaseScene : Scene {
     }
 
     // ---- hands one can see working: a ray from each, a mark at the picture's edge for a hand outside it
-    private val pinch = arrayOf(dev.ultraxr.core.PinchState(), dev.ultraxr.core.PinchState())
-    private val armRay = arrayOf(dev.ultraxr.core.ArmRay(false), dev.ultraxr.core.ArmRay(true))
-    private val seenNs = LongArray(2)
+    private val reader = dev.ultraxr.core.HandReader()
     /** The hands of this frame as things to pinch need them. Call once a frame, from update. */
     protected var probes: List<dev.ultraxr.core.HandProbe> = emptyList()
     /** How far each hand's ray is drawn this frame (a thing it points at shortens it). */
     protected val rayLength = doubleArrayOf(1.5, 1.5)
 
     protected fun readHands(head: HeadTracker.State) {
-        val now = System.nanoTime(); val out = ArrayList<dev.ultraxr.core.HandProbe>(2)
-        for (h in Tracking.handJoints) {
-            if (now - h.timestampNs > 400_000_000L) continue
-            val side = if (h.isRight) 1 else 0
-            val thumb = h.joint(Hand.THUMB_TIP); val index = h.joint(Hand.INDEX_TIP)
-            // the tracker's own rule for a pinch, on every new result of the tracker (not on every drawn frame)
-            if (h.timestampNs != seenNs[side]) {
-                seenNs[side] = h.timestampNs
-                var finger = 0.0; for (j in Hand.INDEX_MCP until Hand.INDEX_TIP) finger += len(h.joint(j), h.joint(j + 1))
-                pinch[side].update(len(thumb, index).toFloat(), finger.toFloat())
-            }
-            val pp = DoubleArray(3) { (thumb[it] + index[it]) / 2 }
-            val dir = if (head.mode == HeadTracker.Mode.NONE) null else armRay[side].aim(head.pose.p, head.pose.q, pp, pinch[side].pinching, now)
-            out += dev.ultraxr.core.HandProbe(h.isRight, pp, pinch[side].pinching, pp, dir)
-        }
-        probes = out; rayLength[0] = 1.5; rayLength[1] = 1.5
+        probes = reader.read(Tracking.handJoints, System.nanoTime(), head.pose.p, head.pose.q, head.mode != HeadTracker.Mode.NONE)
+        rayLength[0] = 1.5; rayLength[1] = 1.5
     }
 
     private fun len(a: DoubleArray, b: DoubleArray) = Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))

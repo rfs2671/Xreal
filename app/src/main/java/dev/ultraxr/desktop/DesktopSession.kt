@@ -862,7 +862,13 @@ class DesktopSession(private val activity: Activity) {
         lastHandRay = o to dir
         // what the wearer is shown of the hand: its two fingertips, the ray, and where the ray lands
         var reach = 0.0; var onYaw = 0.0; var onPitch = 0.0
-        fun show() { handShown = RenderHand(seen(aim.thumb), seen(aim.index), o, dir, origin, reach, onYaw, onPitch, pinching) }
+        // a tip outside what the display shows is drawn at the picture's edge on its side, as the test scenes do for a hand
+        val inv = head.pose.inverse()
+        fun tip(p: DoubleArray): DoubleArray {
+            val m = dev.ultraxr.core.HandEdge.mark(inv.apply(p), Tracking.displayTanH, Tracking.displayTanV) ?: return seen(p)
+            val r = dev.ultraxr.core.Q.rotate(head.pose.q, m); return doubleArrayOf(origin[0] + r[0], origin[1] + r[1], origin[2] + r[2])
+        }
+        fun show() { handShown = RenderHand(tip(aim.thumb), tip(aim.index), o, dir, origin, reach, onYaw, onPitch, pinching) }
         val f = desktop.focus
         if (handGrab >= 0) {      // a window held by its handle follows the hand until the fingers part
             val w = desktop.find(handGrab)
