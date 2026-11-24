@@ -783,3 +783,24 @@ Nine of the 12 ends and 8 of the 14 starts are in the lowest fifth of the left p
   (every frame: which hand is tracked and where, in cm in the head frame), the cues, and records the cameras (`recordings/cover-<time>.uxrec`, about 9 MB a second) so that the session can be run through the tracker with any setting and looked at.
   `coverage_report.py` then says, for every place and hand, how much of the time it was tracked, how soon, how far from the asked place, whether the cameras could see it there (from the calibration) and the verdict: tracked, **software** (in both pictures and not tracked), partly out, or **optical** (out of both).
   Tested on a made-up session only; not worn.
+
+### Fourth phase, implementation and measurement (24 November 2026): tiles over the whole field, tried and not adopted
+
+Built in the native tracker (sources in `tools/tracking/hand_upgrade/native_fov_tiles/`, edit scripts and run scripts beside them; all behaviour behind environment variables, **off by default**, so the shipped library and rollback are unchanged):
+a tile layout list (`ULTRA_HANDS_TILE_LIST`, a symmetric 9-tile layout weighted to chest, belly and lap), a scheduler (`ULTRA_HANDS_TILE_SCHED=1`: tiles by staleness and weight, a lost hand's predicted place first, extra tiles while a hand is lost), a phantom-spot memory (places where a tile-begun hand was dropped within a few frames are not believed for 45 runs), and recall (`ULTRA_HANDS_RECALL=1`: a hand found again near where it was is accepted without the settle and warm-up).
+
+Replays of the 17, 20 and 22 November recordings (deterministic, repeated runs identical), scored with the hand labels (plainly there / reported where none):
+
+| 17 Nov | left | right |
+|---|---|---|
+| baseline | 92 % / 1 % | 92 % / 0 % |
+| scheduler only | 94 % / 7 % | 80 % / 0 % |
+| layout only | 91 % / 9 % | 82 % / 0 % |
+| **layout + scheduler** | **96 % / 1 %** | **93 % / 3 %** |
+| scheduler + recall | 98 % / 7 % | 91 % / **84 %** |
+| layout + scheduler + recall | 97 % / 1 % | 92 % / **15 %** |
+
+- Recall fails: it keeps a false hand alive (84 % false right-hand frames); rejected. 
+- Layout and scheduler alone each make false hands or lose availability; **together** they raise availability a little (left 92 to 96 %, right 92 to 93 %, 20 Nov right 86 to 92 %) at a small false-hand cost (17 Nov right 0 to 3 %, 20 Nov left 17 to 20 % of frames with none labelled). 22 Nov (no labels in these files): right-hand frames 1254 to 1636, not judged.
+- That does not meet "no significant phantom increase", so it is **not the default**. Per-frame times were measured with six replays at once and are not comparable; no latency claim is made.
+- Not met and not shown: the 98 % availability target and 100 ms reacquisition (settle and warm-up gates dominate the ~0.7 s median; recall was the attempt to shorten it and it failed). Not done: multiscale detection, anatomical checks of tile-begun hands, worn validation (Coverage lab).
