@@ -18,7 +18,12 @@ import java.io.FileWriter
  *
  * Begin by pinching with both hands. All of the cues are within the picture, a metre and a bit ahead.
  */
-class LabScene(private val coverage: Boolean = false) : BaseScene() {
+class LabScene(private val coverage: Boolean = false, private val handFree: Boolean = false) : BaseScene() {
+    // the hand-free scan (core/HandFreeScan): no hands in view, so every hand reported is false
+    private val scanCues = dev.ultraxr.core.HandFreeScan.schedule()
+    private var falseHands = dev.ultraxr.core.HandFreeScan.FalseHands()
+    private var handsCsv: BufferedWriter? = null
+    private var armNs = 0L; private var lastSampleS = -1.0; private var scanCueToned = -1
     private var lab = GestureLab(coverage)
     private var startNs = 0L
     private var state = 0           // 0 waiting to begin, 1 running, 2 done
@@ -33,7 +38,7 @@ class LabScene(private val coverage: Boolean = false) : BaseScene() {
     private var anchorP = DoubleArray(3); private var anchorQ = doubleArrayOf(0.0, 0.0, 0.0, 1.0)
     private val targetTmp = DoubleArray(3)
 
-    fun restart() { lab = GestureLab(coverage); state = 0; resultLines = emptyList(); prev[0] = false; prev[1] = false; toned = -1; tonedRelease = -1; closeFiles() }
+    fun restart() { lab = GestureLab(coverage); falseHands = dev.ultraxr.core.HandFreeScan.FalseHands(); armNs = 0L; lastSampleS = -1.0; scanCueToned = -1; state = 0; resultLines = emptyList(); prev[0] = false; prev[1] = false; toned = -1; tonedRelease = -1; closeFiles() }
 
     private fun beep(ms: Int = 90) {
         try { if (tone == null) tone = android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 80); tone?.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, ms) } catch (_: Throwable) {}
@@ -54,13 +59,14 @@ class LabScene(private val coverage: Boolean = false) : BaseScene() {
         return Math.toDegrees(Math.acos((x * dir[0] + y * dir[1] + z * dir[2]).coerceIn(-1.0, 1.0)))
     }
 
-    private fun closeFiles() { try { joints?.close(); headCsv?.close(); coverCsv?.close() } catch (_: Throwable) {}; joints = null; headCsv = null; coverCsv = null }
+    private fun closeFiles() { try { joints?.close(); headCsv?.close(); coverCsv?.close(); handsCsv?.close() } catch (_: Throwable) {}; joints = null; headCsv = null; coverCsv = null; handsCsv = null }
 
     private lateinit var head0: HeadTracker.State
     private fun begin(now: Long) {
         lab.clear(); startNs = now; state = 1; toned = -1; tonedRelease = -1
         anchorP = head0.pose.p.copyOf(); anchorQ = head0.pose.q.copyOf()
         stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+        if (handFree) { beginScan(); return }
         try {
             val dir = File(Tracking.appContextOrNull()?.getExternalFilesDir("lab") ?: return, "").also { it.mkdirs() }
             joints = BufferedWriter(FileWriter(File(dir, "lab-$stamp-joints.csv")), 1 shl 16).also { it.write("t,side," + (0 until 21).joinToString(",") { "x$it,y$it,z$it" } + "\n") }
@@ -72,6 +78,25 @@ class LabScene(private val coverage: Boolean = false) : BaseScene() {
             }
         } catch (e: Throwable) { Tracking.log("hand lab: could not open its files: $e") }
         Tracking.log("hand lab: begun, " + lab.cues.size + " cues over " + Fmt.f(lab.durationS, 0) + " s")
+    }
+
+    /** Files of the hand-free scan, in the app's private storage (recordings/ and lab/); nothing here goes to git. */
+    private fun beginScan() {
+        try {
+            val dir = File(Tracking.appContextOrNull()?.getExternalFilesDir("lab") ?: return, "").also { it.mkdirs() }
+            val cu = StringBuilder("time_s,cue\n"); for (c in scanCues) cu.append(c.atS).append(',').append(c.text.replace(',', ' ')).append('\n')
+            File(dir, "handfree-$stamp-cues.csv").writeText(cu.toString())
+            handsCsv = BufferedWriter(FileWriter(File(dir, "handfree-$stamp-hands.csv")), 1 shl 16).also { it.write("time_s,left_tracked,right_tracked\n") }
+            Tracking.link?.let { l -> if (!l.recording) l.record(File(Tracking.appContextOrNull()?.getExternalFilesDir("recordings") ?: dir, "handfree-$stamp.uxrec"), dev.ultraxr.core.HandFreeScan.DURATION_S.toInt() + 5) }
+        } catch (e: Throwable) { Tracking.log("hand-free scan: could not open its files: $e") }
+        Tracking.log("hand-free scan: begun, " + scanCues.size + " cues over " + dev.ultraxr.core.HandFreeScan.DURATION_S.toInt() + " s")
+    }
+
+    private fun finishScan(now: Long) {
+        state = 2; doneNs = now
+        resultLines = listOf(falseHands.summary(), "left reported " + falseHands.leftSamples + " and right " + falseHands.rightSamples + " of " + falseHands.samples + " samples", "files: handfree-$stamp-hands.csv, -cues.csv, recordings/handfree-$stamp.uxrec")
+        for (l in resultLines) Tracking.log("hand-free scan: $l")
+        closeFiles()
     }
 
     private fun finish(now: Long) {
@@ -99,6 +124,7 @@ class LabScene(private val coverage: Boolean = false) : BaseScene() {
         val pin = BooleanArray(2); val age = DoubleArray(2)
         for (p in probes) { val s = if (p.isRight) 1 else 0; pin[s] = p.pinching; age[s] = (now - p.tNs) / 1e6 }
         head0 = head
+        if (handFree) { updateScan(now); return }
         if (state == 0) { if (pin[0] && pin[1] && !prev[0]) { begin(now) }; prev[0] = pin[0]; prev[1] = pin[1]; return }
         if (state == 2) { val again = pin[0] && pin[1] && !(prev[0] && prev[1]); prev[0] = pin[0]; prev[1] = pin[1]; if (again && (now - doneNs) > 3_000_000_000L) restart(); return }
         val tS = (now - startNs) / 1e9
@@ -145,9 +171,56 @@ class LabScene(private val coverage: Boolean = false) : BaseScene() {
         if (tS > lab.durationS) finish(now)
     }
 
+    /** The hand-free scan: begins by itself after a lead-in (no hands to pinch with), logs which hands the tracker reports. */
+    private fun updateScan(now: Long) {
+        val H = dev.ultraxr.core.HandFreeScan
+        if (state == 0) { if (armNs == 0L) armNs = now; if ((now - armNs) / 1e9 >= H.LEAD_IN_S) begin(now); return }
+        val pin = BooleanArray(2)
+        if (state == 2) { for (p in probes) pin[if (p.isRight) 1 else 0] = p.pinching; if (pin[0] && pin[1] && (now - doneNs) > 3_000_000_000L) restart(); return }
+        val tS = (now - startNs) / 1e9
+        if (tS - lastSampleS >= H.SAMPLE_S) {
+            lastSampleS = tS
+            val seen = BooleanArray(2)
+            for (h in Tracking.handJoints) if ((now - h.timestampNs) / 1e6 <= 400.0) seen[if (h.isRight) 1 else 0] = true
+            falseHands.sample(tS, seen[0], seen[1])
+            handsCsv?.write("%.2f,%d,%d\n".format(java.util.Locale.US, tS, if (seen[0]) 1 else 0, if (seen[1]) 1 else 0))
+        }
+        if (now - lastFlushNs > 3_000_000_000L) { lastFlushNs = now; try { handsCsv?.flush() } catch (_: Throwable) {} }
+        val ci = scanCues.indexOfLast { it.atS <= tS }
+        if (ci >= 0 && ci != scanCueToned) { scanCueToned = ci; beep(120) }
+        if (tS > H.DURATION_S) finishScan(now)
+    }
+
+    private fun drawScan(line: (String, Double, Double, Float, Float, Float, Float) -> Unit) {
+        val H = dev.ultraxr.core.HandFreeScan
+        when (state) {
+            0 -> {
+                val left = if (armNs == 0L) H.LEAD_IN_S else (H.LEAD_IN_S - (System.nanoTime() - armNs) / 1e9).coerceAtLeast(0.0)
+                line("HAND-FREE SCAN", 0.16, 0.07, 0.6f, 0.9f, 1f, 1f)
+                line("Put both hands out of sight: pockets, behind your back", 0.05, 0.04, 1f, 1f, 1f, 1f)
+                line("Starting in " + Fmt.f(left, 0) + " s, " + Fmt.f(H.DURATION_S / 60.0, 0) + " minutes. Walk about and look around.", -0.03, 0.03, 0.7f, 0.7f, 0.7f, 1f)
+            }
+            1 -> {
+                val tS = (System.nanoTime() - startNs) / 1e9
+                val c = H.cueAt(scanCues, tS); val next = scanCues.firstOrNull { it.atS > tS }
+                val fresh = c != null && tS - c.atS < 4.0
+                if (c != null) line(c.text, 0.10, 0.05, if (fresh) 0.5f else 0.85f, 1f, if (fresh) 0.5f else 0.85f, 1f)
+                line(if (next != null) "next in " + Fmt.f(next.atS - tS, 0) + " s" else "last one", 0.02, 0.035, 0.7f, 0.9f, 0.7f, 1f)
+                line("Keep both hands out of sight", -0.05, 0.03, 1f, 0.8f, 0.5f, 1f)
+                line(Fmt.f(tS / H.DURATION_S * 100.0, 0) + " %", -0.12, 0.03, 0.6f, 0.6f, 0.6f, 1f)
+            }
+            else -> {
+                line("DONE", 0.18, 0.07, 0.6f, 1f, 0.6f, 1f)
+                var y = 0.09; for (l in resultLines.take(9)) { line(l.take(70), y, 0.026, 1f, 1f, 1f, 1f); y -= 0.045 }
+                line("Pinch with both hands to run it again", -0.28, 0.03, 0.7f, 0.9f, 1f, 1f)
+            }
+        }
+    }
+
     override fun draw(d: Draw, head: HeadTracker.State) {
         drawHands(d); drawRays(d); drawEdgeMarks(d, head); drawStatus(d, head)
         fun line(s: String, up: Double, h: Double, r: Float, g: Float, b: Float, a: Float = 1f) { val p = inFront(head, 0.0, up, 1.25); d.text(s, p[0], p[1], p[2], h, r, g, b, a) }
+        if (handFree) { drawScan(::line); return }
         when (state) {
             0 -> { line(if (coverage) "COVERAGE LAB" else "HAND LAB", 0.16, 0.07, 0.6f, 0.9f, 1f); line("Pinch with both hands to begin (about " + Fmt.f(lab.durationS / 60.0, 0) + " minutes)", 0.05, 0.04, 1f, 1f, 1f); line("Hold your hands in front of your face, as in a game", -0.03, 0.03, 0.7f, 0.7f, 0.7f) }
             1 -> {

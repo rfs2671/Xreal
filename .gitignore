@@ -10,3 +10,8 @@ __pycache__/
 tools/ui-automation/out-*/
 questlab/.cxx/
 questlab/build/
+
+# private camera recordings and hand-free scan logs
+*.uxrec
+recordings/
+handfree-*.csv

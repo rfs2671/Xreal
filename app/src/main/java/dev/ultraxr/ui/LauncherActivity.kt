@@ -46,6 +46,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
     private var labOn = false
     private val cover = dev.ultraxr.render.LabScene(true)
     private var covOn = false
+    private val scan = dev.ultraxr.render.LabScene(false, true)
+    private var scanOn = false
     private var stage: GlassesStage? = null
     private var bannerAction: (() -> Unit)? = null
     private var askedCamera = false
@@ -200,11 +202,15 @@ class LauncherActivity : Activity(), Tracking.Observer {
         root.add(ListRow(this).set("Recentre", "", "Where you face now becomes straight ahead.").onTap { Tracking.recenter(); home.reanchor() })
         root.add(ListRow(this).set("Coverage lab", "", "About three minutes: hold each hand, then both, at places all round you, in the display and out of it (chest, lap, hip, arms out to the side), 5 seconds each, while the cameras are recorded. Tap again to leave it.").onTap {
             covOn = !covOn
-            if (covOn) { labOn = false; cover.restart(); stage?.setScene(cover) } else stage?.setScene(home)
+            if (covOn) { labOn = false; scanOn = false; cover.restart(); stage?.setScene(cover) } else stage?.setScene(home)
+        })
+        root.add(ListRow(this).set("Hand-free scan", "", "About three minutes with NO hands in view (pockets, behind your back): walk the rooms and look at your lap, the desk, keyboard, phone, bags, bottles. It starts 12 s after you tap, records the cameras, and counts the seconds the tracker wrongly reports a hand. Tap again to leave it.").onTap {
+            scanOn = !scanOn
+            if (scanOn) { labOn = false; covOn = false; scan.restart(); stage?.setScene(scan) } else stage?.setScene(home)
         })
         root.add(ListRow(this).set("Hand lab", "", "About nine minutes of cues in the glasses (pinches, holds, still hands, waving): measures what your hands do. Tap again to leave it.").onTap {
             labOn = !labOn
-            if (labOn) { lab.restart(); stage?.setScene(lab) } else stage?.setScene(home)
+            if (labOn) { scanOn = false; covOn = false; lab.restart(); stage?.setScene(lab) } else stage?.setScene(home)
         })
         root.add(ListRow(this).set("Settings", "", "Eye distance, the room, hand tracking and the rest.").onTap { startActivity(Intent(this, SettingsActivity::class.java)) })
         setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
