@@ -267,10 +267,10 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
     private fun drawScene(f: RenderFrame, q: DoubleArray) {
         bright = if (preview) 1f else f.brightness
         // Far things first, so nearer ones cover them; the focused window last among equals. The shelf has its place
-        // in that order: it is nearer than a window at the usual distance.
+        // in that order: a window at the usual distance (2 m) covers it where they overlap (Shelf.windowCoversShelf).
         var shelfDrawn = f.shelf == null
         for (w in f.windows.sortedWith(compareByDescending<RenderWindow> { it.distance }.thenBy { it.focused })) {
-            if (!shelfDrawn && !w.headLocked && w.distance < Shelf.DISTANCE) { drawShelf(f); shelfDrawn = true }
+            if (!shelfDrawn && !w.headLocked && Shelf.windowCoversShelf(w.distance)) { drawShelf(f); shelfDrawn = true }
             drawWindow(f, w)
         }
         if (!shelfDrawn) drawShelf(f)

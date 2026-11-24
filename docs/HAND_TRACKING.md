@@ -539,3 +539,21 @@ pinch for over a second, seen from behind, measures 24 to 41 mm between the fing
 tracker's pictures (`hand_tone=55`: found in 60 and 67 %; `stretch=1`: 73 %, one run) is no repeatable gain.
 At 45 s a hand low in the picture holding something bright (probably the phone) was followed and read as 38 to
 39 mm: the hand is now not a pointer for 1.5 s after any touch on the phone's screen.
+
+## Desktop hands worn, 24 November 2026: "the tracking is awful", "menu over the actual window"
+
+From the worn log (08:49 to 08:54): in the ball scene the left hand took the ball six times; in the desktop with
+three windows (a page loading from 08:51:11) the hand was seen in 483 of about 2,100 frames, one pinch, and the
+tracker took 28 to 49 ms a result with no hand and 57 to 95 ms with one (replay on a quiet phone: 17 and 39 ms
+median), so a hand's picture was 124 to 196 ms old when used. 15 ms a frame on the CPU for the desktop's drawing, 10 %
+of frames late. The desktop draws only two fingertips and a ray; the full hand is drawn in the test scenes.
+
+Bench on the phone, glasses lying on the table, six windows, no hand: tracker 32 to 54 ms a result (mean 43) with the
+priority as it is; 22 to 45 ms (mean 36) with `work_priority=-8`, but 26 % of display frames late against 14 %. Same
+finding as 21 November: raising the trackers' priority trades hand speed for display frames, so it is not adopted.
+Two more runs were made with the glasses off the phone and are not counted. Not fixed: the cost of six windows'
+drawing and pages against the hand tracker. Cause of the slowdown shown (tracker twice as slow as quiet); remedy not found.
+
+Menu over the window: a new window stands at 2.0 m, the shelf too, and the window was drawn over the shelf only if
+nearer than it, so marks and status line were drawn over a window at the usual distance. A window up to 2.25 m now covers
+the shelf (`Shelf.windowCoversShelf`, tested); not seen in the glasses.

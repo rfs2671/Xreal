@@ -69,6 +69,16 @@ object Shelf {
     /** The dock's pane of glass reaches this many mark radii above and below the middle of the row: the marks and the dots under them are on it. */
     const val DOCK = 1.3
 
+    /**
+     * Whether a window at [distance] metres is drawn over the shelf where the two overlap. A new window stands at
+     * exactly [DISTANCE], and the test was "nearer than the shelf", so the marks and the status line were drawn over it
+     * (worn, 24 November 2026: "menu over the actual window"). A window up to [WINDOW_OVER] beyond the shelf still
+     * covers it: at that gap the two differ by less than a tenth of a degree between the eyes. Only a window pushed
+     * further back than that is behind the shelf.
+     */
+    fun windowCoversShelf(distance: Double) = distance <= DISTANCE + WINDOW_OVER
+    const val WINDOW_OVER = 0.25
+
     /** How many marks are in view of [count]. */
     fun shown(count: Int) = minOf(maxOf(count, 0), IN_VIEW)
 

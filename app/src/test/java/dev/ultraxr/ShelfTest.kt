@@ -7,6 +7,7 @@ import dev.ultraxr.desktop.Motion
 import dev.ultraxr.desktop.Shelf
 import dev.ultraxr.desktop.Sight
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -103,6 +104,15 @@ class ShelfTest {
             assertEquals("as large to the eye", w.shownWidth() / d, v.shownWidth() / far, 1e-9)
             assertEquals(pitch, Shelf.clearPitch(v.shownBelow(), far), 1e-9)
         }
+    }
+
+    @Test fun aWindowAtTheUsualDistanceIsDrawnOverTheShelfNotUnderIt() {
+        // worn, 24 November 2026: "menu over the actual window". A new window stands at exactly the shelf's distance.
+        assertTrue("a new window covers the shelf", Shelf.windowCoversShelf(DesktopWindow.DEFAULT_DISTANCE))
+        assertTrue("so does one at the furthest a window is put", Shelf.windowCoversShelf(DesktopWindow.MAX_DISTANCE))
+        assertTrue("and a nearer one", Shelf.windowCoversShelf(1.0))
+        assertFalse("one pushed well back is behind it", Shelf.windowCoversShelf(3.0))
+        assertFalse(Shelf.windowCoversShelf(DesktopWindow.FAR_DISTANCE))
     }
 
     @Test fun motionTakesTheTimeTheDesignGivesItAndNoneWhenMotionIsReduced() {
