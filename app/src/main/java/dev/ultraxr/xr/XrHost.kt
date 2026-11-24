@@ -36,6 +36,7 @@ object XrHost : OpenXrGlassesLayer.Host {
     private var holdsTracking = false
     @Volatile var applicationConnected = false; private set
     @Volatile private var journal: dev.ultraxr.core.SessionJournal? = null
+    private var dbgNs = 0L; private var dbgLogged = 0; private val dbgFrames = IntArray(2)
 
     /** Appends the finished session's record to journal.jsonl in the app's external files folder (readable over adb). */
     private fun closeJournal() {
@@ -225,6 +226,7 @@ object XrHost : OpenXrGlassesLayer.Host {
         applicationConnected = true
         lastEvent = "an OpenXR application connected (" + OpenXrGlassesLayer.clientPackage.ifEmpty { "unknown" } + (if (handsOnly) ", hands as joints only" else ", hands as joints and controllers") + ")" + if (onGlasses) " and owns the glasses" else " (drawing on the phone: no glasses window)"
         Tracking.log("OpenXR: $lastEvent")
+        dbgLogged = 0; dbgNs = 0L; dbgFrames[0] = 0; dbgFrames[1] = 0
         journal = dev.ultraxr.core.SessionJournal(OpenXrGlassesLayer.clientPackage, if (!onGlasses) "phone screen" else if (stereoAtStart) "glasses, one view per eye" else "glasses, one picture (2D)",
             if (handsOnly) "joints" else "joints and controllers", System.currentTimeMillis())
         Tracking.recenter()
@@ -466,6 +468,15 @@ object XrHost : OpenXrGlassesLayer.Host {
 
             val hands = Tracking.handJoints
             val newest = hands.maxOfOrNull { it.timestampNs } ?: 0L
+            // The first minute of a session, once a second: what reached the application, so that a hand lost at the start is seen when it is lost.
+            if (journal != null) {
+                if (dbgNs == 0L) dbgNs = nowNs
+                if (nowNs - dbgNs >= 1_000_000_000L && dbgLogged < 60) {
+                    dbgNs = nowNs; dbgLogged++
+                    Tracking.log("OpenXR hands, last second: left " + dbgFrames[0] + ", right " + dbgFrames[1] + " frames; tracker's newest hand " + (if (newest == 0L) "none" else ((nowNs - newest) / 1_000_000).toString() + " ms old") + (if (pointer) "; the touchpad pointer is the right hand" else "") + "; head " + s.mode)
+                    dbgFrames[0] = 0; dbgFrames[1] = 0
+                }
+            }
             if (newest == lastHandNs) {
                 // no new result: with xr_predict the hand is carried on to this moment and given again, so that what the game asks for is never older than a frame
                 if (ho.xrPredict && nowNs - xrPubNs >= 8_000_000L) {
@@ -516,6 +527,7 @@ object XrHost : OpenXrGlassesLayer.Host {
                 var finger = 0f
                 for (b in 5..7) { val p0 = hand.joint(b); val p1 = hand.joint(b + 1); finger += sqrt((p0[0] - p1[0]) * (p0[0] - p1[0]) + (p0[1] - p1[1]) * (p0[1] - p1[1]) + (p0[2] - p1[2]) * (p0[2] - p1[2])).toFloat() }
                 val began = pinch[side].update(gap, finger, hand.timestampNs, nowNs - hand.timestampNs)
+                dbgFrames[side]++
                 journal?.let { j -> j.handFrames[side]++; if (began) j.pinches[side]++; j.gap(side, gap) }
                 // While our own (measured) rule says "pinching", the application is given fingertips that touch: a
                 // browser decides a pinch by its own, tighter distance, which a tracked hand may never reach.
