@@ -57,6 +57,12 @@ object XrRuntime {
         // through the runtime. (From the home view, which is on the glasses, it would otherwise open there.)
         val i = Intent(Intent.ACTION_MAIN).setClassName(info.activityInfo.packageName, info.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val onPhone = android.app.ActivityOptions.makeBasic().setLaunchDisplayId(android.view.Display.DEFAULT_DISPLAY).toBundle()
-        try { c.startActivity(i, onPhone); Tracking.log("OpenXR: started ${info.activityInfo.packageName} (native)") } catch (e: Exception) { Tracking.log("could not start ${info.activityInfo.packageName}: $e") }
+        // An instance of the game still running from an earlier start (the glasses were not there then, or went away) keeps the OpenXR
+        // session it made: the game would resume drawing to the phone and nothing would come on the glasses. It is ended first.
+        // (Only a process in the background can be ended this way: the game, behind the desktop or the launcher, is.)
+        try { (c.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).killBackgroundProcesses(info.activityInfo.packageName) } catch (_: Exception) {}
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try { c.startActivity(i, onPhone); Tracking.log("OpenXR: started ${info.activityInfo.packageName} (native)") } catch (e: Exception) { Tracking.log("could not start ${info.activityInfo.packageName}: $e") }
+        }, 400)
     }
 }

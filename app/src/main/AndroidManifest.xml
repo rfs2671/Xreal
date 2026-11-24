@@ -7,6 +7,8 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Android refuses USB access to a device with a video interface unless the app holds CAMERA. -->
+    <!-- an immersive app that is still running from an earlier start has its OpenXR session set up for whatever the glasses were then (none, or gone): it is ended before it is started again -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
