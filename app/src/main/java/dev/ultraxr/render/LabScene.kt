@@ -1,6 +1,7 @@
 package dev.ultraxr.render
 
 import dev.ultraxr.core.Fmt
+import dev.ultraxr.core.Hand
 import dev.ultraxr.core.GestureLab
 import dev.ultraxr.core.HeadTracker
 import dev.ultraxr.tracking.Tracking
@@ -17,13 +18,13 @@ import java.io.FileWriter
  *
  * Begin by pinching with both hands. All of the cues are within the picture, a metre and a bit ahead.
  */
-class LabScene : BaseScene() {
-    private var lab = GestureLab()
+class LabScene(private val coverage: Boolean = false) : BaseScene() {
+    private var lab = GestureLab(coverage)
     private var startNs = 0L
     private var state = 0           // 0 waiting to begin, 1 running, 2 done
     private val prev = BooleanArray(2)
     private var resultLines: List<String> = emptyList()
-    private var joints: BufferedWriter? = null; private var headCsv: BufferedWriter? = null
+    private var joints: BufferedWriter? = null; private var headCsv: BufferedWriter? = null; private var coverCsv: BufferedWriter? = null
     private val lastLogged = LongArray(2); private var lastFlushNs = 0L
     private var toned = -1; private var tonedRelease = -1
     private var tone: android.media.ToneGenerator? = null
@@ -32,7 +33,7 @@ class LabScene : BaseScene() {
     private var anchorP = DoubleArray(3); private var anchorQ = doubleArrayOf(0.0, 0.0, 0.0, 1.0)
     private val targetTmp = DoubleArray(3)
 
-    fun restart() { lab = GestureLab(); state = 0; resultLines = emptyList(); prev[0] = false; prev[1] = false; toned = -1; tonedRelease = -1; closeFiles() }
+    fun restart() { lab = GestureLab(coverage); state = 0; resultLines = emptyList(); prev[0] = false; prev[1] = false; toned = -1; tonedRelease = -1; closeFiles() }
 
     private fun beep(ms: Int = 90) {
         try { if (tone == null) tone = android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 80); tone?.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, ms) } catch (_: Throwable) {}
@@ -53,7 +54,7 @@ class LabScene : BaseScene() {
         return Math.toDegrees(Math.acos((x * dir[0] + y * dir[1] + z * dir[2]).coerceIn(-1.0, 1.0)))
     }
 
-    private fun closeFiles() { try { joints?.close(); headCsv?.close() } catch (_: Throwable) {}; joints = null; headCsv = null }
+    private fun closeFiles() { try { joints?.close(); headCsv?.close(); coverCsv?.close() } catch (_: Throwable) {}; joints = null; headCsv = null; coverCsv = null }
 
     private lateinit var head0: HeadTracker.State
     private fun begin(now: Long) {
@@ -64,6 +65,11 @@ class LabScene : BaseScene() {
             val dir = File(Tracking.appContextOrNull()?.getExternalFilesDir("lab") ?: return, "").also { it.mkdirs() }
             joints = BufferedWriter(FileWriter(File(dir, "lab-$stamp-joints.csv")), 1 shl 16).also { it.write("t,side," + (0 until 21).joinToString(",") { "x$it,y$it,z$it" } + "\n") }
             headCsv = BufferedWriter(FileWriter(File(dir, "lab-$stamp-head.csv")), 1 shl 16).also { it.write("t,x,y,z,qx,qy,qz,qw,six_dof\n") }
+            if (coverage) {
+                coverCsv = BufferedWriter(FileWriter(File(dir, "lab-$stamp-cover.csv")), 1 shl 16).also { it.write("t,cue,left_seen,right_seen,left_x_cm,left_y_cm,left_z_cm,right_x_cm,right_y_cm,right_z_cm,left_age_ms,right_age_ms\n") }
+                // every picture of the cameras and every motion report, so that the session can be run through the tracker again and looked at: about 9 MB a second
+                Tracking.link?.let { l -> if (!l.recording) l.record(File(Tracking.appContextOrNull()?.getExternalFilesDir("recordings") ?: dir, "cover-$stamp.uxrec"), lab.durationS.toInt() + 5) }
+            }
         } catch (e: Throwable) { Tracking.log("hand lab: could not open its files: $e") }
         Tracking.log("hand lab: begun, " + lab.cues.size + " cues over " + Fmt.f(lab.durationS, 0) + " s")
     }
@@ -80,7 +86,7 @@ class LabScene : BaseScene() {
             File(dir, "lab-$stamp.json").writeText(sc.json.toString(1))
             val ev = StringBuilder("t,side,onset,age_ms\n"); for (e in lab.allEvents()) ev.append(e.tS).append(',').append(e.side).append(',').append(if (e.onset) 1 else 0).append(',').append(e.ageMs).append('\n')
             File(dir, "lab-$stamp-events.csv").writeText(ev.toString())
-            val cu = StringBuilder("id,section,kind,side,at_s,window_s\n"); for (c in lab.cues) cu.append(c.id).append(',').append(c.section).append(',').append(c.kind).append(',').append(c.side).append(',').append(c.atS).append(',').append(c.windowS).append('\n')
+            val cu = StringBuilder("id,section,kind,side,at_s,window_s,text\n"); for (c in lab.cues) cu.append(c.id).append(',').append(c.section).append(',').append(c.kind).append(',').append(c.side).append(',').append(c.atS).append(',').append(c.windowS).append(',').append(c.text.replace(',', ' ')).append('\n')
             File(dir, "lab-$stamp-cues.csv").writeText(cu.toString())
         } catch (e: Throwable) { Tracking.log("hand lab: could not write its result: $e") }
         closeFiles()
@@ -117,7 +123,22 @@ class LabScene : BaseScene() {
             }
         }
         headCsv?.write((tS).toString() + "," + head.pose.p.joinToString(",") + "," + head.pose.q.joinToString(",") + "," + (if (head.mode == HeadTracker.Mode.SIX_DOF) 1 else 0) + "\n")
-        if (now - lastFlushNs > 3_000_000_000L) { lastFlushNs = now; try { joints?.flush(); headCsv?.flush() } catch (_: Throwable) {} }
+        coverCsv?.let { w ->
+            val cc = lab.cues.lastOrNull { tS >= it.atS - 0.5 && tS <= it.atS + it.windowS }
+            val inv = head.pose.inverse(); val sb = StringBuilder(); sb.append(tS).append(',').append(cc?.id ?: -1)
+            val seen = BooleanArray(2); val pos = Array(2) { doubleArrayOf(Double.NaN, Double.NaN, Double.NaN) }; val ages = DoubleArray(2) { -1.0 }
+            for (h in Tracking.handJoints) {
+                val side = if (h.isRight) 1 else 0; val a = (now - h.timestampNs) / 1e6
+                if (a > 400.0) continue
+                seen[side] = true; ages[side] = a
+                val v = inv.apply(h.joint(Hand.WRIST)); pos[side] = doubleArrayOf(v[0] * 100, v[1] * 100, -v[2] * 100)      // cm: right, up, forward
+            }
+            sb.append(',').append(if (seen[0]) 1 else 0).append(',').append(if (seen[1]) 1 else 0)
+            for (s2 in 0..1) for (c in 0..2) sb.append(',').append(if (seen[s2]) "%.1f".format(java.util.Locale.US, pos[s2][c]) else "")
+            sb.append(',').append("%.0f".format(java.util.Locale.US, ages[0])).append(',').append("%.0f".format(java.util.Locale.US, ages[1]))
+            w.write(sb.append('\n').toString())
+        }
+        if (now - lastFlushNs > 3_000_000_000L) { lastFlushNs = now; try { joints?.flush(); headCsv?.flush(); coverCsv?.flush() } catch (_: Throwable) {} }
         val c = lab.cues.lastOrNull { tS >= it.atS }
         if (c != null && c.id != toned) { toned = c.id; beep(120) }
         if (c != null && c.kind == GestureLab.Kind.HOLD && tS >= c.releaseS && c.id != tonedRelease) { tonedRelease = c.id; beep(240) }
@@ -128,7 +149,7 @@ class LabScene : BaseScene() {
         drawHands(d); drawRays(d); drawEdgeMarks(d, head); drawStatus(d, head)
         fun line(s: String, up: Double, h: Double, r: Float, g: Float, b: Float, a: Float = 1f) { val p = inFront(head, 0.0, up, 1.25); d.text(s, p[0], p[1], p[2], h, r, g, b, a) }
         when (state) {
-            0 -> { line("HAND LAB", 0.16, 0.07, 0.6f, 0.9f, 1f); line("Pinch with both hands to begin (about " + Fmt.f(lab.durationS / 60.0, 0) + " minutes)", 0.05, 0.04, 1f, 1f, 1f); line("Hold your hands in front of your face, as in a game", -0.03, 0.03, 0.7f, 0.7f, 0.7f) }
+            0 -> { line(if (coverage) "COVERAGE LAB" else "HAND LAB", 0.16, 0.07, 0.6f, 0.9f, 1f); line("Pinch with both hands to begin (about " + Fmt.f(lab.durationS / 60.0, 0) + " minutes)", 0.05, 0.04, 1f, 1f, 1f); line("Hold your hands in front of your face, as in a game", -0.03, 0.03, 0.7f, 0.7f, 0.7f) }
             1 -> {
                 val tS = (System.nanoTime() - startNs) / 1e9
                 val now = lab.cues.lastOrNull { tS >= it.atS - 0.0 }; val next = lab.cues.firstOrNull { it.atS > tS }

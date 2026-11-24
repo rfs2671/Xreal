@@ -720,3 +720,66 @@ A batch-of-four keypoint model (symbolic batch dimension; its answers equal four
 
 Hybrid optical-flow and neural tracking, confidence-driven detection frequency, a rewritten fit, a TensorFlow Lite GPU delegate (it needs the model converted with TensorFlow, and shares the Adreno with the glasses' picture), a freshness rule based on confidence rather than age (the tracker's
 confidences are not exported), measured pinch-to-picture latency, 30-minute stability, and everything the hand lab is for.
+
+## Fourth phase, 24 November 2026: the whole of the cameras' field, not the display's
+
+Scripts: `tools/tracking/hand_upgrade/` (`coverage_geometry.py`, `periph_detect.py`, `track_ends.py`, `coverage_report.py`). Correction to the third phase: of the six scheduling replays, three completed (the `b` ones;
+the others were frozen by Samsung's app freezer or their files not fetched). With the room already slowed while a hand is tracked, the tracker's time with a hand is the same whatever the thread priorities:
+median 35.7 ms (default), 36.2 (room work at priority 10), 35.0 (room 10 and hands -4); P99 64.0, 65.3, 64.3. So `room_priority` and `hand_priority` stay at 0.
+
+### What the cameras can physically see (from the calibration alone, `coverage_geometry.py`)
+
+Each camera's picture is 480 x 640, the edge 57 degrees from the optical axis left and right and 76 to 78 degrees up and down (the corners 92 to 99); the axes are 9.3 degrees apart (5 degrees out each way) and 6.6 and 8.2 degrees below straight ahead.
+The display's 46 x 27 degrees is a small part of it. A hand 12 cm across, hand centre in the head frame (cm right, up, forward):
+
+| place | left / right picture | |
+|---|---|---|
+| straight ahead, 50 cm | whole, whole | both whole |
+| raised in the display, 40 cm | whole, whole | both whole |
+| **chest height in front (0, -35, 35)** | whole at (285, 485), whole at (179, 469); 54 px across | both whole |
+| **chest height, 30 cm to the right** | whole, whole; 45 to 49 px | both whole |
+| **belly (0, -55, 30)** | whole, whole; 39 px | both whole |
+| **lap, 20 cm to the right** | whole, whole; 37 px | both whole |
+| hip, hand by the hip (30, -60, 0) | part, part | partly |
+| arm out forward and to the right (50, -15, 50) | part, whole | both, one partly |
+| high, above the display | whole, whole | both whole |
+| **arm straight out to the side at shoulder height (±60, -15, 20)** | out, out | **neither (optical)** |
+| beside the head (25, 0, 10) | out, part | one camera only |
+
+Of 368 directions in a grid 220 degrees wide and 150 tall at 40 cm, 107 are whole in both pictures and 89 partly in both (the rest one camera or none): at 40 cm the field that both pictures hold whole is about 60 degrees wide (30 each side of straight ahead; 100 degrees counting a hand partly in), and from 50 degrees up to 70 degrees down (80 counting partly). **Chest, belly and lap are inside both pictures and well inside them.** Arms stretched out to the sides, hands beside the head and behind it are the genuine optical blind spots; an arm out forward and to the side is half in.
+Depth from stereo: one pixel of disparity is 1.3 mm at 20 cm, 2.8 mm at 30, 5.1 at 40, 7.9 at 50, 15.5 at 70.
+
+### Does the detector find a hand wherever it is in the picture? (`periph_detect.py`, 16 real hands, 90 places each, 1440 runs of the real detector)
+
+A hand that the detector finds where it really is (16 of the 831 tracked frames tried; the others are tracked by prediction without the detector) is carried over the whole picture by turning the view (yaw, then pitch: upright hands stay upright), the picture re-made through the lens model,
+and the detector run on it as Mercury runs it, and on a 70 degree pinhole tile cut out of that synthetic picture (a tile centred on the place; the real tiles are a fixed 3 x 3 grid):
+
+```
+ whole-picture detector % / hand-centred tile %      u = 30      80     130     180     230     280     330     380     430
+ v =  40 (top)                                       0/0     0/19    0/81   0/100    0/94    0/94    0/88    0/75    0/25
+ v = 160                                             6/0     6/75  69/100  88/100   25/100  19/100  25/100  0/94   12/88
+ v = 280                                             0/6    19/94  100/100  88/100  81/100  75/100  75/100 38/94   19/88
+ v = 400  (chest, belly)                             0/44   50/100  75/100 100/100  94/100  75/100  69/100 81/100  38/100
+ v = 520  (lap)                                      6/12   31/100  56/100 100/100  88/94   94/94   69/100 31/100   0/88
+ v = 580 (bottom)                                    0/0     6/25   12/69   38/69   25/81   38/75   12/88   6/88    0/69
+```
+
+- The whole-picture detector finds the hand well in a band u 130 to 330, v 220 to 520, and poorly in the outer 80 px left and right, at the top and in the bottom 60 px.
+- A tile centred on the hand finds it in 88 to 100 % of the cases over almost all of the rest (to u = 80 and 430, v = 40 to 520): **the information is in the picture; it is the detector's 160 x 160 view of the whole picture that fails there**
+  (a 12 cm hand at the lap is 14 x 6 pixels in it). That is a software limit, answered by tiles.
+- Where both fail: the strip at u < 50 on the left of the left picture, the corners, and the bottom edge below v = 570 for hands further out: the lens' own limit (genuine).
+- Caveats: only the left camera's picture; a hand carried by rotation has the right shape at the new place but not the oblique view a real hand has there; sixteen hands, mostly low (the recording's own); tiles here are centred on the hand, the real ones sit on a fixed grid.
+
+### Where real tracks start and stop (`track_ends.py`, the three replays of 17, 20 and 22 November)
+
+Of 12 tracks that end (hand lost for 10 pairs or more), **11 end with the palm inside both pictures** (6 more than 60 px from every edge, 5 between 20 and 60 px) and 1 at an edge; of 14 that begin, 11 begin well inside both pictures and none at an edge.
+Nine of the 12 ends and 8 of the 14 starts are in the lowest fifth of the left picture (chest to lap, 15 to 42 cm). So the losses are not the optics: they are the software, in the part of the field where the hand is smaller and foreshortened (above).
+
+### Not done about it, and what was built
+
+- Not changed in the tracker: how the tiles are scheduled, which are weighted, and what a find needs to be believed are exactly what earlier phases tuned against the false hand on the stands (20 to 22 November); a change needs labelled low-hand footage in every zone, which the coverage lab below gives.
+  Monocular continuation already exists (`ULTRA_HANDS_KEEP`, `ULTRA_HANDS_ONE_VIEW`).
+- **Coverage lab** (`Coverage lab` on the launcher, `GestureLab(coverage = true)`): about 3 minutes; each hand, then both, held for 5 seconds at 15 places all round the head, in the display and out of it (a fifth of them lap, hip or arm out to the side). It writes `lab-<time>-cover.csv`
+  (every frame: which hand is tracked and where, in cm in the head frame), the cues, and records the cameras (`recordings/cover-<time>.uxrec`, about 9 MB a second) so that the session can be run through the tracker with any setting and looked at.
+  `coverage_report.py` then says, for every place and hand, how much of the time it was tracked, how soon, how far from the asked place, whether the cameras could see it there (from the calibration) and the verdict: tracked, **software** (in both pictures and not tracked), partly out, or **optical** (out of both).
+  Tested on a made-up session only; not worn.

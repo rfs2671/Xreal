@@ -15,8 +15,10 @@ import org.json.JSONObject
  * system's together; it is not the system's latency. What is the system's alone is the age of the tracking result a
  * pinch began on, which is recorded with each onset ([Ev.ageMs]).
  */
-class GestureLab {
-    enum class Kind { PINCH, DOUBLE, HOLD, STILL, WAVE, BOTH, TURN, TARGET }
+class GestureLab(val coverage: Boolean = false) {
+    /** A place to hold a hand, for the coverage lab: [x], [y], [z] cm right of, above and in front of the head for the right hand (the left hand's is mirrored), [both] for two hands at once. */
+    class Zone(val name: String, val x: Double, val y: Double, val z: Double, val both: Boolean = false)
+    enum class Kind { PINCH, DOUBLE, HOLD, STILL, WAVE, BOTH, TURN, TARGET, COVER }
 
     /** One cue: [side] 0 left, 1 right, 2 both; [atS] seconds from the start; the pinch is expected in [atS + 0.10, atS + [windowS]]. */
     class Cue(val id: Int, val section: String, val kind: Kind, val side: Int, val atS: Double, val windowS: Double, val text: String) {
@@ -39,6 +41,11 @@ class GestureLab {
     init {
         val l = ArrayList<Cue>(); var t = 6.0
         fun add(section: String, kind: Kind, side: Int, gap: Double, window: Double, text: String) { l += Cue(l.size, section, kind, side, t, window, text); t += gap }
+        if (coverage) {
+            // every place the cameras might see a hand, held there for 4 seconds, each hand in turn, then both: whether it is in the display or not
+            for (z in ZONES) { if (z.both) add("coverage", Kind.COVER, 2, 6.5, 5.0, z.name) else for (side in 0..1) add("coverage", Kind.COVER, side, 6.5, 5.0, (if (side == 0) "LEFT hand: " else "RIGHT hand: ") + z.name) }
+            cues = l; durationS = t + 3.0
+        } else {
         for (i in 0 until 40) add("single pinches", Kind.PINCH, i % 2, 2.5, 1.6, if (i % 2 == 0) "Pinch: LEFT hand" else "Pinch: RIGHT hand")
         t += 3.0
         for (i in 0 until 14) add("quick double pinches", Kind.DOUBLE, i % 2, 3.2, 2.0, if (i % 2 == 0) "Pinch twice, quickly: LEFT" else "Pinch twice, quickly: RIGHT")
@@ -55,7 +62,9 @@ class GestureLab {
         t += 3.0
         for (i in 0 until 16) add("head turning", Kind.TURN, i % 2, 3.6, 2.2, if (i % 2 == 0) "Turn your head slowly, and pinch LEFT" else "Turn your head slowly, and pinch RIGHT")
         cues = l; durationS = t + 4.0
+        }
     }
+    fun zoneOf(c: Cue): Zone? = if (c.kind == Kind.COVER) ZONES.firstOrNull { c.text.endsWith(it.name) } else null
 
     fun clear() = events.clear()
     fun onset(tS: Double, side: Int, ageMs: Double, errDeg: Double = -1.0) { events += Ev(tS, side, true, ageMs, errDeg) }
@@ -101,7 +110,7 @@ class GestureLab {
                     if (rel == null || rel.tS < c.releaseS - 0.15) dropped++ else { releaseLag += rel.tS - c.releaseS; if (rel.tS > c.releaseS + 1.5) late++ }
                 }
             }
-            if (c.kind != Kind.STILL && c.kind != Kind.WAVE && c.kind != Kind.TARGET) {
+            if (c.kind != Kind.STILL && c.kind != Kind.WAVE && c.kind != Kind.TARGET && c.kind != Kind.COVER) {
                 // the other hand pinching for a one-handed cue
                 if (c.side != 2) { val o = events.filter { it.onset && it.side != c.side && it.tS in lo..hi }; cueFalse += o.size; used += o }
             }
@@ -133,6 +142,13 @@ class GestureLab {
 
     companion object {
         const val HOLD_RELEASE_S = 1.8
+        /** Where hands rest and go, from the cameras' coverage (docs/HAND_TRACKING.md, 24 November 2026): in the display, at chest and belly height, in the lap, out to the side, high, close, beside the head, and two hands wide apart. */
+        val ZONES = listOf(
+            Zone("straight ahead, arm's length", 0.0, 0.0, 50.0), Zone("raised, in front of your face", 10.0, 5.0, 40.0), Zone("chest height, in front of you", 0.0, -35.0, 35.0),
+            Zone("chest height, off to the side", 30.0, -35.0, 35.0), Zone("belly height, in front of you", 0.0, -55.0, 30.0), Zone("in your lap, a little to the side", 20.0, -60.0, 20.0),
+            Zone("resting by your hip", 30.0, -60.0, 0.0), Zone("arm out to the side, forward a little", 50.0, -15.0, 50.0), Zone("arm straight out to the side", 60.0, -15.0, 20.0),
+            Zone("high, above the display", 0.0, 40.0, 40.0), Zone("close to your face", 0.0, 0.0, 20.0), Zone("beside your head", 25.0, 0.0, 10.0),
+            Zone("BOTH hands wide apart at chest height", 45.0, -35.0, 35.0, true), Zone("BOTH hands together at your belly", 8.0, -55.0, 30.0, true), Zone("BOTH hands wide apart at shoulder height", 60.0, -15.0, 30.0, true))
         /** Target places (degrees right, up) within the picture's 46 by 27: a grid, in an order that is not a sweep. */
         val TARGETS = arrayOf(doubleArrayOf(0.0, 0.0), doubleArrayOf(-14.0, 6.0), doubleArrayOf(12.0, -6.0), doubleArrayOf(14.0, 7.0), doubleArrayOf(-12.0, -6.0), doubleArrayOf(0.0, 8.0), doubleArrayOf(-6.0, -3.0), doubleArrayOf(7.0, 3.0), doubleArrayOf(0.0, -7.0))
     }

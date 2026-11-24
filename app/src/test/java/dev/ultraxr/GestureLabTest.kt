@@ -60,6 +60,18 @@ class GestureLabTest {
         val targets = ts.map { lab.targetOf(it) }; assertTrue("targets stay in the picture", targets.all { Math.abs(it[0]) <= 15.0 && Math.abs(it[1]) <= 9.0 })
     }
 
+    @Test fun theCoverageLabAsksForEveryPlaceAndNeverForAPinch() {
+        val lab = GestureLab(true)
+        assertTrue("every zone, each hand, then both: " + lab.cues.size, lab.cues.size == GestureLab.ZONES.count { !it.both } * 2 + GestureLab.ZONES.count { it.both })
+        assertTrue("under four minutes: " + lab.durationS, lab.durationS < 240.0)
+        assertTrue(lab.cues.all { it.kind == GestureLab.Kind.COVER && it.expected == 0 })
+        assertTrue("each cue names its zone", lab.cues.all { lab.zoneOf(it) != null })
+        // a pinch in it is a false activation, as in a hold-still cue
+        lab.onset(lab.cues[3].atS + 1.0, 1, 40.0); assertEquals(1, lab.score().json.getInt("false_activations"))
+        // places beyond the display are among them: some zone is more than 25 degrees to the side and some more than 30 degrees below straight ahead
+        assertTrue(GestureLab.ZONES.any { Math.toDegrees(Math.atan2(Math.abs(it.x), it.z)) > 25.0 } && GestureLab.ZONES.any { Math.toDegrees(Math.atan2(-it.y, it.z)) > 30.0 })
+    }
+
     @Test fun aHoldLetGoTooSoonIsDropped() {
         val lab = GestureLab(); val h = lab.cues.first { it.kind == GestureLab.Kind.HOLD }
         lab.onset(h.atS + 0.5, h.side, 40.0); lab.release(h.atS + 0.9, h.side)
