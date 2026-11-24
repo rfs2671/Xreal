@@ -843,3 +843,25 @@ What would: a verifier or detector trained on far more hard negatives from many 
 - `python tools/tracking/hand_free_summary.py handfree-<time>-hands.csv [--cues handfree-<time>-cues.csv]` prints false-hand events (count, durations, maximum, per hand and for either) and the cue each began in. Replaying the `.uxrec` through the native tracker with any setting then gives the false hands of that setting on the same footage (`false_events.py`).
 - Recordings, `*.uxrec` and `handfree-*.csv` are ignored by git (`.gitignore`); they live only in the app's private storage on the phone and are pulled by hand. Unit tests: `HandFreeScanTest` (cue schedule, false-hand counting).
 - Not worn yet: the scene, the files and the recording call have been built and unit-tested, not run on glasses.
+
+### Seventh phase, 24 November 2026: other detectors and a fine-tuned one (scripts in `tools/tracking/hand_upgrade/neural/`)
+
+**Held-out labels.** `hands_bench/r22` and `r23` (105 s and 120 s, labelled by an independent reader from 9-second contact sheets at about 240 x 320 per picture, uppercase only for plainly visible hands, lowercase when unsure; coarse: expect disagreements on a hand holding a phone). Training recordings: 17, 20 (and 22 for the third try); validation/held-out: 22, 23 as stated.
+
+**MediaPipe off the shelf** (palm detector + full landmark model in `hand_landmarker.task`, Apache-2.0, run on each camera's picture, whole and on nine rectified 70-degree tiles; grayscale copied to three channels; CLAHE tried): at best 42 to 55 % of plainly visible hands found (22 Nov: whole picture 17 %, nine tiles 42 % at 15 % of hand-free pictures with a detection) against Mercury's own detector on the same nine tiles 68 % (22 % false) to 79 to 92 % depending on recording. Not feeding its landmarks to the stereo solver: its recall is too low on this camera to be worth it. Contrast normalisation did not help.
+
+**Fine-tuning Mercury's detector** (converted to PyTorch without loss, 1.8 M parameters; teacher = the detector on a tile centred on a tracked hand; the student sees the same picture re-rendered with the hand carried to a random place of the field as a 70-degree tile, with blur, noise, gamma and contrast changes; negatives = tiles of hand-free pictures and, in the second try, tiles far from the hand; trained on 17 and 20 Nov only):
+
+| picture-level, held-out 22 Nov (184 plainly visible, 72 hand-free pictures) | found | falsely detected |
+|---|---|---|
+| original, nine tiles, 0.5 | 68 % | 22 % |
+| fine-tune 2, nine tiles, 0.97 | 90 % | 22 % |
+| original, whole picture, 0.5 | 17 % | 1 % |
+| fine-tune 1, whole picture, 0.5 | 39 % | 4 % |
+
+At the very low false rates the original reaches with a high threshold (29 % found at 1 %), the fine-tunes cannot follow: their tile-mode false rate stays at 22 % or more.
+
+**In the tracker** (same tracker, only the detector's ONNX replaced; plainly there / reported where none; left, right):
+- 22 Nov (held out): original 88/10 and 82/0; fine-tune 2 93/13 and 90/0 (better).
+- 23 Nov (held out): original 98/14 and 96/0; fine-tune 2 97/53 and 99/32; fine-tune 1 97/1 and 98/36. **Phantoms** (23 Nov has a long hand-free stretch with a jug and a dark blob that the training data did not contain).
+So it is **not adopted**: availability goes up, but hand-free scenes not in the training data produce false hands. The remedy is data, not thresholds: hand-free scans from many rooms (the Hand-free scan mode) and more labelled peripheral hands. A third run with 22 Nov added to the training set, tested on 23 Nov, is the test of that.
