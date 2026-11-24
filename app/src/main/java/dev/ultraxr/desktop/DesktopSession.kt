@@ -109,10 +109,10 @@ class DesktopSession(private val activity: Activity) {
     /**
      * The immersive apps on this phone (OpenXR apps, converted Quest games: the user's own games among them) stand on the shelf with the
      * WebXR games, so that they are in view, not behind "All apps". They are started the way "All apps" starts them ([onLaunchNative]).
-     * The WebXR browser is not one of them: it has its mark already.
+     * The WebXR browser is not one of them (it has its mark already), nor are the runtimes' sample apps (Khronos's hello_xr, Unity's examples): they stay in "All apps".
      */
     private fun installedXrGames(): List<HomeItem> = try {
-        dev.ultraxr.xr.XrRuntime.installedApps(activity).filter { !it.activityInfo.packageName.startsWith("com.igalia.wolvic") }.mapIndexed { i, ri ->
+        dev.ultraxr.xr.XrRuntime.installedApps(activity).filter { val n = it.activityInfo.packageName; !n.startsWith("com.igalia.wolvic") && !n.startsWith("org.khronos.") && !n.startsWith("com.unity.example.") && !n.startsWith("dev.ultraxr.") }.mapIndexed { i, ri ->
             HomeItem(ri.loadLabel(activity.packageManager).toString(), HomeItem.Kind.GAME, "app://" + ri.activityInfo.packageName + "/" + ri.activityInfo.name, TINTS[(i + 3) % TINTS.size])
         }
     } catch (_: Exception) { emptyList() }
