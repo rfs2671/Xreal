@@ -84,8 +84,7 @@ class HandLabEvalTest {
                     for (q in pts) { val d = doubleArrayOf(q[0] - m[0], q[1] - m[1], q[2] - m[2]); val a = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2]; along += a * a; total += d[0] * d[0] + d[1] * d[1] + d[2] * d[2] }
                     sumAlong += along / pts.size; sumAcross += (total - along) / pts.size; n++; windows++
                 }
-                if (n > 0) out.append("still hand, ").append(if (side == 1) "right " else "left ").append(nm).append(": ").append(windows).append(" windows, jitter RMS ").append("%.2f".format(Math.sqrt(sumAlong / n) * 1000)).append(" mm along the line of sight, ").append("%.2f".format(Math.sqrt(sumAcross / n / 2) * 1000)).append(" mm across (each way)
-")
+                if (n > 0) out.append("still hand, ").append(if (side == 1) "right " else "left ").append(nm).append(": ").append(windows).append(" windows, jitter RMS ").append("%.2f".format(Math.sqrt(sumAlong / n) * 1000)).append(" mm along the line of sight, ").append("%.2f".format(Math.sqrt(sumAcross / n / 2) * 1000)).append(" mm across (each way)\n")
             }
         }
         File("C:/uvio/handup/lab_eval_out.txt").writeText(out.toString())
