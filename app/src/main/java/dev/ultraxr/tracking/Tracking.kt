@@ -437,6 +437,7 @@ object Tracking : GlassesLink.Listener {
                     testBlind = lines.firstOrNull { it.startsWith("test_blind=") }?.substringAfter('=')?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }?.takeIf { it.size == 2 }?.toDoubleArray()
                     testLight = lines.firstOrNull { it.startsWith("test_light=") }?.substringAfter('=')?.trim()?.toDoubleOrNull() ?: 1.0
                     testNoise = lines.firstOrNull { it.startsWith("test_blind_noise=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: 0
+                    testPlane = lines.any { it.replace(" ", "") == "test_plane=1" }
                     starveOn = lines.none { it.replace(" ", "") == "starve=0" }
                     head.glideOn = lines.none { it.replace(" ", "") == "glide=0" }
                     headBlend = lines.none { it.replace(" ", "") == "carry=0" }; headSpeedShare = lines.firstOrNull { it.startsWith("carry_speed=") }?.substringAfter('=')?.trim()?.toDoubleOrNull()?.coerceIn(0.02, 1.0) ?: 1.0
@@ -583,7 +584,26 @@ object Tracking : GlassesLink.Listener {
         notifyObservers()
     }
 
+    //   test_plane=1         from 20 s of the recording the motion sensor reads as in an aircraft cabin, which the cameras see
+    //                        standing still: 20 to 50 s a take-off run (2.5 m/s2 forward), 50 to 80 s rough air (1 m/s2 rms up
+    //                        and down, 0.5 sideways, 0.7 to 3.3 Hz), 80 to 110 s a turn (2 degrees a second), then rough air and a turn at once
+    @Volatile private var testPlane = false
+    private fun planeImu(gyro: FloatArray, accel: FloatArray) {
+        val t = link?.replaySeconds ?: return
+        if (t < 20.0) return
+        var ax = 0.0; var ay = 0.0; var az = 0.0; var yaw = 0.0
+        if (t < 50.0) ax = 2.5 * minOf(1.0, (t - 20.0) / 3.0, (50.0 - t) / 3.0)
+        if (t in 50.0..80.0 || t > 110.0) {
+            az = 0.8 * Math.sin(2 * Math.PI * 0.7 * t) + 0.9 * Math.sin(2 * Math.PI * 1.9 * t + 1.0) + 0.7 * Math.sin(2 * Math.PI * 3.3 * t + 2.0)
+            ay = 0.5 * Math.sin(2 * Math.PI * 1.1 * t + 0.5) + 0.5 * Math.sin(2 * Math.PI * 2.3 * t)
+        }
+        if (t in 80.0..110.0 || t > 110.0) yaw = Math.toRadians(2.0)
+        val a = head.worldToImu(doubleArrayOf(ax, ay, az)); val w = head.worldToImu(doubleArrayOf(0.0, 0.0, yaw))
+        for (i in 0..2) { accel[i] += a[i].toFloat(); gyro[i] += w[i].toFloat() }
+    }
+
     override fun onImu(tNs: Long, gyro: FloatArray, accel: FloatArray) {
+        if (testPlane) planeImu(gyro, accel)
         head.onImu(tNs, gyro, accel)
         stillness.onImu(tNs, gyro, accel)
         trace.onImu(gyro, accel)
@@ -970,6 +990,8 @@ object Tracking : GlassesLink.Listener {
         val rig = slamRig; val f = mapFile()
         if (!roomMapOn || rig == null || f == null || !settings.roomScan) return@synchronized
         if (fresh) { mapFreshCount++; try { File(f.parentFile, "kept_places.txt").delete() } catch (_: Exception) {} }
+        // which map this is: places kept in another map's coordinates mean nothing in this one
+        try { val idf = File(f.parentFile, "room_map.id"); if (fresh || !idf.isFile) idf.writeText(System.currentTimeMillis().toString()); mapId = idf.readText().trim().toLongOrNull() ?: 0L } catch (_: Exception) { mapId = 0L }
         if (fresh && f.isFile) f.delete()
         synchronized(roomMemory) {
             roomMemory.clear(); roomMemorySaid = false
@@ -1010,6 +1032,8 @@ object Tracking : GlassesLink.Listener {
 
     /** Counts the maps begun afresh in this run of the app: what was held in an older map's coordinates is void after a change. */
     @Volatile var mapFreshCount = 0; private set
+    /** Tells one saved room map from another (a new number each time a map is begun afresh). */
+    @Volatile var mapId = 0L; private set
     /** A place kept in the saved map's coordinates under [name] (x, y, z), for things that are to be where they were left after the app is started again. */
     fun keptPlace(name: String): DoubleArray? = try {
         File(appContext?.getExternalFilesDir(null), "kept_places.txt").takeIf { it.isFile }?.readLines()?.firstOrNull { it.startsWith("$name ") }?.split(" ")?.drop(1)?.mapNotNull { it.toDoubleOrNull() }?.takeIf { it.size == 3 }?.toDoubleArray()

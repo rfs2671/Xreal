@@ -739,6 +739,16 @@ class DesktopSession(private val activity: Activity) {
             // goes back there; from then on each window's place in the map is kept up to date, and saved.
             val am = Tracking.appFromMap(); val mv = Tracking.mapVersion
             if (am != null) {
+                // Windows keep their places in the saved map's coordinates. In another map (the room was not recognised and
+                // was scanned afresh, as in any new place) those places mean nothing: without this the windows were
+                // "put back" at them, wherever that fell. They stay where they are now and are kept in the new map from here.
+                val id = Tracking.mapId
+                if (id != 0L && id != prefs.getLong("layout_map_id", 0L)) {
+                    var n = 0
+                    for (w in desktop.windows) if (w.map != null) { w.map = null; n++ }
+                    prefs.edit().putLong("layout_map_id", id).apply(); placeFromMap = false; mapSeen = mv
+                    if (n > 0) Tracking.log("desktop: this is another room map; $n windows stay where they are and are kept in it from now on")
+                }
                 if (mv != mapSeen) { placeFromMap = placeFromMap || mapSeen == 0; mapSeen = mv }
                 if (placeFromMap) {
                     var n = 0

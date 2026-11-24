@@ -46,6 +46,7 @@ RUNS = {
     # upstream's rules (no tiles, a hand dropped as soon as one camera is unsure) against the library as it now is, each twice
     "h_up":  ("", "tiles=0" + chr(10) + "keep=0" + chr(10)), "h_upb": ("", "tiles=0" + chr(10) + "keep=0" + chr(10)),
     "h_now": ("", ""), "h_nowb": ("", ""),
+    "p_room": ("", "", ""), "p_roomb": ("", "", ""), "p_plane": ("test_plane=1" + chr(10), "", ""), "p_planeb": ("test_plane=1" + chr(10), "", ""), "p_plane0": ("test_plane=1" + chr(10) + "carry=0" + chr(10), "", ""),
     "m_off": ("", ""), "m_offb": ("", ""), "m_mesh": ("room_mesh=1" + chr(10), ""), "m_meshb": ("room_mesh=1" + chr(10), ""),
     "h_nover": ("", "verify=0" + chr(10)), "h_noverb": ("", "verify=0" + chr(10)), "h_ver": ("", "verify=1" + chr(10)), "h_verb": ("", "verify=1" + chr(10)),
     # the head given to the renderer with and without the glide between states (TAG-render.csv)
