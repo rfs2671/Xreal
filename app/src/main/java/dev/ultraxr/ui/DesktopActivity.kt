@@ -156,6 +156,8 @@ class DesktopActivity : Activity() {
         if (intent.getIntExtra("home_page", 0) != 0) window.decorView.postDelayed({ session.showHomePage(intent.getIntExtra("home_page", 0)) }, 2000)
         // "--es open_app package" (through the launcher): that app in a window, for a test without hands on the phone
         intent.getStringExtra("open_app")?.let { pkg -> window.decorView.postDelayed({ dev.ultraxr.shell.AppShell.componentOf(this, pkg)?.let { session.openApp(pkg.substringAfterLast('.'), it) } ?: Tracking.log("apps: $pkg is not installed") }, 4000) }
+        // "--es xr_app package" (debug builds, through the launcher): an immersive app is started as the shelf starts it, for a test without hands on the phone
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) intent.getStringExtra("xr_app")?.let { pkg -> window.decorView.postDelayed({ session.onLaunchNative?.invoke(pkg) }, 5000) }
         // Windows from last time are where they were left (docs/INTERFACE.md: things stay where they are put).
         // A mark of the shelf on the main screen was tapped: that app opens as soon as this screen is up. (A moment
         // later, so that the helper that runs Android apps in windows has had time to answer.)
