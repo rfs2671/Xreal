@@ -2040,12 +2040,12 @@ callback_process_unsafe(HandTracking *hgt,
 		{
 			static const bool gate_trace = std::getenv("ULTRA_HANDS_GATE_TRACE") != nullptr;
 			if (gate_trace && (hgt->this_frame_hand_detected[hand_idx] || hgt->last_frame_hand_detected[hand_idx])) {
-				fprintf(stderr, "GATE %.3f %d det=%d tracked=%d settled=%d both=%d roi0=%d,%.0f,%.0f roi1=%d,%.0f,%.0f err=%.3f mxy=%.3f,%.3f size=%.3f\n", (double)hgt->current_frame_timestamp / 1e9, hand_idx,
+				fprintf(stderr, "GATE %.3f %d det=%d tracked=%d settled=%d both=%d roi0=%d,%.0f,%.0f roi1=%d,%.0f,%.0f err=%.3f mxy=%.3f,%.3f size=%.3f ish=%.3f,%.3f\n", (double)hgt->current_frame_timestamp / 1e9, hand_idx,
 				        (int)hgt->this_frame_hand_detected[hand_idx], (int)hgt->hand_tracked_for_num_frames[hand_idx],
 				        (int)ultra_settled[hand_idx], (int)hgt->ultra_both_views_seen[hand_idx],
 				        (int)hgt->views[0].regions_of_interest_this_frame[hand_idx].found, (double)hgt->views[0].regions_of_interest_this_frame[hand_idx].center_px.x, (double)hgt->views[0].regions_of_interest_this_frame[hand_idx].center_px.y,
 				        (int)hgt->views[1].regions_of_interest_this_frame[hand_idx].found, (double)hgt->views[1].regions_of_interest_this_frame[hand_idx].center_px.x, (double)hgt->views[1].regions_of_interest_this_frame[hand_idx].center_px.y,
-				        (double)ultra_feat[hand_idx][0], (double)ultra_feat[hand_idx][1], (double)ultra_feat[hand_idx][2], (double)ultra_feat[hand_idx][3]);
+				        (double)ultra_feat[hand_idx][0], (double)ultra_feat[hand_idx][1], (double)ultra_feat[hand_idx][2], (double)ultra_feat[hand_idx][3], (double)hgt->views[0].ultra_is_hand[hand_idx], (double)hgt->views[1].ultra_is_hand[hand_idx]);
 			}
 		}
 		if (hgt->hand_tracked_for_num_frames[hand_idx] < (ultra_recalled[hand_idx] ? std::min<uint64_t>(2, hgt->tuneable_values.num_frames_before_display) : hgt->tuneable_values.num_frames_before_display) ||
