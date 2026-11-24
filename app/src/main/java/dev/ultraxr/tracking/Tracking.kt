@@ -348,6 +348,8 @@ object Tracking : GlassesLink.Listener {
                 try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
                 holdWhenStill = lines.none { it.replace(" ", "") == "hold_when_still=0" }
                 roomHandSlow = lines.none { it.replace(" ", "") == "room_hand_slow=0" }
+                roomPriority = lines.firstOrNull { it.startsWith("room_priority=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: ROOM_PRIORITY
+                handPriority = lines.firstOrNull { it.startsWith("hand_priority=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: HAND_PRIORITY
                 denseWalls = lines.none { it.replace(" ", "") == "dense_walls=0" }
                 val changed = ArrayList<String>()
                 if (lines.isNotEmpty()) {
@@ -495,7 +497,10 @@ object Tracking : GlassesLink.Listener {
             if (calib.isNotEmpty()) calibFile.writeText(calib) else app.assets.open("calibration/mercury_calib.json").use { i -> calibFile.outputStream().use { o -> i.copyTo(o) } }
             // The library's own threads are started here and stay on the cores this thread is on while it starts them.
             val cores = if (handOptions.fastCores) try { Native.fastCores(true) } catch (_: Throwable) { 0 } else 0
-            val h = try { Native.handsCreate(calibFile.absolutePath, dir.absolutePath, 2) } finally { if (cores != 0) try { Native.fastCores(false) } catch (_: Throwable) {} }
+            // the tracker's own threads are born with the priority of this one
+            val oldPrio = try { android.os.Process.getThreadPriority(0) } catch (_: Throwable) { 0 }
+            if (handPriority != HAND_PRIORITY) try { android.os.Process.setThreadPriority(handPriority) } catch (_: Throwable) {}
+            val h = try { Native.handsCreate(calibFile.absolutePath, dir.absolutePath, 2) } finally { if (cores != 0) try { Native.fastCores(false) } catch (_: Throwable) {}; try { android.os.Process.setThreadPriority(oldPrio) } catch (_: Throwable) {} }
             handCores = cores
             log(if (cores != 0) "hand tracking on the fast cores (mask " + Integer.toBinaryString(cores) + ")" else "hand tracking on any core")
             if (h == 0L) { handsError = Native.lastError(); log("hand tracking init failed: $handsError") }
@@ -1101,6 +1106,7 @@ object Tracking : GlassesLink.Listener {
      *  estimator's waits to be joined on, what the map says is read here too; otherwise the pictures are only handed
      *  over, and the room's loop reads the answers as it always did (it moves the room, which is its own to move). */
     private fun mapSearchLoop() {
+        try { android.os.Process.setThreadPriority(roomPriority) } catch (_: Throwable) {}
         val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)
         while (running) {
             var p: DoubleArray; var q: DoubleArray; var t: Long; var restoring: Boolean
@@ -1386,6 +1392,7 @@ object Tracking : GlassesLink.Listener {
 
     /** Places what one picture pair shows in the room model, and looks the model over for the floor and surfaces. */
     private fun roomLoop() {
+        try { android.os.Process.setThreadPriority(roomPriority) } catch (_: Throwable) {}
         val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)
         val pts = FloatArray(3 * 300); val world = FloatArray(3 * 300)
         var finder: dev.ultraxr.core.StereoPoints? = null; var finderRig: dev.ultraxr.core.StereoRig? = null
@@ -1569,10 +1576,19 @@ object Tracking : GlassesLink.Listener {
     private const val ROOM_MAX_RANGE_M = 4.5
 
     private const val WORK_PRIORITY = 0
+    /**
+     * Who gets the processors first (Android thread priorities, lower is more urgent): the estimator's threads at -8 (native.thread_nice), the cameras' reader at -16,
+     * the hands (and the hand tracker's own worker threads, which are born with the priority of the thread that makes it) at [HAND_PRIORITY],
+     * the room's depth and the place search, which can wait a moment, at [ROOM_PRIORITY]. room_priority= and hand_priority= in vio_options.txt.
+     */
+    private const val ROOM_PRIORITY = 0
+    private const val HAND_PRIORITY = 0
+    @Volatile private var roomPriority = ROOM_PRIORITY
+    @Volatile private var handPriority = HAND_PRIORITY
     @Volatile private var workPriority = WORK_PRIORITY
     @Volatile private var handCores = 0
     private fun handsLoop() {
-        try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
+        try { android.os.Process.setThreadPriority(if (handPriority != HAND_PRIORITY) handPriority else workPriority) } catch (_: Throwable) {}
         var pinned = 0
         val l = ByteArray(480 * 640); val r = ByteArray(480 * 640)
         val out = FloatArray(2 * Hand.JOINTS * 3)

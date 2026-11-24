@@ -166,6 +166,9 @@ RUNS = {
     # 24 November 2026: the tracker on the big cores or not, on the worn session of 23 November, through the whole app
     # what the room work takes from the hand tracker: the same session with the room map, its dense depth and its mesh off
     "h_room": ("", "", ""), "h_roomb": ("", "", ""), "h_roomold": ("room_hand_slow=0" + chr(10), "", ""), "h_roomoldb": ("room_hand_slow=0" + chr(10), "", ""),
+    # who gets the processors first (24 November 2026)
+    "s_base": ("", "", ""), "s_baseb": ("", "", ""), "s_room": ("room_priority=10" + chr(10), "", ""), "s_roomb": ("room_priority=10" + chr(10), "", ""),
+    "s_both": ("room_priority=10" + chr(10) + "hand_priority=-4" + chr(10), "", ""), "s_bothb": ("room_priority=10" + chr(10) + "hand_priority=-4" + chr(10), "", ""),
     "r_off": ("room_map=off" + chr(10) + "dense_walls=0" + chr(10) + "room_mesh=0" + chr(10), "", ""), "r_offb": ("room_map=off" + chr(10) + "dense_walls=0" + chr(10) + "room_mesh=0" + chr(10), "", ""),
     "f_any": ("", "fast_cores=0" + chr(10), ""), "f_anyb": ("", "fast_cores=0" + chr(10), ""), "f_fast": ("", "fast_cores=1" + chr(10), ""), "f_fastb": ("", "fast_cores=1" + chr(10), ""),
     # how a hand begins: the way from 22 November (the default) against the way of before

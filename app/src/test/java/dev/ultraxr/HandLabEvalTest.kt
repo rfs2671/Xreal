@@ -62,6 +62,32 @@ class HandLabEvalTest {
             }
             out.append("eye ").append(eye).append(" ray from ").append(listOf("fingertips' middle", "index tip", "knuckles", "half way")[from]).append(": n=").append(errs.size).append(" median ").append("%.2f".format(pct(errs, 0.5))).append(" deg, P90 ").append("%.2f".format(pct(errs, 0.9))).append(", P99 ").append("%.2f".format(pct(errs, 0.99))).append(", within 3 deg ").append("%.0f".format(100.0 * errs.count { it <= 3.0 } / maxOf(1, errs.size))).append(" %\n")
         }
+        // the hold-still cues: how much each joint shakes along the line of sight and across it, with a hand that was asked to be still
+        run {
+            val stills = File("$dir-cues.csv").readLines().drop(1).map { it.split(',') }.filter { it[2] == "STILL" }.map { it[4].toDouble() to it[5].toDouble() }
+            val names = listOf("palm (middle knuckle)" to 9, "wrist" to 0, "thumb tip" to 4, "index tip" to 8, "middle tip" to 12)
+            for ((nm, j) in names) for (side in 0..1) {
+                var sumAlong = 0.0; var sumAcross = 0.0; var n = 0; var windows = 0
+                for ((at, win) in stills) {
+                    val seg = results.filter { it.side == side && it.t in (at + 2.0)..(at + win - 0.5) }
+                    if (seg.size < 12) continue
+                    // a detrended deviation of each coordinate, in the head's frame at the middle of the window
+                    var h = java.util.Collections.binarySearch(ht, at + win / 2); if (h < 0) h = -h - 1; h = h.coerceIn(0, ht.size - 1)
+                    val wr = seg.map { doubleArrayOf(it.joints[3 * 0].toDouble(), it.joints[1].toDouble(), it.joints[2].toDouble()) }
+                    val mean = DoubleArray(3) { c -> wr.map { it[c] }.average() }
+                    val ax = doubleArrayOf(mean[0] - hp[h][0], mean[1] - hp[h][1], mean[2] - hp[h][2]); val dist = Math.sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2])
+                    if (dist < 0.2 || dist > 0.8) continue
+                    for (c in 0..2) ax[c] /= dist
+                    val pts = seg.map { r -> doubleArrayOf(r.joints[3 * j].toDouble(), r.joints[3 * j + 1].toDouble(), r.joints[3 * j + 2].toDouble()) }
+                    val m = DoubleArray(3) { c -> pts.map { it[c] }.average() }
+                    var along = 0.0; var total = 0.0
+                    for (q in pts) { val d = doubleArrayOf(q[0] - m[0], q[1] - m[1], q[2] - m[2]); val a = d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2]; along += a * a; total += d[0] * d[0] + d[1] * d[1] + d[2] * d[2] }
+                    sumAlong += along / pts.size; sumAcross += (total - along) / pts.size; n++; windows++
+                }
+                if (n > 0) out.append("still hand, ").append(if (side == 1) "right " else "left ").append(nm).append(": ").append(windows).append(" windows, jitter RMS ").append("%.2f".format(Math.sqrt(sumAlong / n) * 1000)).append(" mm along the line of sight, ").append("%.2f".format(Math.sqrt(sumAcross / n / 2) * 1000)).append(" mm across (each way)
+")
+            }
+        }
         File("C:/uvio/handup/lab_eval_out.txt").writeText(out.toString())
     }
 }

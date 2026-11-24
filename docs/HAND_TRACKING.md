@@ -674,3 +674,49 @@ room's depth work running as well, the same tracker takes 36 to 44 ms with a han
 - Personal hand size, per-joint confidence, hidden fingers: not built. Mercury fits one kinematic hand with a hand-size parameter that it refines in its first 100 frames, and reports no confidence; a confidence from reprojection error needs a change inside the fit.
 - Chest-height detection, exposure, motion blur: not investigated beyond 20 November's findings.
 - Nothing in this section has been worn.
+
+## Third phase, 24 November 2026: the Hexagon, batching, where the fingertip noise comes from, who gets the processors
+
+### Qualcomm QNN / Hexagon (HTP): blocked on the SDK, with everything else ready
+
+- ONNX Runtime's page says its QNN provider "has been built and tested with QNN 2.22.x and Qualcomm SC8280, SM8350, Snapdragon X" (SM8350 is this phone's Snapdragon 888).
+  Microsoft's Android package (`com.microsoft.onnxruntime:onnxruntime-android-qnn:1.29.0`, 9.4 MB, Maven Central) contains ONNX Runtime with the provider **and none of Qualcomm's libraries**
+  (it was downloaded and unpacked: `libonnxruntime.so` 24 MB and its JNI library only).
+- The phone has Samsung's own SNPE and a v68 DSP skeleton for it in `/vendor` (`libSNPE.so`, `libsnpe_dsp_v68_domains_v3_skel.so`, `libQnnHtpAltPrepStub.so`), not the libraries the provider loads, and an app may not load them.
+- **Tested on the phone** (`native/hands/test/qnn_bench.c`, built with the NDK against that package): the provider is created, then `QNN SetupBackend failed ... Unable to load backend, error: dlopen failed: library "libQnnHtp.so" not found`
+  (in the Android log, tag `onnxruntime`; **nothing on stderr and no error from the call**), and the model then **runs silently on the CPU** (7.5 ms for the float keypoint model, 5.2 ms for the INT8 one: the CPU's own times).
+  So any benchmark of it must read the Android log for `SetupBackend failed`; `tools/tracking/hand_upgrade/run_qnn.sh` does.
+- What is needed from the owner (Qualcomm requires a login and an accepted licence; not something to do for them):
+  1. Qualcomm AI Runtime SDK (QAIRT / "Qualcomm AI Engine Direct"): https://qpm.qualcomm.com/#/main/tools/details/Qualcomm_AI_Runtime_SDK (the link ONNX Runtime's page gives; also https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk). Neither page could be read by the tools here, so the exact steps are not confirmed.
+  2. From its `lib/aarch64-android/`: `libQnnHtp.so`, `libQnnHtpV68Stub.so`, `libQnnSystem.so`, `libQnnHtpPrepare.so`; from `lib/hexagon-v68/unsigned/`: `libQnnHtpV68Skel.so` (file names and places from the SDK's usual layout, not read from their page). Copy the five to `C:\uvio\qnn\sdk\`.
+  3. `bash C:\uvio\qnn\kit\run_qnn.sh`. It pushes everything, runs both models on the CPU, on the HTP as float with fp16 compute, as 8-bit and as 16-bit activations, and prints each time with the provider's own account of whether it took the graph.
+  Which SDK version matches ONNX Runtime 1.29 is not stated (the page says 2.22.x; the provider's own log mentions QNN API 2.32 and later). Try the newest first.
+  Redistribution of those libraries inside this app: the licence has not been read; do not ship them until it has.
+- The Hexagon v68 runs integer graphs: a float model needs quantising. 8-bit activations lose too much on these models (the keypoint heat map's peak moves 0.7 to 2.9 cells); **16-bit activations with 8-bit weights**
+  (supported by the provider) keep the peak within 0.28 cells on average (P95 1.4) and the detector's verdicts the same in 246 of 248 slots, on 600 real inputs. Those models are in the kit (`q_a16`).
+
+### Batching the four landmark jobs (ONNX Runtime XNNPACK, quiet phone)
+
+A batch-of-four keypoint model (symbolic batch dimension; its answers equal four single runs to 3e-7) takes 14.9 ms with 2 threads and 10.8 ms with 4, against 3.8 and 2.6 ms for one: **linear, no saving on the CPU**
+(two samples: 7.4 and 5.1 ms). Batching would pay on an accelerator that has a dispatch cost; not on this one. Not taken.
+
+### Where the fingertip noise comes from (what could and could not be shown)
+
+- Mercury already weights each landmark by its own confidence (`confidence_xy` scales the 2D residual; `confidence_depth` cubed scales the relative depth), fits one hand size and reports a reprojection error, so
+  "Mercury has no confidence" was wrong: it has them inside the tracker and does not export them. (Not changed.)
+- Stereo geometry: at 40 cm, with the cameras' 240 px focal length and 137 mm baseline, one pixel of disparity is about 4.9 mm of depth, so a landmark that moves by one pixel moves the fingertip about 5 mm along the line of sight. The palm,
+  whose landmarks are many and agree, shakes 3 to 5 mm across and 9 mm along the line of sight in the recordings; the fingertips, which have one landmark each, 14 to 26 mm across and 37 mm along. (That is on windows in which the **palm** was still;
+  the fingers in them may really have moved, so these are upper bounds. The lab's hold-still cues give the clean figure, and `HandLabEvalTest` now splits it along and across the line of sight for the palm, wrist, thumb, index and middle fingertips.)
+  The depth axis being worse than the others by 1.5 to 2 is what the geometry predicts; the lateral part is the landmark network's.
+- Not attempted: a change in the fit (confidence-propagated uncertainty, anatomical priors beyond Mercury's kinematic model, a persisted hand size), because without a clean still-hand figure there is nothing to measure it against.
+
+### Who gets the processors (thread priorities)
+
+`room_priority=` and `hand_priority=` in `vio_options.txt` (Android thread priority; the room's depth and the place search, and the hand thread and the hand tracker's own worker threads). Default 0: nothing changed. Six replays of the worn session to compare
+(`s_base`, `s_room` 10, `s_both` room 10 hand -4) **did not complete**: Samsung's app freezer (`FreecessController`, in the log: "disable frozen app (dev.ultraxr) wakelock", `PARTIAL_WAKE_LOCK 'ultraxr:replay' DISABLED`) froze the app at
+121 s of the first run with the screen off. Keeping the screen on for the duration would avoid it; not done (a phone setting).
+
+### Not done
+
+Hybrid optical-flow and neural tracking, confidence-driven detection frequency, a rewritten fit, a TensorFlow Lite GPU delegate (it needs the model converted with TensorFlow, and shares the Adreno with the glasses' picture), a freshness rule based on confidence rather than age (the tracker's
+confidences are not exported), measured pinch-to-picture latency, 30-minute stability, and everything the hand lab is for.
