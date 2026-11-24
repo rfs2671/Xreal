@@ -26,7 +26,9 @@ import kotlin.math.sqrt
  * The ray of a still hand: 0.59 degrees RMS before, 0.62 now. (Which way the wearer meant to point was not recorded;
  * this measures how much a click moves the ray, not where it should be.)
  */
-class ArmRay(private val right: Boolean) {
+class ArmRay(private val right: Boolean, private val latchS: Double = LATCH_S, private val adaptive: Boolean = true,
+             /** 0: the ray starts at the estimated shoulder; 1: at the eye (along the line the wearer sees the fingers on); between: in between. For measuring against the hand lab's targets. */
+             private val eye: Double = 0.0) {
     private val f = DoubleArray(3); private var haveF = false; private var lastNs = 0L; private var turnRate = 0.0
     private val histNs = LongArray(HIST); private val hist = Array(HIST) { DoubleArray(3) }; private var histN = 0; private var histHead = 0
     private var wasPressed = false
@@ -39,7 +41,7 @@ class ArmRay(private val right: Boolean) {
         if (fl < 0.2) { fw = Q.rotate(headQ, doubleArrayOf(0.0, 1.0, 0.0)); fl = sqrt(fw[0] * fw[0] + fw[2] * fw[2]) }      // looking straight down or up: the top of the head says where forward is
         if (fl < 1e-3) return null
         val fx = fw[0] / fl; val fz = fw[2] / fl; val sd = if (right) 0.17 else -0.17
-        val sx = headP[0] + -fz * sd - fx * 0.06; val sy = headP[1] - 0.22; val sz = headP[2] + fx * sd - fz * 0.06
+        val sx = headP[0] + (-fz * sd - fx * 0.06) * (1 - eye); val sy = headP[1] - 0.22 * (1 - eye); val sz = headP[2] + (fx * sd - fz * 0.06) * (1 - eye)
         var dx = origin[0] - sx; var dy = origin[1] - sy; var dz = origin[2] - sz
         val dl = sqrt(dx * dx + dy * dy + dz * dz); if (dl < 0.05) return null
         dx /= dl; dy /= dl; dz /= dl
@@ -59,7 +61,12 @@ class ArmRay(private val right: Boolean) {
         histNs[histHead] = nowNs; hist[histHead][0] = f[0]; hist[histHead][1] = f[1]; hist[histHead][2] = f[2]; histHead = (histHead + 1) % HIST; if (histN < HIST) histN++
         if (pinching && !wasPressed) {
             var pick = -1
-            for (i in 0 until histN) { val k = ((histHead - 1 - i) % HIST + HIST) % HIST; if (nowNs - histNs[k] >= LATCH_NS) { pick = k; break } }
+            // how fast the ray is turning just now: over the last 60 ms or so
+            var speed = 0.0
+            if (adaptive) for (i in 0 until histN) { val k = ((histHead - 1 - i) % HIST + HIST) % HIST; if (nowNs - histNs[k] >= 60_000_000L) { val dtp = (nowNs - histNs[k]) * 1e-9; speed = acos((f[0] * hist[k][0] + f[1] * hist[k][1] + f[2] * hist[k][2]).coerceIn(-1.0, 1.0)) / dtp; break } }
+            val back = if (adaptive) latchS / (1.0 + (speed / FAST_RAD_S) * (speed / FAST_RAD_S)) else latchS
+            val backNs = (back * 1e9).toLong()
+            for (i in 0 until histN) { val k = ((histHead - 1 - i) % HIST + HIST) % HIST; if (nowNs - histNs[k] >= backNs) { pick = k; break } }
             if (pick < 0) pick = ((histHead - histN) % HIST + HIST) % HIST
             for (c in 0..2) { anchor[c] = hist[pick][c]; live0[c] = f[c] }
             latched = true
@@ -81,6 +88,8 @@ class ArmRay(private val right: Boolean) {
     companion object {
         const val MIN_HZ = 2.0; const val BETA = 6.0
         const val LATCH_S = 0.12; const val LATCH_NS = 120_000_000L; const val DEAD_RAD = 0.04
+        /** Turning faster than this (about 46 degrees a second) shortens the look-back: the hand is going somewhere, not just closing. */
+        const val FAST_RAD_S = 0.8
         private const val HIST = 64
     }
 }

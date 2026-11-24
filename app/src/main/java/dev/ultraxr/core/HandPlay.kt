@@ -4,7 +4,7 @@ package dev.ultraxr.core
 import kotlin.math.sqrt
 
 /** One hand as these things need it: where its pinch is, whether it pinches, and where it points ([rayDir] null: not known). */
-class HandProbe(val isRight: Boolean, val pinchPoint: DoubleArray, val pinching: Boolean, val rayOrigin: DoubleArray, val rayDir: DoubleArray?)
+class HandProbe(val isRight: Boolean, val pinchPoint: DoubleArray, val pinching: Boolean, val rayOrigin: DoubleArray, val rayDir: DoubleArray?, val tNs: Long = 0L)
 
 private fun dist(a: DoubleArray, b: DoubleArray) = sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))
 

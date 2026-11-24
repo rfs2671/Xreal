@@ -606,3 +606,71 @@ Not done, and why:
 - **Latency pinch to picture, 99 % recognition, under 0.5 % false activation:** not measured. There are 18 pinches in
   the recordings whose gap went under 22 mm and no labels for the rest.
 - **Worn:** none of it has been worn.
+
+## Second phase, 24 November 2026: the tracker profiled, what was tried, what is measured, what is not
+
+Scripts and batches: `tools/tracking/hand_upgrade/` (the paths in them are this PC's `C:\uvio\...`). Native changes:
+`native/hands/src/patches/0006-ultra-hands-profile.patch` (nothing changes unless an environment variable is set).
+
+### Where the tracker's time goes (quiet phone, every pair processed, `ultra_hands_replay`, 3100 pairs of the 22 November recording)
+
+| stage | ms a frame (mean) | ms a call | calls a frame |
+|---|---|---|---|
+| the whole frame (hand: median 27.8, P95 40.3, P99 45.0; no hand: median 9.8, P99 36.2) | 23.5 | 23.5 | 1.0 |
+| detection, wall clock | 8.5 | 10.0 | 0.85 |
+| whole-picture detector run, one view (two run at once) | 9.9 CPU | 4.6 | 2.1 |
+| of it: preparing the picture | 0.8 | 0.4 | 2.1 |
+| of it: the network | 9.0 | 4.2 | 2.1 |
+| tiles and second looks | 5.1 | 4.8 | 1.06 |
+| keypoints, wall clock | 11.9 | 11.9 | 1.0 |
+| a keypoint job (one hand in one view) | 21.2 CPU | 11.1 | 1.9 |
+| of it: crop and warp | 2.3 | 1.2 | 1.9 |
+| of it: the network | 18.8 | 9.9 | 1.9 |
+| the kinematic fit | 3.5 | 3.2 | 0.97 |
+
+So the networks are not 6 ms of 39: they are 28 CPU-ms of a 23.5 ms frame (two threads), the larger part. The 6 ms figure was each model
+alone with four threads. Detection runs in almost every frame (upstream looks for a second hand whenever it does not have both), and the
+keypoint jobs take two rounds when both hands are tracked (four jobs, two workers). In the app, with the cameras, the estimator and the
+room's depth work running as well, the same tracker takes 36 to 44 ms with a hand (P99 63 to 87): twice the quiet figure.
+
+### Tried on the phone, each against a reference run (`cmp_runs.py`: runs repeat to the bit, so a difference is the change's)
+
+| change | speed | what it did to the hands | taken? |
+|---|---|---|---|
+| INT8 models (QDQ, per-channel, percentile calibration on 600 real inputs; all convolutions, or without the first, last six and the depthwise ones) | slower: the network 6.9 ms against 4.9 (detector), 18.5 against 10 (keypoint) in the tracker; XNNPACK in ONNX Runtime does not run QDQ convolutions fast | the keypoint heat map's peak moved 0.7 to 2.9 cells (4 to 17 px of 128) | no |
+| NNAPI with the INT8 or FP16 models | 25 and 58 ms; "no device takes the model" with the CPU off | | no |
+| FP16 models on ONNX Runtime's CPU kernels | alone 25 % faster (detector 2.2 against 2.9 ms, keypoint 4.4 against 6.0, one thread); in the tracker not faster (32 to 38 against 30 to 36 ms) | the keypoints the same to 0.00 px, but 3 of 620 detector verdicts changed and the tracked hands differed: 182 more right-hand pairs, palm 200 mm off on average | no |
+| FP16 in XNNPACK | does not run on this build (`xnn_create_convolution2d_nhwc_fp16` fails) | | no |
+| XNNPACK 1 thread, or the plain kernels | 36 to 43 and 46 to 58 ms against 30 to 32 | same | no (2 is best) |
+| 3 or 4 workers instead of 2 | 38 against 36 ms (more threads than the four big cores) | same | no |
+| tracker on the four big cores (`taskset f0`) | harness: hand frames 29 against 36 ms (-19 %), P99 43 against 49; frames with no hand 23 against 15 | the same to the bit | harness only. Through the whole app on the worn session (`f_*` replays): 38.7 and 35.6 against 43.9 and 40.3 ms, P99 103 and 70 against 87 and 87, 26 gaps over 100 ms in one run against 11: not repeatably better, not adopted (as on 21 and 22 November) |
+| looking for the second hand every 3rd frame (`ULTRA_HANDS_DETECT_EVERY=3`) | hand frames -14 % | on the labelled 17 November, tracked where plainly there 89 and 86 % against 92 and 92; every 2nd frame: a right hand reported where there is none in 34 % of results | no |
+| the room's own work off | tracker 36.3 and 37.2 against 43.9 and 40.3 ms, P99 63 and 65 against 87 | | the cause of part of the slowness, see the next row |
+| the room's pictures a third as often while a hand is tracked (`room_hand_slow`, now the default) | through the app, worn session: median 35.6 against 40.2 and 39.1 ms, P95 57 against 63 and 61, P99 68 against 82 and 72 | the room's surfaces were not compared (the room file of two of the three runs was empty) | yes |
+| tiles and second looks left out while a hand is tracked (`ULTRA_HANDS_TILES_WHEN_ONE=0`) | built, not run | | no |
+
+### Built and kept
+
+- Stage timers in the tracker (`ULTRA_HANDS_PROFILE=1`), input dumping for calibration (`ULTRA_HANDS_DUMP_DIR`), worker and thread overrides for measuring.
+- The room's pictures a third as often while a hand is tracked (above).
+- A stale-result limit that follows how old results usually are (1.5 times their mean age, 110 to 200 ms; it was a flat 250 ms).
+- The ray's look-back at a pinch shortened in proportion to how fast the ray is turning (above 0.8 radians a second it falls away). In sweeping clicks (4 of
+  them) the ray at the pinch is 2.4 degrees from the live one, against 5.5 for the fixed 120 ms; median click drift 0.2 degrees, against 0.49 fixed and 1.84 before 24 November. Its 99th percentile on the same measure rose (20 against 12 degrees), which
+  measures how far the hand moved during the click, not an error.
+- Rays that can start at the index tip, the knuckles, half way, or from the eye (`HandReader(rayFrom, eye)`, `ArmRay(eye)`), for measuring; not used.
+- `xr_predict=1` (off): the OpenXR games' hands carried to the display by `HandPredictor`, fed at 125 Hz, with the runtime's own 30 ms look-ahead (which in the
+  measurement is no better than holding the last result) switched off. Not run with a hand.
+- The hand lab (`Hand lab` on the launcher; `render/LabScene`, `core/GestureLab`): about 9 minutes of cues in the glasses: 40 single pinches, 14 quick pairs, 12 holds, 16
+  two-hand pinches, 36 aimed at targets of known direction, 16 with the head turning, and 104 seconds in which no pinch is asked for (hands held still, hands waved). It scores itself (found, false, drops, result age at each
+  onset, the ray's error at each target pinch) into `files/lab/lab-<time>.json`, and writes the tracker's joints and the head's place beside it, so that the pinch rule, the ray and the prediction can be run again over exactly that session
+  (`HandLabEvalTest`, which also compares ray origins, shoulder against eye against fingertips, by their error at the targets).
+
+### Not measured, not built, or blocked
+
+- QNN and Hexagon: not tried. The Qualcomm AI Engine SDK is behind an accepted licence; INT8 through ONNX Runtime is slower on this phone and loses accuracy (above), so an NPU route needs the SDK, a better quantisation (training-aware) and a runtime other than ONNX Runtime's XNNPACK.
+  A TensorFlow Lite GPU delegate was not tried (it would share the Adreno with the glasses' picture).
+- Under 20 ms (25 ms loaded) is not reached: 28 ms median with a hand on a quiet phone, 36 ms in the app. The measured levers are worth 10 to 20 %; the rest is ONNX Runtime on the CPU.
+- Camera to action, 99 % recognition, under 0.5 % false activation, 2 mm jitter: not measured; the hand lab exists to do it and has not been worn. Fingertip jitter is the tracker's (7 to 11 mm RMS).
+- Personal hand size, per-joint confidence, hidden fingers: not built. Mercury fits one kinematic hand with a hand-size parameter that it refines in its first 100 frames, and reports no confidence; a confidence from reprojection error needs a change inside the fit.
+- Chest-height detection, exposure, motion blur: not investigated beyond 20 November's findings.
+- Nothing in this section has been worn.

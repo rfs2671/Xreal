@@ -57,13 +57,14 @@ class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Floa
     /** One tracking result. [fingerM] is the index finger's length, 0 when not known. Returns true on the moment the pinch starts. */
     fun update(gapM: Float, fingerM: Float = 0f): Boolean = step(gapM, fingerM, false)
 
-    private val nT = LongArray(3); private val nV = FloatArray(3); private var nSeen = 0; private var earlyNs = 0L
+    private val nT = LongArray(3); private val nV = FloatArray(3); private var nSeen = 0; private var earlyNs = 0L; private var ageEma = 0.0
 
     /**
      * One tracking result with its time ([tNs], the picture's) and how old it is as it is used ([ageNs]).
      *
-     *  - No pinch begins on a result older than [STALE_NS]: a click is never started from stale tracking. One that is
-     *    under way goes on and can end.
+     *  - No pinch begins on a result that is stale: older than 1.5 times the age results have just had (the mean of
+     *    the last twenty or so), but never under 110 ms or over [STALE_NS] (200 ms; it was a flat 250 ms). A click is
+     *    never started from stale tracking. One that is under way goes on and can end.
      *  - A pinch can begin on the way in, before the fingertips reach the press distance, when the gap, in finger
      *    lengths, has fallen steadily over two results by 0.30 or more, is under 0.60 and would reach 0.40 within
      *    [LEAD_S]. Measured on the owner's recordings of 23 November 2026 (18 pinches whose gap fell under 22 mm,
@@ -74,7 +75,9 @@ class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Floa
      *    and not taken: it made 6 more onsets and 5 more brief ones.
      */
     fun update(gapM: Float, fingerM: Float, tNs: Long, ageNs: Long): Boolean {
-        val stale = ageNs > STALE_NS
+        // how old results usually are just now: a result is stale when it is much older than those (1.5 times), at least 110 ms and at most 200 ms
+        ageEma = if (ageEma == 0.0) ageNs.toDouble() else ageEma * 0.95 + ageNs * 0.05
+        val stale = ageNs.toDouble() > (ageEma * 1.5).coerceIn(STALE_MIN_NS, STALE_NS.toDouble())
         val scale = if (fingerM > 0.03f) fingerM else 0.071f; val nrm = gapM / scale
         nT[nSeen % 3] = tNs; nV[nSeen % 3] = nrm; nSeen++
         val was = pinching
@@ -129,7 +132,7 @@ class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Floa
          * none of the five. Under 33 mm to start and over 46 mm to end, on single results, catches four or five of
          * the five and both of the left hand's two. In finger lengths (his index finger: 71 mm) that is 0.46 and 0.65.
          */
-        const val STALE_NS = 250_000_000L; const val CONFIRM_NS = 120_000_000L; const val LEAD_S = 0.045f
+        const val STALE_NS = 200_000_000L; const val STALE_MIN_NS = 110_000_000.0; const val CONFIRM_NS = 120_000_000L; const val LEAD_S = 0.045f
         const val PRESS_M = 0.033f
         const val RELEASE_M = 0.046f
         const val STROKE_WINDOW = 60; const val STROKE_LOOK = 12; const val STROKE_STAY = 3; const val STROKE_STEADY_M = 0.012f

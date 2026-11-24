@@ -14,10 +14,12 @@ import kotlin.math.sqrt
  * tracker, not on each drawn frame, and keeps its history while a hand is out of sight. The ray runs from the shoulder
  * through the middle of the two fingertips ([ArmRay]).
  */
-class HandReader(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchState.RELEASE_M, anticipate: Boolean = true, private val predict: Boolean = true) {
+class HandReader(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchState.RELEASE_M, anticipate: Boolean = true, private val predict: Boolean = true,
+                 /** Where the ray starts, for measuring: 0 the middle of the fingertips (shipped), 1 the index tip, 2 the knuckles (index and middle), 3 half way between 0 and 2. */
+                 private val rayFrom: Int = 0, eye: Double = 0.0) {
     private val pinch = arrayOf(PinchState(pressM, releaseM, anticipate = anticipate), PinchState(pressM, releaseM, anticipate = anticipate))
     private val predictor = arrayOf(HandPredictor(3, Hand.JOINTS), HandPredictor(3, Hand.JOINTS)); private val shift = DoubleArray(3)
-    private val arm = arrayOf(ArmRay(false), ArmRay(true))
+    private val arm = arrayOf(ArmRay(false, eye = eye), ArmRay(true, eye = eye))
     private val seenNs = LongArray(2)
     /** New tracker results read and pinches begun, for the log. */
     var results = 0L; private set
@@ -39,8 +41,14 @@ class HandReader(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchStat
             // the hand where it will be when this frame is shown: its own motion over the time since its picture and a frame
             val ahead = if (predict) predictor[side].shift((nowNs - h.timestampNs) * 1e-9 + DISPLAY_LEAD_S, shift) else false
             val pp = DoubleArray(3) { (thumb[it] + index[it]) / 2 + (if (ahead) shift[it] else 0.0) }
-            val dir = if (!rayWanted) null else arm[side].aim(headP, headQ, pp, pinch[side].pinching, nowNs)
-            out += HandProbe(h.isRight, pp, pinch[side].pinching, pp, dir)
+            val from = when (rayFrom) {
+                1 -> DoubleArray(3) { index[it] + (if (ahead) shift[it] else 0.0) }
+                2 -> { val a = h.joint(Hand.INDEX_MCP); val b = h.joint(Hand.MIDDLE_MCP); DoubleArray(3) { (a[it] + b[it]) / 2 + (if (ahead) shift[it] else 0.0) } }
+                3 -> { val a = h.joint(Hand.INDEX_MCP); val b = h.joint(Hand.MIDDLE_MCP); DoubleArray(3) { ((a[it] + b[it]) / 2 + (if (ahead) shift[it] else 0.0) + pp[it]) / 2 } }
+                else -> pp
+            }
+            val dir = if (!rayWanted) null else arm[side].aim(headP, headQ, from, pinch[side].pinching, nowNs)
+            out += HandProbe(h.isRight, pp, pinch[side].pinching, from, dir, h.timestampNs)
         }
         return out
     }

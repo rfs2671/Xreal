@@ -28,12 +28,14 @@ package dev.ultraxr.core
  *                      22 November 2026: a result with a hand 36 to 38 ms against 39 to 42, the head tracker 2 ms slower,
  *                      and no more seconds with a hand tracked: 42 and 47 of 63 against 49 and 52)
  *   predict=1          carry a moving hand forward to the time it is shown (core/HandPredictor); 0 gives the last result as it was
+ *   xr_predict=1       the OpenXR games' hands are carried to the display by core/HandPredictor, fed at 125 Hz, in place of the runtime's own
+ *                      30 ms look-ahead from the last two results (off until it has been seen worn)
  *   anticipate=1       a pinch may begin on the way in, before the fingertips reach the press distance (PinchState); 0 waits for them
  *   snap=1             while pinching, hand the application a hand whose two fingertips touch, so an
  *                      application with a tighter threshold of its own (a browser) sees the pinch too
  */
 data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean? = null, val pressM: Float = PinchState.PRESS_M, val releaseM: Float = PinchState.RELEASE_M, val snap: Boolean = true, val steady: Boolean = true, val steadyTurn: Boolean = true,
-    val tiles: Int? = null, val tilesMinConf: Float? = null, val keep: Boolean? = null, val verify: Boolean? = null, val oneView: Boolean? = null, val xnnpack: Int? = null, val fastCores: Boolean = false, val begin: Boolean? = null, val predict: Boolean = true, val anticipate: Boolean = true) {
+    val tiles: Int? = null, val tilesMinConf: Float? = null, val keep: Boolean? = null, val verify: Boolean? = null, val oneView: Boolean? = null, val xnnpack: Int? = null, val fastCores: Boolean = false, val begin: Boolean? = null, val predict: Boolean = true, val anticipate: Boolean = true, val xrPredict: Boolean = false) {
     companion object {
         fun parse(text: String?): HandOptions {
             var o = HandOptions()
@@ -47,6 +49,7 @@ data class HandOptions(val stretch: Boolean = false, val qualityFilter: Boolean?
                     "release_mm" -> v.toFloatOrNull()?.takeIf { it in 8f..90f }?.let { o.copy(releaseM = it / 1000f) } ?: o
                     "snap" -> o.copy(snap = v == "1")
                     "predict" -> o.copy(predict = v == "1")
+                    "xr_predict" -> o.copy(xrPredict = v == "1")
                     "anticipate" -> o.copy(anticipate = v == "1")
                     "steady" -> o.copy(steady = v == "1")
                     "steady_turn" -> o.copy(steadyTurn = v == "1")

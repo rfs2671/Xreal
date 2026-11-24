@@ -163,6 +163,11 @@ RUNS = {
     "q_epi10": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""), "q_epi10b": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""), "q_epi10c": ("config.optical_flow_epipolar_error=0.01" + chr(10), "", ""),
     # the hand tracker's threads kept to the fast cores (the default from 22 November) against where Android puts them
     "c_fast": ("", ""), "c_fastb": ("", ""), "c_any": ("", "fast_cores=0" + chr(10)), "c_anyb": ("", "fast_cores=0" + chr(10)),
+    # 24 November 2026: the tracker on the big cores or not, on the worn session of 23 November, through the whole app
+    # what the room work takes from the hand tracker: the same session with the room map, its dense depth and its mesh off
+    "h_room": ("", "", ""), "h_roomb": ("", "", ""), "h_roomold": ("room_hand_slow=0" + chr(10), "", ""), "h_roomoldb": ("room_hand_slow=0" + chr(10), "", ""),
+    "r_off": ("room_map=off" + chr(10) + "dense_walls=0" + chr(10) + "room_mesh=0" + chr(10), "", ""), "r_offb": ("room_map=off" + chr(10) + "dense_walls=0" + chr(10) + "room_mesh=0" + chr(10), "", ""),
+    "f_any": ("", "fast_cores=0" + chr(10), ""), "f_anyb": ("", "fast_cores=0" + chr(10), ""), "f_fast": ("", "fast_cores=1" + chr(10), ""), "f_fastb": ("", "fast_cores=1" + chr(10), ""),
     # how a hand begins: the way from 22 November (the default) against the way of before
     "b_new": ("", ""), "b_newb": ("", ""), "b_newc": ("", ""), "b_old": ("", "begin=0" + chr(10)), "b_oldb": ("", "begin=0" + chr(10)), "b_oldc": ("", "begin=0" + chr(10)),
     "q_epi15": ("config.optical_flow_epipolar_error=0.015" + chr(10), "", ""), "q_epi20": ("config.optical_flow_epipolar_error=0.02" + chr(10), "", ""),

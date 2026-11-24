@@ -40,6 +40,12 @@ extern "C" int
 ultra_hands_cfg_worker_threads(void)
 {
 	int v = g_worker_threads.load();
+	{
+		const int forced = env_int("ULTRA_HANDS_FORCE_WORKERS", 0);      // for measuring: wins over what the app asks for
+		if (forced > 0) {
+			v = forced;
+		}
+	}
 	if (v <= 0) {
 		v = env_int("ULTRA_HANDS_WORKER_THREADS", 4);
 	}
@@ -50,6 +56,12 @@ extern "C" int
 ultra_hands_cfg_ort_intra_op_threads(void)
 {
 	int v = g_ort_intra.load();
+	{
+		const int forced = env_int("ULTRA_HANDS_FORCE_ORT_THREADS", 0);
+		if (forced > 0) {
+			v = forced;
+		}
+	}
 	if (v <= 0) {
 		v = env_int("ULTRA_HANDS_ORT_INTRA_OP_THREADS", 1);
 	}

@@ -42,6 +42,8 @@ class LauncherActivity : Activity(), Tracking.Observer {
     private lateinit var appsList: LinearLayout
     private lateinit var lumenRow: ListRow
     private val home = HomeScene()
+    private val lab = dev.ultraxr.render.LabScene()
+    private var labOn = false
     private var stage: GlassesStage? = null
     private var bannerAction: (() -> Unit)? = null
     private var askedCamera = false
@@ -194,6 +196,10 @@ class LauncherActivity : Activity(), Tracking.Observer {
         pointerRow = ListRow(this).set("Touchpad in games", "", "").onTap { try { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {} }
         root.add(pointerRow)
         root.add(ListRow(this).set("Recentre", "", "Where you face now becomes straight ahead.").onTap { Tracking.recenter(); home.reanchor() })
+        root.add(ListRow(this).set("Hand lab", "", "About nine minutes of cues in the glasses (pinches, holds, still hands, waving): measures what your hands do. Tap again to leave it.").onTap {
+            labOn = !labOn
+            if (labOn) { lab.restart(); stage?.setScene(lab) } else stage?.setScene(home)
+        })
         root.add(ListRow(this).set("Settings", "", "Eye distance, the room, hand tracking and the rest.").onTap { startActivity(Intent(this, SettingsActivity::class.java)) })
         setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
     }

@@ -1,0 +1,319 @@
+From: Claude <noreply@anthropic.com>
+Subject: [PATCH] libultra_hands: stage timers (ULTRA_HANDS_PROFILE), input dumps for calibration (ULTRA_HANDS_DUMP_DIR), and two measured-and-rejected options (ULTRA_HANDS_DETECT_EVERY, ULTRA_HANDS_TILES_WHEN_ONE)
+
+Nothing changes unless one of those variables is set. See docs/HAND_TRACKING.md, 24 November 2026.
+---
+diff --git a/src/xrt/tracking/hand/mercury/hg_model.cpp b/src/xrt/tracking/hand/mercury/hg_model.cpp
+--- a/src/xrt/tracking/hand/mercury/hg_model.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_model.cpp
+@@ -28,6 +28,7 @@
+ #include <string>
+ #include <vector>
+ #include <iterator>
++#include "ultra_prof.hpp"
+ 
+ namespace xrt::tracking::hand::mercury {
+ 
+@@ -831,6 +832,8 @@
+ 	HandTracking *hgt = view->hgt;
+ 	onnx_state *state = &view->detection;
+ 	OnnxWrapper &wrap = *state->wrap;
++	ultra_prof::Scope _prof_pass(ultra_prof::DET_PASS);
++	const uint64_t _prof_t0 = ultra_prof::now();
+ 
+ 	cv::Mat &orig_data = view->run_model_on_this;
+ 
+@@ -871,8 +874,12 @@
+ 		XRT_TRACE_IDENT(model);
+ 		static_assert(ARRAY_SIZE(input_names) == ARRAY_SIZE(inputs));
+ 		static_assert(ARRAY_SIZE(output_names) == ARRAY_SIZE(output_tensors));
++		ultra_prof::dump("det", state->wraps[0].data, kDetectionInputSize * kDetectionInputSize);
++		const uint64_t _prof_t1 = ultra_prof::now();
++		if (ultra_prof::state().on) ultra_prof::add(ultra_prof::DET_PRE, _prof_t1 - _prof_t0);
+ 		ORT_SAFE(wrap, Run(wrap.session, nullptr, input_names, inputs, ARRAY_SIZE(input_names), output_names,
+ 		                   ARRAY_SIZE(output_names), output_tensors));
++		if (ultra_prof::state().on) ultra_prof::add(ultra_prof::DET_INFER, ultra_prof::now() - _prof_t1);
+ 	}
+ 
+ 	float *hand_exists = nullptr;
+@@ -1425,7 +1432,20 @@
+ 		const bool mirror_horizontal =
+ 		    xr_detector_env_flag_enabled("MERCURY_XR_DETECTOR_MIRROR_HORIZONTAL");
+ 		xr_run_hand_detection_pass(info, mirror_horizontal, info->outputs);
+-		ultra_tiles_pass(info);
++		{
++			// libultra_hands: ULTRA_HANDS_TILES_WHEN_ONE=0 leaves the tiles and second looks out of the frames in which a hand is
++			// being tracked already: they are for finding a hand low in the picture, and cost about 5 ms a frame
++			static const bool tiles_when_one = []() {
++				const char *e = std::getenv("ULTRA_HANDS_TILES_WHEN_ONE");
++				return e == nullptr || e[0] != '0';
++			}();
++			HandTracking *hg = info->view->hgt;
++			const bool one = hg->last_frame_hand_detected[0] || hg->last_frame_hand_detected[1];
++			if (tiles_when_one || !one) {
++				ultra_prof::Scope _prof_tiles(ultra_prof::DET_TILES);
++				ultra_tiles_pass(info);
++			}
++		}
+ 		if (xr_detector_swap_slots) {
+ 			std::swap(info->outputs[0], info->outputs[1]);
+ 		}
+@@ -1758,6 +1778,8 @@
+ static void
+ run_keypoint_estimation_unsafe(keypoint_estimation_run_info &info)
+ {
++	ultra_prof::Scope _prof_kp(ultra_prof::KP_RUN);
++	const uint64_t _prof_k0 = ultra_prof::now();
+ 	onnx_state *state = &info.view->keypoint[info.hand_idx];
+ 	OnnxWrapper &wrap = *state->wrap;
+ 
+@@ -1907,8 +1929,12 @@
+ 		XRT_TRACE_IDENT(model);
+ 		assert(ARRAY_SIZE(input_names) == ARRAY_SIZE(inputs));
+ 		assert(ARRAY_SIZE(output_names) == ARRAY_SIZE(output_tensors));
++		ultra_prof::dump("kpimg", state->wraps[0].data, 128 * 128); ultra_prof::dump("kplast", state->wraps[1].data, 42); ultra_prof::dump("kpuse", state->wraps[2].data, 1);
++		const uint64_t _prof_k1 = ultra_prof::now();
++		if (ultra_prof::state().on) ultra_prof::add(ultra_prof::KP_PRE, _prof_k1 - _prof_k0);
+ 		ORT_SAFE(wrap, Run(wrap.session, nullptr, input_names, inputs, ARRAY_SIZE(input_names), output_names,
+ 		                   ARRAY_SIZE(output_names), output_tensors));
++		if (ultra_prof::state().on) ultra_prof::add(ultra_prof::KP_INFER, ultra_prof::now() - _prof_k1);
+ 	}
+ 
+ 	// To here
+diff --git a/src/xrt/tracking/hand/mercury/hg_sync.cpp b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+--- a/src/xrt/tracking/hand/mercury/hg_sync.cpp
++++ b/src/xrt/tracking/hand/mercury/hg_sync.cpp
+@@ -40,6 +40,7 @@
+ #include <sstream>
+ #include <string>
+ #include <strings.h>
++#include "ultra_prof.hpp"
+ 
+ 
+ namespace xrt::tracking::hand::mercury {
+@@ -1399,6 +1400,7 @@
+                         int64_t *out_timestamp_ns)
+ {
+ 
++	ultra_prof::Scope _prof_frame(ultra_prof::FRAME);
+ 	struct xrt_hand_joint_set *out_xrt_hands[2] = {out_left_hand, out_right_hand};
+ 
+ 
+@@ -1516,11 +1518,31 @@
+ 
+ 	// Every now and then if we're not already tracking both hands, try to detect new hands.
+ 	bool saw_both_hands_last_frame = hgt->last_frame_hand_detected[0] && hgt->last_frame_hand_detected[1];
++	// libultra_hands: upstream looks for a new hand in every frame in which it does not have both. With one hand
++	// tracked, that is the detector run in every frame (and the tiles with it) for the sake of a second hand.
++	// ULTRA_HANDS_DETECT_EVERY=N looks for the second hand in every N-th frame while one is tracked (1: as upstream);
++	// with no hand tracked it still looks in every frame, so that a first hand is found as soon as it was.
++	static int ultra_since_detect = 1000;
++	const int ultra_every = []() {
++		const char *e = std::getenv("ULTRA_HANDS_DETECT_EVERY");
++		const int v = (e != nullptr && e[0] != '\0') ? std::atoi(e) : 1;
++		return v < 1 ? 1 : v;
++	}();
++	if (!saw_both_hands_last_frame && (hgt->last_frame_hand_detected[0] || hgt->last_frame_hand_detected[1]) &&
++	    ultra_every > 1 && ultra_since_detect + 1 < ultra_every) {
++		ultra_since_detect++;
++		saw_both_hands_last_frame = true;     // not this frame
++	} else if (!saw_both_hands_last_frame) {
++		ultra_since_detect = 0;
++	}
+ 	if (!saw_both_hands_last_frame) {
+ 		if (hgt->xr_tracking_diag.enabled()) {
+ 			for (auto &diag : hgt->xr_tracking_diag.frame.hands) diag.detector_ran = 1;
+ 		}
+-		dispatch_and_process_hand_detections(hgt);
++		{
++			ultra_prof::Scope _prof_det(ultra_prof::DETECT);
++			dispatch_and_process_hand_detections(hgt);
++		}
+ 	}
+ 
+ 	if (hgt->xr_tracking_diag.enabled()) {
+@@ -1559,6 +1581,7 @@
+ 
+ 
+ 	// Dispatch keypoint estimator neural nets
++	const uint64_t _prof_kw = ultra_prof::now();
+ 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
+ 		for (int view_idx = 0; view_idx < 2; view_idx++) {
+ 			if (!hgt->views[view_idx].regions_of_interest_this_frame[hand_idx].found) {
+@@ -1573,6 +1596,7 @@
+ 		}
+ 	}
+ 	u_worker_group_wait_all(hgt->group);
++	if (ultra_prof::state().on) ultra_prof::add(ultra_prof::KP_WALL, ultra_prof::now() - _prof_kw);
+ 
+ 	// Spaghetti logic for optimizing hand size
+ 	if (hgt->xr_tracking_diag.enabled()) {
+@@ -1765,6 +1789,7 @@
+ 
+ 		//!@todo optimize: We can have one of these on each thread
+ 		float reprojection_error;
++		const uint64_t _prof_o = ultra_prof::now();
+ 		lm::optimizer_run(hand,                                     //
+ 		                  hgt->keypoint_outputs[hand_idx],          //
+ 		                  !hgt->last_frame_hand_detected[hand_idx], //
+@@ -1776,6 +1801,7 @@
+ 		                  *put_in_set,   //
+ 		                  out_hand_size, //
+ 		                  reprojection_error);
++		if (ultra_prof::state().on) ultra_prof::add(ultra_prof::OPT, ultra_prof::now() - _prof_o);
+ 		if (hgt->xr_tracking_diag.enabled()) {
+ 			auto &diag = hgt->xr_tracking_diag.frame.hands[hand_idx];
+ 			diag.optimizer_ran = 1;
+diff --git a/src/xrt/tracking/hand/mercury/ultra_prof.hpp b/src/xrt/tracking/hand/mercury/ultra_prof.hpp
+new file mode 100644
+--- /dev/null
++++ b/src/xrt/tracking/hand/mercury/ultra_prof.hpp
+@@ -0,0 +1,148 @@
++// libultra_hands: stage timers for the hand tracker, switched on with ULTRA_HANDS_PROFILE=1 (a line on stderr every
++// 150 frames). Off, a timer costs one load of a flag. SPDX-License-Identifier: BSL-1.0
++#pragma once
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++
++namespace ultra_prof {
++
++enum Stage {
++	FRAME,       // callback_process_unsafe, wall clock, per frame
++	DETECT,      // dispatch_and_process_hand_detections, wall clock (frames that run the detector)
++	DET_PASS,    // one whole-picture detection pass, per thread (CPU, one view)
++	DET_PRE,     // its preparation of the picture (blackbar, resize, copy into the tensor)
++	DET_INFER,   // its network run
++	DET_TILES,   // the tiles and second looks that follow, per thread
++	KP_WALL,     // keypoint dispatch until all are done, wall clock
++	KP_RUN,      // one keypoint job, per thread
++	KP_PRE,      // its crop and warp
++	KP_INFER,    // its network run
++	OPT,         // one hand's kinematic fit
++	STAGES
++};
++
++static const char *const kName[STAGES] = {"frame", "detect(wall)", "det pass", "  det prep", "  det infer", "det tiles+looks",
++                                          "keypoints(wall)", "kp job", "  kp prep", "  kp infer", "fit (per hand)"};
++
++struct State {
++	std::atomic<uint64_t> ns[STAGES];
++	std::atomic<uint64_t> calls[STAGES];
++	std::atomic<uint64_t> frames;
++	std::atomic<uint64_t> max_frame_ns;
++	bool on;
++	State()
++	{
++		const char *e = std::getenv("ULTRA_HANDS_PROFILE");
++		on = e != nullptr && e[0] != '\0' && e[0] != '0';
++		for (int i = 0; i < STAGES; i++) {
++			ns[i] = 0;
++			calls[i] = 0;
++		}
++		frames = 0;
++		max_frame_ns = 0;
++	}
++};
++
++inline State &state()
++{
++	static State s;
++	return s;
++}
++
++inline uint64_t now()
++{
++	return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
++	           std::chrono::steady_clock::now().time_since_epoch())
++	    .count();
++}
++
++inline void add(Stage s, uint64_t dns)
++{
++	State &st = state();
++	st.ns[s].fetch_add(dns, std::memory_order_relaxed);
++	st.calls[s].fetch_add(1, std::memory_order_relaxed);
++}
++
++inline void report_and_reset()
++{
++	State &st = state();
++	const uint64_t frames = st.frames.exchange(0);
++	if (frames == 0) {
++		return;
++	}
++	char line[1024];
++	int n = snprintf(line, sizeof line, "ultra_prof %llu frames, ms/frame:", (unsigned long long)frames);
++	for (int i = 0; i < STAGES && n < (int)sizeof line - 80; i++) {
++		const uint64_t t = st.ns[i].exchange(0), c = st.calls[i].exchange(0);
++		if (c == 0) {
++			continue;
++		}
++		n += snprintf(line + n, sizeof line - n, " [%s %.2f (%.2f/call x%.2f)]", kName[i], t / 1e6 / frames,
++		              t / 1e6 / c, (double)c / frames);
++	}
++	snprintf(line + n, sizeof line - n, " [slowest frame %.1f]", st.max_frame_ns.exchange(0) / 1e6);
++	fprintf(stderr, "%s\n", line);
++}
++
++/** Times a scope into [s]; FRAME also counts frames and reports. */
++struct Scope
++{
++	Stage s;
++	uint64_t t0;
++	bool on;
++	explicit Scope(Stage stage) : s(stage), t0(0), on(state().on)
++	{
++		if (on) {
++			t0 = now();
++		}
++	}
++	~Scope()
++	{
++		if (!on) {
++			return;
++		}
++		const uint64_t d = now() - t0;
++		add(s, d);
++		if (s == FRAME) {
++			State &st = state();
++			uint64_t m = st.max_frame_ns.load(std::memory_order_relaxed);
++			while (d > m && !st.max_frame_ns.compare_exchange_weak(m, d)) {
++			}
++			if (st.frames.fetch_add(1) + 1 >= 150) {
++				report_and_reset();
++			}
++		}
++	}
++};
++
++
++/** ULTRA_HANDS_DUMP_DIR=dir: every ULTRA_HANDS_DUMP_EVERY-th (default 7) input of the models is appended to dir/<name>.bin (float32). */
++inline void dump(const char *name, const float *data, int n)
++{
++	static const char *dir = std::getenv("ULTRA_HANDS_DUMP_DIR");
++	if (dir == nullptr || dir[0] == '\0') {
++		return;
++	}
++	static const int every = []() { const char *e = std::getenv("ULTRA_HANDS_DUMP_EVERY"); return e ? std::atoi(e) : 7; }();
++	static std::atomic<int> k[8];
++	int slot = name[0] == 'd' ? 0 : (name[2] == 'i' ? 1 : (name[2] == 'l' ? 2 : 3));
++	if (k[slot].fetch_add(1) % (every > 0 ? every : 7) != 0) {
++		return;
++	}
++	char path[512];
++	snprintf(path, sizeof path, "%s/%s.bin", dir, name);
++	static std::atomic_flag lock = ATOMIC_FLAG_INIT;
++	while (lock.test_and_set(std::memory_order_acquire)) {
++	}
++	FILE *f = fopen(path, "ab");
++	if (f) {
++		fwrite(data, sizeof(float), (size_t)n, f);
++		fclose(f);
++	}
++	lock.clear(std::memory_order_release);
++}
++
++} // namespace ultra_prof

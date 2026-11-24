@@ -69,7 +69,7 @@ class HandBenchTest {
         val files = list.readLines().map { it.trim() }.filter { it.isNotEmpty() }
         val out = StringBuilder()
         for (anticipate in listOf(false, true)) {
-            var onsets = 0; var flick = 0; val lat = ArrayList<Double>(); var certain = 0; val drift = ArrayList<Double>(); val driftOld = ArrayList<Double>()
+            var onsets = 0; var flick = 0; val lat = ArrayList<Double>(); var certain = 0; val drift = ArrayList<Double>(); val driftOld = ArrayList<Double>(); val driftFixed = ArrayList<Double>(); val driftShort = ArrayList<Double>(); val sweepAd = ArrayList<Double>(); val sweepFx = ArrayList<Double>()
             for (f in files) {
                 val head = loadHead(f.replace("-joints", "-vio"))
                 for (side in 0..1) {
@@ -97,25 +97,31 @@ class HandBenchTest {
                     }
                     // click drift of the ray at 60 calls a second
                     val ray = ArmRay(side == 1); val hz = 60.0; val n = ((r.t.last() - r.t.first()) * hz).toInt()
-                    val oldRay = OldArmRay(side == 1); val dirsOld = arrayOfNulls<DoubleArray>(n); val dirs = arrayOfNulls<DoubleArray>(n); val pin = BooleanArray(n)
+                    val fixed = ArmRay(side == 1, 0.12, false); val dirsFixed = arrayOfNulls<DoubleArray>(n); val short = ArmRay(side == 1, 0.06, false); val dirsShort = arrayOfNulls<DoubleArray>(n); val oldRay = OldArmRay(side == 1); val dirsOld = arrayOfNulls<DoubleArray>(n); val dirs = arrayOfNulls<DoubleArray>(n); val pin = BooleanArray(n)
                     for (k in 0 until n) {
                         val tq = r.t.first() + k / hz; var a = java.util.Arrays.binarySearch(r.t, tq); if (a < 0) a = -a - 2; a = a.coerceIn(0, r.t.size - 1)
                         if (tq - r.t[a] > 0.4) continue
                         var h = java.util.Arrays.binarySearch(head.t, tq); if (h < 0) h = -h - 1; h = h.coerceIn(0, head.t.size - 1)
-                        dirs[k] = ray.aim(head.p[h], head.q[h], r.org[a], st[a], (tq * 1e9).toLong()); dirsOld[k] = oldRay.aim(head.p[h], head.q[h], r.org[a], st[a], (tq * 1e9).toLong()); pin[k] = st[a]
+                        dirs[k] = ray.aim(head.p[h], head.q[h], r.org[a], st[a], (tq * 1e9).toLong()); dirsFixed[k] = fixed.aim(head.p[h], head.q[h], r.org[a], st[a], (tq * 1e9).toLong()); dirsShort[k] = short.aim(head.p[h], head.q[h], r.org[a], st[a], (tq * 1e9).toLong()); dirsOld[k] = oldRay.aim(head.p[h], head.q[h], r.org[a], st[a], (tq * 1e9).toLong()); pin[k] = st[a]
                     }
                     var k = 0
                     while (k < n) {
                         if (pin[k] && (k == 0 || !pin[k - 1])) {
                             var e = k; while (e + 1 < n && pin[e + 1]) e++
                             val dur = (e - k) / hz; val b = maxOf(0, k - (0.12 * hz).toInt())
-                            if (dur in 0.05..0.5 && dirs[b] != null && dirs[e] != null && dirsOld[b] != null && dirsOld[e] != null) { drift += angle(dirs[b]!!, dirs[e]!!); driftOld += angle(dirsOld[b]!!, dirsOld[e]!!) }
+                            if (dur in 0.05..0.5 && dirs[b] != null && dirs[e] != null && dirsOld[b] != null && dirsOld[e] != null) { drift += angle(dirs[b]!!, dirs[e]!!); driftOld += angle(dirsOld[b]!!, dirsOld[e]!!)
+                                if (dirsFixed[b] != null && dirsFixed[e] != null) driftFixed += angle(dirsFixed[b]!!, dirsFixed[e]!!)
+                                if (dirsShort[b] != null && dirsShort[e] != null) driftShort += angle(dirsShort[b]!!, dirsShort[e]!!)
+                                // a click made while the ray is sweeping (over 30 degrees a second): how far the ray is set back from the unsmoothed, un-latched one as the pinch begins
+                                val k4 = maxOf(0, k - 4)
+                                if (dirs[k] != null && dirs[k4] != null && angle(dirs[k]!!, dirs[k4]!!) / (4 / hz) > 30.0 && dirsFixed[k] != null && dirsOld[k] != null) { sweepAd += angle(dirs[k]!!, dirsOld[k]!!); sweepFx += angle(dirsFixed[k]!!, dirsOld[k]!!) }
+                            }
                             k = e + 1
                         } else k++
                     }
                 }
             }
-            out.append("anticipate=$anticipate: certain pinches $certain, onsets $onsets, brief (<120 ms) $flick, onset vs 40 mm crossing median ${"%.0f".format(pct(lat, 0.5))} ms P90 ${"%.0f".format(pct(lat, 0.9))} ms (n=${lat.size}); short-click ray drift n=${drift.size}: new median ${"%.2f".format(pct(drift, 0.5))} deg P90 ${"%.2f".format(pct(drift, 0.9))} deg, old median ${"%.2f".format(pct(driftOld, 0.5))} deg P90 ${"%.2f".format(pct(driftOld, 0.9))} deg\n")
+            out.append("anticipate=$anticipate: certain pinches $certain, onsets $onsets, brief (<120 ms) $flick, onset vs 40 mm crossing median ${"%.0f".format(pct(lat, 0.5))} ms P90 ${"%.0f".format(pct(lat, 0.9))} ms (n=${lat.size}); short-click ray drift n=${drift.size}: new median ${"%.2f".format(pct(drift, 0.5))} deg P90 ${"%.2f".format(pct(drift, 0.9))} deg, old median ${"%.2f".format(pct(driftOld, 0.5))} deg P90 ${"%.2f".format(pct(driftOld, 0.9))} deg; fixed 120 ms look-back ${"%.2f".format(pct(driftFixed, 0.5))} / ${"%.2f".format(pct(driftFixed, 0.9))} / P99 ${"%.2f".format(pct(driftFixed, 0.99))}; 60 ms ${"%.2f".format(pct(driftShort, 0.5))} / ${"%.2f".format(pct(driftShort, 0.9))} / P99 ${"%.2f".format(pct(driftShort, 0.99))}; adaptive P99 ${"%.2f".format(pct(drift, 0.99))}; in sweeping clicks (n=${sweepAd.size}) the ray at the pinch is ${"%.2f".format(pct(sweepAd, 0.5))} deg (P90 ${"%.2f".format(pct(sweepAd, 0.9))}) from the old live ray with the adaptive look-back, ${"%.2f".format(pct(sweepFx, 0.5))} (P90 ${"%.2f".format(pct(sweepFx, 0.9))}) with the fixed one\n")
         }
         File("C:/uvio/handup/bench_out.txt").writeText(out.toString())
     }

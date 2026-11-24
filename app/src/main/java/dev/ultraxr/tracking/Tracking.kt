@@ -172,6 +172,13 @@ object Tracking : GlassesLink.Listener {
     private var roomT = 0L; private var roomHave = false; private var roomReady = false
     private var roomP = DoubleArray(3); private var roomQ = Q.identity(); private var roomFix = Pose(); private var roomWorld = 0
     private var roomLastNs = 0L; private var roomUsedNs = 0L
+    /**
+     * While a hand is being tracked the room's pictures are taken a third as often (room_hand_slow=0 in vio_options.txt: as before).
+     * Measured 24 November 2026 on the worn session of 23 November through the whole app: the tracker took a median 43.9 and 40.3 ms
+     * a result with a hand, P99 87 ms and 11 gaps of over 100 ms between results with the room's work on, and 36.3 and 37.2 ms,
+     * P99 63 and 65 ms, no gap over 100 ms but one with it off. The walls do not move while the hands are being used.
+     */
+    @Volatile private var roomHandSlow = true; @Volatile private var handSeenPicNs = 0L
     private var roomThread: Thread? = null
     /** Test builds on an emulator: a made-up room given to the room model's users instead of one from cameras. */
     fun setRoomForTest(f: dev.ultraxr.core.RoomFindings?) { roomFindings = f }
@@ -340,6 +347,7 @@ object Tracking : GlassesLink.Listener {
                 workPriority = lines.firstOrNull { it.startsWith("work_priority=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: WORK_PRIORITY
                 try { android.os.Process.setThreadPriority(workPriority) } catch (_: Throwable) {}
                 holdWhenStill = lines.none { it.replace(" ", "") == "hold_when_still=0" }
+                roomHandSlow = lines.none { it.replace(" ", "") == "room_hand_slow=0" }
                 denseWalls = lines.none { it.replace(" ", "") == "dense_walls=0" }
                 val changed = ArrayList<String>()
                 if (lines.isNotEmpty()) {
@@ -660,7 +668,8 @@ object Tracking : GlassesLink.Listener {
         if (settings.roomScan && stereoRig != null) synchronized(roomLock) {
             if (roomHave && !roomReady && tNs - roomT > 400_000_000L) roomHave = false      // the estimator skipped that picture
             // warm: the room is looked at a third as often first (walls do not move); hands keep their rate
-            if (!roomHave && tNs - roomLastNs >= 330_000_000L * (1 + 2 * throttle)) {
+            val handBusy = roomHandSlow && handSeenPicNs != 0L && tNs - handSeenPicNs < 600_000_000L
+            if (!roomHave && tNs - roomLastNs >= 330_000_000L * (1 + 2 * throttle) * (if (handBusy) 3 else 1)) {
                 System.arraycopy(left, 0, roomLeft, 0, left.size); System.arraycopy(right, 0, roomRight, 0, right.size)
                 roomT = tNs; roomLastNs = tNs; roomHave = true; roomReady = false
             }
@@ -1587,6 +1596,7 @@ object Tracking : GlassesLink.Listener {
             val mask = try { Native.handsProcess(h, t, l, r, 480, 640, out, out26) } catch (e: Throwable) { handsError = e.toString(); -1 }
             handsProcessMs = (System.nanoTime() - t0) / 1e6
             handsFrames++
+            if (mask > 0) handSeenPicNs = t
             replayLog?.let { it.hands(link?.replaySeconds ?: 0.0, mask, out, handsProcessMs); it.joints(link?.replaySeconds ?: 0.0, mask, out26) }
             if (mask < 0) continue
             val body = head.bodyInApp(t)

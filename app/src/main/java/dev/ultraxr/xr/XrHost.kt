@@ -216,7 +216,8 @@ object XrHost : OpenXrGlassesLayer.Host {
         loadPictureTilt()
         // Feed heights relative to the head's start; Monado adds the wearer's height for the floor.
         UltraXrFeed.setOriginOffset(0f, s.standingHeightM, 0f)
-        UltraXrFeed.configureHands(30f, 250f)
+        // The runtime carries each joint 30 ms on from its last two results; with xr_predict the feed carries the whole hand itself (no double prediction)
+        UltraXrFeed.configureHands(if (Tracking.handOptions.xrPredict) 0f else 30f, 250f)
         Tracking.log("OpenXR: $lastEvent")
     }
 
@@ -340,6 +341,8 @@ object XrHost : OpenXrGlassesLayer.Host {
         applyTilt(st.pictureTiltDeg)
     }
     const val TILT_WORN_DEG = 12f
+    /** From the feed to the light on the glasses, about, for the OpenXR hands (xr_predict). */
+    private const val XR_DISPLAY_LEAD_S = 0.025
     private fun applyTilt(t: Float) {
         pictureTiltDeg = t
         UltraXrFeed.displayPitchRad = Math.toRadians(t.toDouble()).toFloat(); Tracking.head.sightPitchRad = Math.toRadians(t.toDouble())
@@ -414,6 +417,8 @@ object XrHost : OpenXrGlassesLayer.Host {
         val turn = arrayOf(dev.ultraxr.core.HandTurnSteady(), dev.ultraxr.core.HandTurnSteady()); val turned = FloatArray(UltraXrFeed.Joint.COUNT * 7)
         val recenter = dev.ultraxr.core.RecenterGesture()
         var vioTickNs = 0L
+        val xrPredictors = arrayOf(dev.ultraxr.core.HandPredictor(7, 26), dev.ultraxr.core.HandPredictor(7, 26)); val xrShift = DoubleArray(3); val xrPub = FloatArray(UltraXrFeed.HAND_FLOATS)
+        val xrTs = longArrayOf(0L, 0L); var xrPubNs = 0L
         while (feeding) {
             try { Thread.sleep(3) } catch (_: InterruptedException) {}
             dropToOneViewIfStereoLost()
@@ -461,7 +466,20 @@ object XrHost : OpenXrGlassesLayer.Host {
 
             val hands = Tracking.handJoints
             val newest = hands.maxOfOrNull { it.timestampNs } ?: 0L
-            if (newest == lastHandNs) continue
+            if (newest == lastHandNs) {
+                // no new result: with xr_predict the hand is carried on to this moment and given again, so that what the game asks for is never older than a frame
+                if (ho.xrPredict && nowNs - xrPubNs >= 8_000_000L) {
+                    xrPubNs = nowNs
+                    for (side in 0..1) {
+                        if (side == 1 && pointer) continue
+                        if (!haveHeld[side] || heldSinceNs[side] != 0L || xrTs[side] == 0L || nowNs - xrTs[side] > 250_000_000L) continue
+                        System.arraycopy(heldJoints[side], 0, xrPub, 0, xrPub.size)
+                        if (xrPredictors[side].shift((nowNs - xrTs[side]) * 1e-9 + XR_DISPLAY_LEAD_S, xrShift)) dev.ultraxr.core.HandPredictor.apply(xrPub, UltraXrFeed.FLOATS_PER_JOINT, UltraXrFeed.Joint.COUNT, xrShift)
+                        UltraXrFeed.hand(side, xrTs[side], xrPub, true)
+                    }
+                }
+                continue
+            }
             lastHandNs = newest
             val states = Tracking.hands
             for (side in 0..1) {
@@ -517,8 +535,12 @@ object XrHost : OpenXrGlassesLayer.Host {
                     if (snap && (j == ti || j == ii)) UltraXrFeed.putJoint(joints, j, mx + ox, my + oy, mz + oz, poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], 0.008f)
                     else UltraXrFeed.putJoint(joints, j, poses[o] + ox, poses[o + 1] + oy, poses[o + 2] + oz, poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6], if (j == 0) 0.02f else 0.008f)
                 }
-                UltraXrFeed.hand(side, hand.timestampNs, joints, true)
                 System.arraycopy(joints, 0, heldJoints[side], 0, joints.size); haveHeld[side] = true; heldSinceNs[side] = 0L
+                if (ho.xrPredict) {
+                    xrPredictors[side].add(hand.timestampNs, tracked); xrTs[side] = hand.timestampNs
+                    if (xrPredictors[side].shift((nowNs - hand.timestampNs) * 1e-9 + XR_DISPLAY_LEAD_S, xrShift)) { System.arraycopy(joints, 0, xrPub, 0, xrPub.size); dev.ultraxr.core.HandPredictor.apply(xrPub, UltraXrFeed.FLOATS_PER_JOINT, UltraXrFeed.Joint.COUNT, xrShift); UltraXrFeed.hand(side, hand.timestampNs, xrPub, true) }
+                    else UltraXrFeed.hand(side, hand.timestampNs, joints, true)
+                } else UltraXrFeed.hand(side, hand.timestampNs, joints, true)
                 journal?.let { j -> j.finger(side, finger) }
                 val st = states.firstOrNull { it.isRight == (side == 1) } ?: continue
                 if (!handsOnly) feedController(side, hand, st, poses, pressed)
