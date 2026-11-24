@@ -104,8 +104,18 @@ class DesktopSession(private val activity: Activity) {
         listOf(nav("Home", "nav:panel")) + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) } + nav("All apps", "nav:apps") + nav("Settings", "nav:settings") +
             games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
                 HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, TINTS[i % TINTS.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
-            } + nav("System", "nav:system")
+            } + installedXrGames() + nav("System", "nav:system")
     }
+    /**
+     * The immersive apps on this phone (OpenXR apps, converted Quest games: the user's own games among them) stand on the shelf with the
+     * WebXR games, so that they are in view, not behind "All apps". They are started the way "All apps" starts them ([onLaunchNative]).
+     * The WebXR browser is not one of them: it has its mark already.
+     */
+    private fun installedXrGames(): List<HomeItem> = try {
+        dev.ultraxr.xr.XrRuntime.installedApps(activity).filter { !it.activityInfo.packageName.startsWith("com.igalia.wolvic") }.mapIndexed { i, ri ->
+            HomeItem(ri.loadLabel(activity.packageManager).toString(), HomeItem.Kind.GAME, "app://" + ri.activityInfo.packageName + "/" + ri.activityInfo.name, TINTS[(i + 3) % TINTS.size])
+        }
+    } catch (_: Exception) { emptyList() }
     /** A mark that is no app has no colour of its own: its ring is Chalk. */
     private fun nav(title: String, what: String) = HomeItem(title, HomeItem.Kind.NAV, what, Ink.CHALK_INT)
     /** What the shelf shows now: its first page (games, the web apps, "All apps", "System", "Settings"), or a page of the phone's apps. */
@@ -161,7 +171,7 @@ class DesktopSession(private val activity: Activity) {
     }
     private val appIcons = HashMap<String, Bitmap?>()
     private fun appIcon(item: HomeItem): Bitmap? {
-        if (item.kind != HomeItem.Kind.APP) return null
+        if (item.kind != HomeItem.Kind.APP && !(item.kind == HomeItem.Kind.GAME && item.url.startsWith("app://"))) return null
         val pkg = item.url.removePrefix("app://").substringBefore('/')
         return appIcons.getOrPut(pkg) { try { val d = activity.packageManager.getApplicationIcon(pkg); val b = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888); d.setBounds(0, 0, 128, 128); d.draw(Canvas(b)); b } catch (_: Throwable) { null } }
     }
@@ -271,7 +281,10 @@ class DesktopSession(private val activity: Activity) {
                 else { Tracking.log("apps: " + item.title + " not opened: the app helper is not running (tools/pixel/uxr_helper.sh)"); say("Phone apps need the helper: it is not running") }
                 onLookPress?.invoke(); return@run
             }
-            if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else (HomeApps.all.firstOrNull { it.url == item.url }?.let { open(it) } ?: open(item.title, item.url, item.webKind))
+            if (item.kind == HomeItem.Kind.GAME && item.url.startsWith("app://")) {
+                val pkg = item.url.removePrefix("app://").substringBefore('/')
+                if (onLaunchNative != null) onLaunchNative?.invoke(pkg) else Tracking.log("games: " + item.title + " not opened: no launcher for immersive apps")
+            } else if (item.kind == HomeItem.Kind.GAME) onLaunchGame?.invoke(item) else (HomeApps.all.firstOrNull { it.url == item.url }?.let { open(it) } ?: open(item.title, item.url, item.webKind))
             onLookPress?.invoke()
         }
     }
