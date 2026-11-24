@@ -406,7 +406,7 @@ object XrHost : OpenXrGlassesLayer.Host {
         val pressed = booleanArrayOf(false, false)
         val joints = FloatArray(UltraXrFeed.HAND_FLOATS)
         val ho = Tracking.handOptions
-        val pinch = arrayOf(dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM), dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM))
+        val pinch = arrayOf(dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM, anticipate = ho.anticipate), dev.ultraxr.core.PinchState(ho.pressM, ho.releaseM, anticipate = ho.anticipate))
         // The last hand given to the application, kept through a loss of a quarter of a second at most.
         val heldJoints = arrayOf(FloatArray(UltraXrFeed.HAND_FLOATS), FloatArray(UltraXrFeed.HAND_FLOATS))
         val heldSinceNs = longArrayOf(0L, 0L); val haveHeld = booleanArrayOf(false, false)
@@ -497,7 +497,7 @@ object XrHost : OpenXrGlassesLayer.Host {
                 // Index finger length along its bones (knuckle, two joints, tip): the hand's own ruler.
                 var finger = 0f
                 for (b in 5..7) { val p0 = hand.joint(b); val p1 = hand.joint(b + 1); finger += sqrt((p0[0] - p1[0]) * (p0[0] - p1[0]) + (p0[1] - p1[1]) * (p0[1] - p1[1]) + (p0[2] - p1[2]) * (p0[2] - p1[2])).toFloat() }
-                val began = pinch[side].update(gap, finger)
+                val began = pinch[side].update(gap, finger, hand.timestampNs, nowNs - hand.timestampNs)
                 journal?.let { j -> j.handFrames[side]++; if (began) j.pinches[side]++; j.gap(side, gap) }
                 // While our own (measured) rule says "pinching", the application is given fingertips that touch: a
                 // browser decides a pinch by its own, tighter distance, which a tracked hand may never reach.

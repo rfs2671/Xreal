@@ -18,8 +18,8 @@ class HandAim(val right: Boolean, val origin: DoubleArray, val dir: DoubleArray,
  * A hand the tracker loses is kept where it was for [HOLD_NS], pinch included (the fingers hide each other exactly
  * when they touch, and a hand moving out of the cameras' view is lost for a moment): as long as the ball's hold.
  */
-class HandPointer(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchState.RELEASE_M) {
-    private val reader = HandReader(pressM, releaseM)
+class HandPointer(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchState.RELEASE_M, anticipate: Boolean = true, predict: Boolean = true) {
+    private val reader = HandReader(pressM, releaseM, anticipate, predict)
     private val last = arrayOfNulls<Hand>(2); private val lastProbe = arrayOfNulls<HandProbe>(2); private val seenNs = LongArray(2)
     private var active = -1
     /** How many results and how many pinches there have been, for the log. */
@@ -42,7 +42,10 @@ class HandPointer(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchSta
             val n = dist(mid, wrist).coerceAtLeast(1e-6); DoubleArray(3) { (mid[it] - wrist[it]) / n }
         }
         val thumb = h.joint(Hand.THUMB_TIP); val index = h.joint(Hand.INDEX_TIP)
-        return HandAim(side == 1, p.rayOrigin, d, p.pinching, thumb, index, dist(thumb, index))
+        val gap = dist(thumb, index)
+        // the fingertips are drawn where the hand will be when the frame is shown, as the ray is
+        for (c in 0..2) { val ahead = p.rayOrigin[c] - (thumb[c] + index[c]) / 2; thumb[c] += ahead; index[c] += ahead }
+        return HandAim(side == 1, p.rayOrigin, d, p.pinching, thumb, index, gap)
     }
 
     fun reset() { for (s in 0..1) { last[s] = null; lastProbe[s] = null }; active = -1 }

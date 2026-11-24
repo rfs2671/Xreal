@@ -45,7 +45,7 @@ class DesktopSession(private val activity: Activity) {
     /** The window being moved was taken up by a hand's pinch on "move": it follows the hand's ray. */
     private var moveByHand = false
     /** The hand as a pointer: the arm's ray and the measured pinch, as in the games ([HandPointer]). */
-    private val pointer by lazy { HandPointer(Tracking.handOptions.pressM, Tracking.handOptions.releaseM) }
+    private val pointer by lazy { HandPointer(Tracking.handOptions.pressM, Tracking.handOptions.releaseM, Tracking.handOptions.anticipate, Tracking.handOptions.predict) }
     /** A window pinched on its handle and carried: it follows the hand while the fingers hold, this far from the ray. */
     private var handTargetNs = 0L; private var handPointed = true
     @Volatile private var phoneTouchNs = 0L

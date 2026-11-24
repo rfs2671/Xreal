@@ -557,3 +557,52 @@ drawing and pages against the hand tracker. Cause of the slowdown shown (tracker
 Menu over the window: a new window stands at 2.0 m, the shelf too, and the window was drawn over the shelf only if
 nearer than it, so marks and status line were drawn over a window at the usual distance. A window up to 2.25 m now covers
 the shelf (`Shelf.windowCoversShelf`, tested); not seen in the glasses.
+
+## The hand upgrade, 24 November 2026: what was measured, what was changed, what was not
+
+Asked for: faster, snappier, more accurate, Quest-like. Measured first (replays of the owner's recordings of 22 and
+23 November 2026 on the S21 Ultra, a quiet phone; scripts in `C:\uvio\handup`):
+
+| before | |
+|---|---|
+| tracker, a pair with a hand | median 36 to 39 ms, P95 59, P99 69 to 72, 26 results a second (no hand: 17 ms, P99 58) |
+| tracker under six windows, worn | 57 to 95 ms with a hand, a picture 124 to 196 ms old when used |
+| fingertip jitter, hand nearly still | index tip 11.4 mm RMS against the wrist, thumb tip 5.9, the gap between them 7.0, the palm 3.4 |
+| pinch, onset against the gap crossing 40 mm | median 56 ms later |
+| ray, a click's movement of the ray (n=42, 0.12 s before it began to the release) | median 1.84 degrees, P90 8.38 |
+| prediction: error of holding the last result against the next measured, 40 / 80 ms ahead | 7.6 / 12.5 mm (fast hands 14.9 / 25.8) |
+
+Changed (each measured on its own before it was kept; the shipped Kotlin was benchmarked on the same recordings,
+`HandBenchTest`, which writes `C:\uvio\handup\bench_out.txt`):
+
+- **Pinch begins on the way in** (`PinchState.update(gap, finger, tNs, ageNs)`): onset 56 ms to 36 ms after the gap
+  crossed 40 mm (3 pinches that the benchmark could match; the pinch rule's other numbers did not move: onsets 118 to
+  119, brief ones 10 to 11). Not begun on a result older than 250 ms. Tried and **not** taken: a faster release on
+  quick opening (6 more onsets, 5 more brief ones).
+- **Ray** (`ArmRay`): smoothing by time and by how fast the ray turns, in place of three tenths a call at whatever
+  rate it was called; the fixed 0.3 s freeze replaced by going back to where the ray was 0.12 s before the pinch and
+  following the hand only past a 2.3 degree dead band. A click moves the ray a median 0.49 degrees against 1.84
+  (P90 7.46 against 8.38). A still hand's ray: 0.59 degrees RMS before, 0.62 now.
+- **Prediction** (`HandPredictor`, in the desktop's and the scenes' reading of a hand, `predict=0` turns it off): the hand's
+  own motion, from the mean velocity of its joints over four results, above 5 cm/s, at most 80 ms: 40 ms ahead 7.6 to
+  6.9 mm (fast hands 14.9 to 11.9), 80 ms ahead 12.5 to 11.3 (25.8 to 20.7); a still hand untouched.
+  **Not applied to the OpenXR games' feed**: the runtime already carries each joint forward 30 ms from its last two
+  results (`native/monado/patches/0003`), which in the same measurement is no better than holding (7.9 against 7.6 mm
+  at 40 ms; better only for fast hands). Replacing it needs re-feeding at the display rate; not done.
+- Kept as it was: PinchState's closing-movement rule, `HandSteady` and `HandTurnSteady` in the game feed.
+
+Not done, and why:
+
+- **NPU / Hexagon (QNN).** The two models are about 6 ms of a 22 to 39 ms result (2.0 and 3.9 ms a run, 2 threads,
+  XNNPACK), and the rest is not neural. Where the rest goes (image preparation, the kinematic fit, the threads
+  waiting on the windows) has not been profiled in the tracker, so no inference change was made. The search for an
+  open tracker better than Mercury for stereo fisheye found none that is both permissively licensed and shown to be
+  better (UmeTrack is CC BY-NC; MediaPipe is single camera and RGB); notes in `C:\uvio\research\hands_sota_1124.md`.
+- **Fingertip jitter** is the tracker's: the fit of the fingers is 7 to 11 mm RMS noisy while the palm is 3 mm. A One
+  Euro filter on the joints cut it to 4.8 mm only with 45 ms of lag, and 6.7 mm at 15 ms. So the 2 mm target is not
+  reachable by filtering these results; the pinch rule works on the gap in finger lengths, with the closing movement.
+- **Per-joint confidence, personal bone lengths, anatomical reconstruction of hidden fingers:** not built. Mercury
+  reports no confidence, and the one kinematic hand model it fits already fixes the bone lengths.
+- **Latency pinch to picture, 99 % recognition, under 0.5 % false activation:** not measured. There are 18 pinches in
+  the recordings whose gap went under 22 mm and no labels for the rest.
+- **Worn:** none of it has been worn.

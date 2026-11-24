@@ -47,7 +47,7 @@ class RecenterGesture(private val holdNs: Long = 1_500_000_000L) {
  */
 class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Float = RELEASE_M,
                  private val pressRatio: Float = 0.46f, private val releaseRatio: Float = 0.65f,
-                 private val frames: Int = 1, private val holdNs: Long = 250_000_000L, private val stroke: Boolean = true) {
+                 private val frames: Int = 1, private val holdNs: Long = 250_000_000L, private val stroke: Boolean = true, private val anticipate: Boolean = true) {
     var pinching = false; private set
     private var run = 0
     private var lostSinceNs = 0L
@@ -55,7 +55,44 @@ class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Floa
     private var smallest = 0f; private var byDistance = false
 
     /** One tracking result. [fingerM] is the index finger's length, 0 when not known. Returns true on the moment the pinch starts. */
-    fun update(gapM: Float, fingerM: Float = 0f): Boolean {
+    fun update(gapM: Float, fingerM: Float = 0f): Boolean = step(gapM, fingerM, false)
+
+    private val nT = LongArray(3); private val nV = FloatArray(3); private var nSeen = 0; private var earlyNs = 0L
+
+    /**
+     * One tracking result with its time ([tNs], the picture's) and how old it is as it is used ([ageNs]).
+     *
+     *  - No pinch begins on a result older than [STALE_NS]: a click is never started from stale tracking. One that is
+     *    under way goes on and can end.
+     *  - A pinch can begin on the way in, before the fingertips reach the press distance, when the gap, in finger
+     *    lengths, has fallen steadily over two results by 0.30 or more, is under 0.60 and would reach 0.40 within
+     *    [LEAD_S]. Measured on the owner's recordings of 23 November 2026 (18 pinches whose gap fell under 22 mm,
+     *    `C:\uvio\handup\pinch_var.py`): the pinch began a median 36 ms after the gap crossed 40 mm on its way down,
+     *    against 56 ms; onsets 119 against 118, brief ones (under 120 ms) 1 against 3, onsets with no gap under 35 mm
+     *    near them 67 against 66. One that contact does not confirm within [CONFIRM_NS] (the gap still over 0.60 of a
+     *    finger and over the press distance) is taken back. A faster release on quick opening was tried the same way
+     *    and not taken: it made 6 more onsets and 5 more brief ones.
+     */
+    fun update(gapM: Float, fingerM: Float, tNs: Long, ageNs: Long): Boolean {
+        val stale = ageNs > STALE_NS
+        val scale = if (fingerM > 0.03f) fingerM else 0.071f; val nrm = gapM / scale
+        nT[nSeen % 3] = tNs; nV[nSeen % 3] = nrm; nSeen++
+        val was = pinching
+        var began = step(gapM, fingerM, stale)
+        if (!began && !pinching && anticipate && !stale && nSeen >= 3) {
+            val i0 = (nSeen - 1) % 3; val i1 = (nSeen - 2) % 3; val i2 = (nSeen - 3) % 3
+            val n0 = nV[i0]; val n1 = nV[i1]; val n2 = nV[i2]; val dt = (nT[i0] - nT[i2]) * 1e-9
+            val plausible = scale in 0.045f..0.11f && gapM < 0.20f
+            if (plausible && dt > 0.0 && dt < 0.2 && n0 < 0.60f && n2 - n0 >= 0.30f && n2 > n1 && n1 > n0 && n0 + (n0 - n2) / dt.toFloat() * LEAD_S < 0.40f) {
+                pinching = true; smallest = gapM; byDistance = false; earlyNs = tNs; began = true; run = 0
+            }
+        }
+        if (pinching && earlyNs != 0L && tNs - earlyNs > CONFIRM_NS) { earlyNs = 0L; if (nrm > 0.60f && gapM >= pressM) pinching = false }
+        if (!pinching) earlyNs = 0L
+        return began && !was
+    }
+
+    private fun step(gapM: Float, fingerM: Float, blockStart: Boolean): Boolean {
         lostSinceNs = 0L
         val scaled = fingerM > 0.03f
         val near = gapM < pressM || (scaled && gapM < pressRatio * fingerM)
@@ -77,7 +114,7 @@ class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Floa
             if (byDistance) far else gapM > smallest + maxOf(STROKE_BACK_M, 0.3f * (open - smallest))
         }
         val wants = if (was) !apart else together
-        if (wants == was) { run = 0; return false }
+        if (wants == was || (!was && blockStart)) { run = 0; return false }
         if (++run < frames) return false
         run = 0; pinching = wants
         if (pinching) { smallest = gapM; byDistance = near }
@@ -92,6 +129,7 @@ class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Floa
          * none of the five. Under 33 mm to start and over 46 mm to end, on single results, catches four or five of
          * the five and both of the left hand's two. In finger lengths (his index finger: 71 mm) that is 0.46 and 0.65.
          */
+        const val STALE_NS = 250_000_000L; const val CONFIRM_NS = 120_000_000L; const val LEAD_S = 0.045f
         const val PRESS_M = 0.033f
         const val RELEASE_M = 0.046f
         const val STROKE_WINDOW = 60; const val STROKE_LOOK = 12; const val STROKE_STAY = 3; const val STROKE_STEADY_M = 0.012f
@@ -100,9 +138,9 @@ class PinchState(private val pressM: Float = PRESS_M, private val releaseM: Floa
 
     /** The hand was not found. Without a time, or after [holdNs] without the hand, the pinch ends. Returns true while it is kept. */
     fun lost(nowNs: Long = 0L): Boolean {
-        if (nowNs == 0L || !pinching) { pinching = false; run = 0; lostSinceNs = 0L; seen = 0; return false }
+        if (nowNs == 0L || !pinching) { pinching = false; run = 0; lostSinceNs = 0L; seen = 0; nSeen = 0; earlyNs = 0L; return false }
         if (lostSinceNs == 0L) lostSinceNs = nowNs
-        if (nowNs - lostSinceNs > holdNs) { pinching = false; run = 0; lostSinceNs = 0L; seen = 0; return false }
+        if (nowNs - lostSinceNs > holdNs) { pinching = false; run = 0; lostSinceNs = 0L; seen = 0; nSeen = 0; earlyNs = 0L; return false }
         return true
     }
 }

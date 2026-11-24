@@ -14,8 +14,9 @@ import kotlin.math.sqrt
  * tracker, not on each drawn frame, and keeps its history while a hand is out of sight. The ray runs from the shoulder
  * through the middle of the two fingertips ([ArmRay]).
  */
-class HandReader(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchState.RELEASE_M) {
-    private val pinch = arrayOf(PinchState(pressM, releaseM), PinchState(pressM, releaseM))
+class HandReader(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchState.RELEASE_M, anticipate: Boolean = true, private val predict: Boolean = true) {
+    private val pinch = arrayOf(PinchState(pressM, releaseM, anticipate = anticipate), PinchState(pressM, releaseM, anticipate = anticipate))
+    private val predictor = arrayOf(HandPredictor(3, Hand.JOINTS), HandPredictor(3, Hand.JOINTS)); private val shift = DoubleArray(3)
     private val arm = arrayOf(ArmRay(false), ArmRay(true))
     private val seenNs = LongArray(2)
     /** New tracker results read and pinches begun, for the log. */
@@ -32,9 +33,12 @@ class HandReader(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchStat
             if (h.timestampNs != seenNs[side]) {
                 seenNs[side] = h.timestampNs; results++
                 var finger = 0.0; for (j in Hand.INDEX_MCP until Hand.INDEX_TIP) finger += dist(h.joint(j), h.joint(j + 1))
-                if (pinch[side].update(dist(thumb, index).toFloat(), finger.toFloat())) pinches++
+                if (pinch[side].update(dist(thumb, index).toFloat(), finger.toFloat(), h.timestampNs, nowNs - h.timestampNs)) pinches++
+                if (predict) predictor[side].add(h.timestampNs, h.joints)
             }
-            val pp = DoubleArray(3) { (thumb[it] + index[it]) / 2 }
+            // the hand where it will be when this frame is shown: its own motion over the time since its picture and a frame
+            val ahead = if (predict) predictor[side].shift((nowNs - h.timestampNs) * 1e-9 + DISPLAY_LEAD_S, shift) else false
+            val pp = DoubleArray(3) { (thumb[it] + index[it]) / 2 + (if (ahead) shift[it] else 0.0) }
             val dir = if (!rayWanted) null else arm[side].aim(headP, headQ, pp, pinch[side].pinching, nowNs)
             out += HandProbe(h.isRight, pp, pinch[side].pinching, pp, dir)
         }
@@ -43,6 +47,8 @@ class HandReader(pressM: Float = PinchState.PRESS_M, releaseM: Float = PinchStat
 
     companion object {
         const val FRESH_NS = 400_000_000L
+        /** From the application's frame to the light on the glasses, about. */
+        const val DISPLAY_LEAD_S = 0.016
         fun dist(a: DoubleArray, b: DoubleArray) = sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]))
     }
 }
