@@ -804,3 +804,26 @@ Replays of the 17, 20 and 22 November recordings (deterministic, repeated runs i
 - Layout and scheduler alone each make false hands or lose availability; **together** they raise availability a little (left 92 to 96 %, right 92 to 93 %, 20 Nov right 86 to 92 %) at a small false-hand cost (17 Nov right 0 to 3 %, 20 Nov left 17 to 20 % of frames with none labelled). 22 Nov (no labels in these files): right-hand frames 1254 to 1636, not judged.
 - That does not meet "no significant phantom increase", so it is **not the default**. Per-frame times were measured with six replays at once and are not comparable; no latency claim is made.
 - Not met and not shown: the 98 % availability target and 100 ms reacquisition (settle and warm-up gates dominate the ~0.7 s median; recall was the attempt to shorten it and it failed). Not done: multiscale detection, anatomical checks of tile-begun hands, worn validation (Coverage lab).
+
+### Fifth phase, 24 November 2026: why the reacquisition takes 0.8 s, and what separates a phantom (measured, nothing adopted)
+
+**Correction.** `score_labels.py` counted a lowercase label (hand there, not plainly) as "no hand"; fixed. With it fixed the 20 November labels show 0 % false-hand frames for every variant, and the "126 false right-hand frames" of the previous section were mostly hands entering or leaving between the 1 Hz labels or blurred ones. The conclusion that the layout+scheduler variant is nearly free of false hands does not survive the next check, below.
+
+**Instrumented gates** (`ULTRA_HANDS_GATE_TRACE=1` in the native tracker writes `GATE` and `DROP` lines to stderr; solo runs, 17, 20 and 22 November):
+- 106 candidate tracks begin; 34 are ever shown (median 66 frames), 72 die at once (median 3 frames): 46 removed by the keypoint network, 19 by the settle timeout, 7 lose their region. Looking at every one of the 72: all are non-hands (phones and black devices, laptop keyboards and edges, water jugs, floor tiles, bags and feet on the floor, cables, the dark bag beside the laptop). The existing keypoint network and settle gate already reject them and none reaches the app.
+- Once a candidate that is real begins, the gates open quickly: median 0.20 s from begin to shown (warm-up 0.10 s fixed, settle 0.13 to 0.4 s, both views 0.07 s). The gap between a hand lost and the next shown track is a median of about 0.8 s (7 to 10 gaps per recording), and in the gap sheets the hand is visible (bottom left of the left picture, fingers raised) for 0.5 to 1.7 s before a candidate begins. **The reacquisition delay is discovery in the periphery, not the gates.**
+
+**Variants** (nine replays, all deterministic; r17 labels, scorer fixed; plainly-there / reported-where-none, left, right):
+
+| | 17 Nov | 20 Nov right | 22 Nov |
+|---|---|---|---|
+| baseline | 92/2, 92/0 | 86 | hand frames L/R 1193/1254 |
+| layout + scheduler (B) | 96/4, 93/5 | 92 | 1339/1636; **an 8 s false right hand on the dark bag** (x 45.5 to 53.8 s, checked frame by frame) |
+| B + trust tile finds (skip the stereo word and second look) | 97/9, 91/0 | 88; left false 17 % | 1358/1465 |
+| scheduler + trust, default layout | 85/2, 95/53 | right 30 | |
+
+- Trusting tile finds is rejected (phantoms, and lost availability in one variant). Layout+scheduler is **not clean either**: the dark bag beside the laptop, which the settle gate normally rejects, passes it for 8 s. The fit's own numbers do not separate that phantom (reprojection error median 0.13, 10th to 90th percentile 0.09 to 0.18, against 0.03 to 0.35 for the other displayed frames; hand size and both-views identical).
+- A crop-appearance verifier from simple image statistics, trained on 17 and 20 November and tested on 22 November (held out): at a setting that keeps 98 % of real hands it rejects 10 % of the bad crops; at one that rejects 67 % it loses 21 % of real hands. **It does not generalise with this little negative data** (106 training negatives from one room); a verifier needs many more hard negatives from other places, or a pretrained feature extractor. Not built.
+- Nothing is adopted; the shipped build is unchanged. Per-frame time was not re-measured solo (the five-way replays above are for deterministic comparison only).
+
+Not done yet: a second-stage verifier trained on more data, multiscale or higher-resolution detection (needs the Hexagon route, see above), detector fine-tuning, a held-out split with labels for 22 and 23 November, the rest of the requested architecture.

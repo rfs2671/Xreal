@@ -1172,13 +1172,21 @@ ultra_sched_mode()
 	return (e != nullptr && e[0] != '\0') ? std::atoi(e) : 0;
 }
 
-static bool
-ultra_recall_on()
+static int
+ultra_recall_mode()
 {
-	static const bool on = []() {
+	static const int mode = []() {
 		const char *e = std::getenv("ULTRA_HANDS_RECALL");
-		return e != nullptr && e[0] != '\0' && e[0] != '0';
+		return (e != nullptr && e[0] != 0) ? (e[0] - '0') : 0;
 	}();
+	return mode;
+}
+// ULTRA_HANDS_TRUST_TILES=1: a tile's find (confidence >= 0.5) begins a candidate without the other camera's word or a second look.
+// The keypoint network and the settled-fit gate still decide whether it is ever shown.
+static bool
+ultra_trust_tiles()
+{
+	static const bool on = std::getenv("ULTRA_HANDS_TRUST_TILES") != nullptr;
 	return on;
 }
 
@@ -1560,11 +1568,11 @@ ultra_tiles_pass(hand_detection_run_info *info)
 			// A hand that was being tracked and was lost a moment ago, found again where it was or where it was going: the same hand. It
 			// needs neither the other camera's tiles to have seen it nor a second look (a stand beside a laptop is not where a hand was).
 			// ULTRA_HANDS_RECALL=1
-			if (sched == 1 && counter - T.mem[h].lost_at <= 45 && ultra_recall_on()) {
+			if (sched == 1 && ((ultra_recall_mode() == 1 && counter - T.mem[h].lost_at <= 45) || ultra_trust_tiles())) {
 				const UltraMemory &m = T.mem[h];
 				const float age = (float)std::min(counter - m.lost_at, 8);
 				const float ex = m.last.x + m.vel.x * age, ey = m.last.y + m.vel.y * age;
-				if (hypotf(px - ex, py - ey) < 80.0f || hypotf(px - m.last.x, py - m.last.y) < 80.0f) {
+				if (ultra_trust_tiles() || hypotf(px - ex, py - ey) < 80.0f || hypotf(px - m.last.x, py - m.last.y) < 80.0f) {
 					out[h].ultra_twice = true;
 					out[h].ultra_stereo = true;
 					out[h].ultra_tile = true;

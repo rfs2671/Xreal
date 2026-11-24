@@ -26,6 +26,15 @@
 
 // libultra_hands: has a newly begun hand's fit settled yet (see where the fit is run)?
 static bool ultra_settled[2] = {true, true};
+static float ultra_feat[2][4] = {};   // last fit of each hand: reprojection error, keypoint mean confidence in each view, hand size
+static void
+ultra_drop(const char *why, int hand, double t)
+{
+	static const bool on = std::getenv("ULTRA_HANDS_GATE_TRACE") != nullptr;
+	if (on) {
+		fprintf(stderr, "DROP %.3f %d %s\n", t, hand, why);
+	}
+}
 static bool ultra_begun_by_stereo[2] = {false, false};
 // a hand begun through a tile: where, in each view, and without the other camera's tiles having seen it
 static bool ultra_begun_by_tile[2] = {false, false};
@@ -40,7 +49,7 @@ ultra_recall_enabled()
 {
 	static const bool on = []() {
 		const char *e = std::getenv("ULTRA_HANDS_RECALL");
-		return e != nullptr && e[0] != '\0' && e[0] != '0';
+		return e != nullptr && e[0] == '1';
 	}();
 	return on;
 }
@@ -1596,6 +1605,7 @@ callback_process_unsafe(HandTracking *hgt,
 		if (!(hgt->views[0].regions_of_interest_this_frame[hand_idx].found ||
 		      hgt->views[1].regions_of_interest_this_frame[hand_idx].found)) {
 			hgt->this_frame_hand_detected[hand_idx] = false;
+			ultra_drop("no_roi", hand_idx, (double)hgt->current_frame_timestamp / 1e9);
 			if (hgt->xr_tracking_diag.enabled()) {
 				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::no_roi);
 			}
@@ -1733,6 +1743,7 @@ callback_process_unsafe(HandTracking *hgt,
 					}
 				} else {
 					HG_DEBUG(hgt, "Removing hand %d because keypoint estimator said to!", hand_idx);
+					ultra_drop("keypoint_removed", hand_idx, (double)hgt->current_frame_timestamp / 1e9);
 					hgt->this_frame_hand_detected[hand_idx] = false;
 					if (hgt->xr_tracking_diag.enabled()) {
 						hgt->xr_tracking_diag.frame.hands[hand_idx].reject(
@@ -1768,6 +1779,7 @@ callback_process_unsafe(HandTracking *hgt,
 			}
 			if (xr_mercury_quality::reject_keypoints(hgt->xr_quality_filter, quality_sample)) {
 				hgt->this_frame_hand_detected[hand_idx] = false;
+				ultra_drop("kp_quality", hand_idx, (double)hgt->current_frame_timestamp / 1e9);
 				if (hgt->xr_tracking_diag.enabled()) {
 					hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::quality_rejected);
 				}
@@ -1871,6 +1883,7 @@ callback_process_unsafe(HandTracking *hgt,
 					ultra_settled[hand_idx] = true;
 				} else if (ultra_settle_fits[hand_idx] >= 30) {
 					hgt->this_frame_hand_detected[hand_idx] = false;
+					ultra_drop("settle_timeout", hand_idx, (double)hgt->current_frame_timestamp / 1e9);
 					if (hgt->xr_tracking_diag.enabled()) {
 						hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::reprojection_rejected);
 					}
@@ -1879,8 +1892,13 @@ callback_process_unsafe(HandTracking *hgt,
 			}
 		}
 
+		ultra_feat[hand_idx][0] = reprojection_error;
+		ultra_feat[hand_idx][1] = quality_sample.mean_xy[0];
+		ultra_feat[hand_idx][2] = quality_sample.mean_xy[1];
+		ultra_feat[hand_idx][3] = out_hand_size;
 		if (xr_mercury_quality::reject_fit(hgt->xr_quality_filter, quality_sample, reprojection_error)) {
 			hgt->this_frame_hand_detected[hand_idx] = false;
+			ultra_drop("fit_quality", hand_idx, (double)hgt->current_frame_timestamp / 1e9);
 			if (hgt->xr_tracking_diag.enabled()) {
 				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::quality_rejected);
 			}
@@ -1890,6 +1908,7 @@ callback_process_unsafe(HandTracking *hgt,
 		if (reprojection_error > reprojection_error_threshold) {
 			HG_DEBUG(hgt, "Reprojection error above threshold!");
 			hgt->this_frame_hand_detected[hand_idx] = false;
+			ultra_drop("reproj_threshold", hand_idx, (double)hgt->current_frame_timestamp / 1e9);
 			if (hgt->xr_tracking_diag.enabled()) {
 				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::reprojection_rejected);
 			}
@@ -1899,6 +1918,7 @@ callback_process_unsafe(HandTracking *hgt,
 		if (hand_too_far(hgt, *put_in_set)) {
 			HG_DEBUG(hgt, "Hand too far away");
 			hgt->this_frame_hand_detected[hand_idx] = false;
+			ultra_drop("too_far", hand_idx, (double)hgt->current_frame_timestamp / 1e9);
 			if (hgt->xr_tracking_diag.enabled()) {
 				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::distance_rejected);
 			}
@@ -2017,6 +2037,17 @@ callback_process_unsafe(HandTracking *hgt,
 
 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
 		// Don't send the hand to OpenXR until it's been tracked for 4 frames
+		{
+			static const bool gate_trace = std::getenv("ULTRA_HANDS_GATE_TRACE") != nullptr;
+			if (gate_trace && (hgt->this_frame_hand_detected[hand_idx] || hgt->last_frame_hand_detected[hand_idx])) {
+				fprintf(stderr, "GATE %.3f %d det=%d tracked=%d settled=%d both=%d roi0=%d,%.0f,%.0f roi1=%d,%.0f,%.0f err=%.3f mxy=%.3f,%.3f size=%.3f\n", (double)hgt->current_frame_timestamp / 1e9, hand_idx,
+				        (int)hgt->this_frame_hand_detected[hand_idx], (int)hgt->hand_tracked_for_num_frames[hand_idx],
+				        (int)ultra_settled[hand_idx], (int)hgt->ultra_both_views_seen[hand_idx],
+				        (int)hgt->views[0].regions_of_interest_this_frame[hand_idx].found, (double)hgt->views[0].regions_of_interest_this_frame[hand_idx].center_px.x, (double)hgt->views[0].regions_of_interest_this_frame[hand_idx].center_px.y,
+				        (int)hgt->views[1].regions_of_interest_this_frame[hand_idx].found, (double)hgt->views[1].regions_of_interest_this_frame[hand_idx].center_px.x, (double)hgt->views[1].regions_of_interest_this_frame[hand_idx].center_px.y,
+				        (double)ultra_feat[hand_idx][0], (double)ultra_feat[hand_idx][1], (double)ultra_feat[hand_idx][2], (double)ultra_feat[hand_idx][3]);
+			}
+		}
 		if (hgt->hand_tracked_for_num_frames[hand_idx] < (ultra_recalled[hand_idx] ? std::min<uint64_t>(2, hgt->tuneable_values.num_frames_before_display) : hgt->tuneable_values.num_frames_before_display) ||
 		    !hgt->ultra_both_views_seen[hand_idx] || !ultra_settled[hand_idx]) {
 			out_xrt_hands[hand_idx]->is_active = false;

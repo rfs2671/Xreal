@@ -6,8 +6,8 @@ for r in csv.reader(open(sys.argv[1])):
 def cls(s, h):
     if s not in lab: return None
     l, r = lab[s]
-    if h in l and h in r: return "both"
-    if h not in l and h not in r and h.upper() not in l and h.upper() not in r: return "none"
+    if h in l and h in r: return "both"   # uppercase letter in both pictures (plainly visible)
+    if h.lower() not in (l+r).lower(): return "none"
     return "unsure"
 for f in sys.argv[2:]:
     rows = [r for r in csv.reader(open(f)) if len(r) > 3 and r[0] != 't']
