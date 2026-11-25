@@ -316,6 +316,13 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
     /** The estimator's world (turned y-up) in the app world, now. */
     @Synchronized fun appFromEstimator(): Pose = fix
 
+    /**
+     * Position is not used at all: the head turns (from the gyroscope and gravity) and stays where it is, as in a seated game. Where the cameras cannot hold position
+     * (a plain room, quick turns, a still head that the estimator takes for moving) the world swims with every restart of the estimator; this stops that.
+     * "rotation_only=1" in vio_options.txt.
+     */
+    @Volatile var rotationOnly = false
+
     /** Head pose in the app world predicted for host time [tNs]. */
     @Synchronized fun predict(tNs: Long): State {
         if (!haveGravity) return State(Pose(), Mode.NONE, doubleArrayOf(0.0, 0.0, 0.0), Long.MAX_VALUE)
@@ -323,7 +330,7 @@ class HeadTracker(private val headInImu: DoubleArray = doubleArrayOf(0.0, 0.0, 0
         val qNow = Q.mul(qGI, Q.exp(lastGyro[0] * ahead, lastGyro[1] * ahead, lastGyro[2] * ahead))
         val qBody = Q.normalize(Q.mul(corr, Q.mul(Z_TO_Y, qNow)))
         val age = if (haveVio) tNs - vioNs else Long.MAX_VALUE
-        val sixDof = haveVio && age < VIO_STALE_NS
+        val sixDof = haveVio && age < VIO_STALE_NS && !rotationOnly
         val vel = if (!sixDof) doubleArrayOf(0.0, 0.0, 0.0) else if (blendOn) propV.copyOf() else vioV
         val pBody = if (sixDof && blendOn) {
             // carried to the newest motion sample; from there to the time asked for at the carried speed

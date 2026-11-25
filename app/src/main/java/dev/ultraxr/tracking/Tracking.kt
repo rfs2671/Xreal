@@ -351,6 +351,8 @@ object Tracking : GlassesLink.Listener {
                 roomPriority = lines.firstOrNull { it.startsWith("room_priority=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: ROOM_PRIORITY
                 handPriority = lines.firstOrNull { it.startsWith("hand_priority=") }?.substringAfter('=')?.trim()?.toIntOrNull() ?: HAND_PRIORITY
                 denseWalls = lines.none { it.replace(" ", "") == "dense_walls=0" }
+                head.rotationOnly = lines.any { it.replace(" ", "") == "rotation_only=1" }
+                if (head.rotationOnly) log("head tracking: rotation only by choice (rotation_only=1): position is not used")
                 val changed = ArrayList<String>()
                 if (lines.isNotEmpty()) {
                     val root = JSONObject(config); val v0 = root.getJSONObject("value0")
