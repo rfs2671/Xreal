@@ -473,7 +473,7 @@ object XrHost : OpenXrGlassesLayer.Host {
                 if (dbgNs == 0L) dbgNs = nowNs
                 if (nowNs - dbgNs >= 1_000_000_000L && dbgLogged < 60) {
                     dbgNs = nowNs; dbgLogged++
-                    Tracking.log("OpenXR hands, last second: left " + dbgFrames[0] + ", right " + dbgFrames[1] + " frames; tracker's newest hand " + (if (newest == 0L) "none" else ((nowNs - newest) / 1_000_000).toString() + " ms old") + (if (pointer) "; the touchpad pointer is the right hand" else "") + "; head " + s.mode)
+                    Tracking.log("OpenXR hands, last second: left " + dbgFrames[0] + ", right " + dbgFrames[1] + " frames; tracker's newest hand " + (if (newest == 0L) "none" else ((nowNs - newest) / 1_000_000).toString() + " ms old") + (if (pointer) "; the touchpad pointer is the right hand" else "") + "; tracker " + (if (Tracking.handsOn) "on" else "OFF") + ", results so far " + Tracking.handsFrames + ", " + Math.round(Tracking.handsProcessMs) + " ms each; head " + s.mode)
                     dbgFrames[0] = 0; dbgFrames[1] = 0
                 }
             }
