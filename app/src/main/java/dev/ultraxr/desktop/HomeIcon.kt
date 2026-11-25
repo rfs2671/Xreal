@@ -36,7 +36,7 @@ object HomeIcon {
      */
     fun sign(title: String, what: String = ""): String = when {
         what == "youtube" -> "#video"; what == "xbox" -> "#pad"
-        what == "nav:settings" || title == "Settings" -> "#sliders"; what == "nav:apps" -> "#grid"; what == "nav:home" -> "#home"; what == "nav:next" -> "#more"
+        what == "nav:settings" || title == "Settings" -> "#sliders"; what == "nav:videos" -> "#video"; what == "nav:apps" -> "#grid"; what == "nav:home" -> "#home"; what == "nav:next" -> "#more"
         title == "Browser" -> "#globe"; title == "3D web" -> "#cube"
         else -> { val words = title.split(' ', '-', '_').filter { it.isNotEmpty() && it[0].isLetterOrDigit() }
             if (words.size >= 2) (words[0].take(1) + words[1].take(1)).uppercase() else title.trim().take(1).uppercase() }

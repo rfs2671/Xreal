@@ -156,6 +156,20 @@ class DesktopActivity : Activity() {
         if (intent.getIntExtra("home_page", 0) != 0) window.decorView.postDelayed({ session.showHomePage(intent.getIntExtra("home_page", 0)) }, 2000)
         // "--es open_app package" (through the launcher): that app in a window, for a test without hands on the phone
         intent.getStringExtra("open_app")?.let { pkg -> window.decorView.postDelayed({ dev.ultraxr.shell.AppShell.componentOf(this, pkg)?.let { session.openApp(pkg.substringAfterLast('.'), it) } ?: Tracking.log("apps: $pkg is not installed") }, 4000) }
+        // A video file for a window: the phone's file picker (the shelf's "Videos"), or "--es play_video path" (a file the app can read, or a content address), as the file picker would.
+        session.onPickVideo = {
+            runOnUiThread {
+                try {
+                    startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("video/*").putExtra(Intent.EXTRA_LOCAL_ONLY, true), REQUEST_VIDEO)
+                } catch (e: Exception) { toast("No file picker on this phone") }
+            }
+        }
+        intent.getStringExtra("play_video")?.let { v ->
+            window.decorView.postDelayed({
+                val uri = if (v.startsWith("/")) android.net.Uri.fromFile(java.io.File(v)) else android.net.Uri.parse(v)
+                session.openVideo(uri, java.io.File(v).name)
+            }, 4000)
+        }
         // "--es xr_app package" (debug builds, through the launcher): an immersive app is started as the shelf starts it, for a test without hands on the phone
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) intent.getStringExtra("xr_app")?.let { pkg -> window.decorView.postDelayed({ session.onLaunchNative?.invoke(pkg) }, 5000) }
         // Windows from last time are where they were left (docs/INTERFACE.md: things stay where they are put).
@@ -163,6 +177,15 @@ class DesktopActivity : Activity() {
         // later, so that the helper that runs Android apps in windows has had time to answer.)
         HomeApps.all.getOrNull(intent.getIntExtra(EXTRA_OPEN_SHELF, -1))?.let { a -> window.decorView.postDelayed({ if (!isFinishing && !isDestroyed) session.open(a) }, 800) }
         refreshChips()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_VIDEO || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+        val name = try { contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } } catch (_: Exception) { null } ?: (uri.lastPathSegment ?: "Video")
+        session.openVideo(uri, name)
     }
 
     override fun onDestroy() { session.stop(); Tracking.release(); super.onDestroy() }
@@ -629,5 +652,5 @@ class DesktopActivity : Activity() {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) HomeApps.all.getOrNull(intent.getIntExtra(EXTRA_OPEN_SHELF, -1))?.let { session.open(it) }
     }
     private var padMode = 0; private var padText: TextView? = null; private var moveWord: TextView? = null; private var sizeWord: TextView? = null; private var fullWord: TextView? = null
-    companion object { const val PAD_WORDS = "Slide to point  \u00b7  tap to select\nTwo fingers to scroll\nDouble-tap and hold to drag"; const val EXTRA_AUTOMATION = "automation"; const val EXTRA_STEREO_PREVIEW = "stereo_preview"; const val EXTRA_OPEN_SHELF = "open_shelf" }
+    companion object { const val PAD_WORDS = "Slide to point  \u00b7  tap to select\nTwo fingers to scroll\nDouble-tap and hold to drag"; const val EXTRA_AUTOMATION = "automation"; const val EXTRA_STEREO_PREVIEW = "stereo_preview"; const val EXTRA_OPEN_SHELF = "open_shelf"; private const val REQUEST_VIDEO = 4107 }
 }

@@ -25,6 +25,12 @@ import java.util.Locale
 class DesktopSession(private val activity: Activity) {
     val desktop = Desktop()
     private val web = HashMap<Int, WebWindow>()
+    /** Videos in windows (kind [VIDEO]): the player of each, and how its picture is laid out. A video's address is its file's, with the layout after a "#": file...#sbs-half. */
+    private val video = HashMap<Int, VideoPlayer>()
+    private val videoMode = HashMap<Int, VideoMode>()
+    /** The activity is to ask for a video file (the phone's file picker): the file comes back to [openVideo]. */
+    var onPickVideo: (() -> Unit)? = null
+    private fun publishSbs() { val ids = videoMode.filter { it.value.sbs }.keys.toSet(); for (r in renderers) r.sbsIds = ids }
     private val cursors = HashMap<Int, DoubleArray>()
     private val prefs = activity.getSharedPreferences("desktop", Context.MODE_PRIVATE)
     /** The pictures drawn with the 2D canvas (marks, names, titles, the handle's words, the status line), by what they show. The ones not asked for for longest are dropped. */
@@ -101,7 +107,7 @@ class DesktopSession(private val activity: Activity) {
      */
     private val firstPage: List<HomeItem> = run {
         val games = try { dev.ultraxr.core.GameLibrary.parse(activity.assets.open("webxr_pages.json").bufferedReader().use { it.readText() }) } catch (_: Exception) { emptyList() }
-        listOf(nav("Home", "nav:panel")) + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) } + nav("All apps", "nav:apps") + nav("Settings", "nav:settings") +
+        listOf(nav("Home", "nav:panel")) + nav("Videos", "nav:videos") + HomeApps.all.map { HomeItem(it.title, HomeItem.Kind.WEB, it.url, it.color, it.kind) } + nav("All apps", "nav:apps") + nav("Settings", "nav:settings") +
             games.filter { it.state != dev.ultraxr.core.WebGame.State.BLOCKED }.mapIndexed { i, g ->
                 HomeItem(g.name.substringBefore(" (").trim(), HomeItem.Kind.GAME, g.url, TINTS[i % TINTS.size], enter = g.enter, verified = g.state == dev.ultraxr.core.WebGame.State.VERIFIED)
             } + installedXrGames() + nav("System", "nav:system")
@@ -261,6 +267,7 @@ class DesktopSession(private val activity: Activity) {
             if (item.kind == HomeItem.Kind.NAV) {
                 if (item.url.startsWith("sys:")) system(item.url)
                 else if (item.url == "nav:settings") openSettings()
+                else if (item.url == "nav:videos") { onPickVideo?.invoke() ?: say("No file picker here") }
                 else if (item.url == "nav:panel") { homeSection = "home"; showHome() }
                 else showHomePage(when (item.url) { "nav:apps" -> 1; "nav:next" -> homePage + 1; "nav:system" -> -1; else -> 0 })
                 onLookPress?.invoke(); return
@@ -311,21 +318,50 @@ class DesktopSession(private val activity: Activity) {
         save()
         if (current === this) current = null
         for (w in web.values) w.destroy()
-        web.clear(); surfaces = HashMap()
+        for (v in video.values) v.release()
+        web.clear(); video.clear(); videoMode.clear(); surfaces = HashMap()
     }
 
     fun pause() {
-        resumed = false; save(); web.values.forEach { it.pause() }
+        resumed = false; save(); web.values.forEach { it.pause() }; video.values.forEach { it.pause() }
         // the map of the room being learnt is written now: the app may not be told when it is closed for good
         kotlin.concurrent.thread(name = "room-map-save", isDaemon = true) { try { Tracking.saveRoomMap() } catch (e: Throwable) { Tracking.log("room map: not saved: $e") } }
     }
-    fun resume() { resumed = true; web.values.forEach { it.resume() } }
+    fun resume() { resumed = true; web.values.forEach { it.resume() }; video.values.forEach { it.resume() } }
 
     private var mapSeen = 0
     private var mapArmed = false
     private fun save() { prefs.edit().putString("layout", desktop.toJson().toString()).apply(); savedRevision = desktop.revision }
 
-    private fun ensureWeb(w: DesktopWindow): WebWindow = web.getOrPut(w.id) {
+    private fun ensureWeb(w: DesktopWindow): WebWindow? {
+        if (w.kind == VIDEO) { ensureVideo(w); return null }
+        return ensureWebPage(w)
+    }
+
+    private fun ensureVideo(w: DesktopWindow) {
+        if (video.containsKey(w.id)) return
+        val uri = android.net.Uri.parse(w.url.substringBefore('#'))
+        val mode = when (w.url.substringAfter('#', "")) { "sbs-half" -> VideoMode.SBS_HALF; "sbs-full" -> VideoMode.SBS_FULL; "flat" -> VideoMode.FLAT; else -> null }
+        if (mode != null) videoMode[w.id] = mode
+        val player = VideoPlayer(activity, w.id, uri, { vw, vh ->
+            activity.runOnUiThread {
+                val m = videoMode.getOrPut(w.id) { VideoMode.detect(w.title, vw, vh) }
+                desktop.find(w.id)?.let { win -> win.aspect = m.aspect(vw, vh); win.url = uri.toString() + "#" + modeKey(m); applyShape(w.id); desktop.touch() }
+                publishSbs(); say(m.label.replaceFirstChar { it.uppercase() }); onChanged?.invoke()
+            }
+        }, { msg -> activity.runOnUiThread { say(msg); close(w.id) } })
+        video[w.id] = player
+        surfaces[w.id]?.let { player.attach(it) }
+    }
+    private fun modeKey(m: VideoMode) = when (m) { VideoMode.FLAT -> "flat"; VideoMode.SBS_HALF -> "sbs-half"; VideoMode.SBS_FULL -> "sbs-full" }
+
+    /** A video file was chosen (the phone's file picker, or a start with the file named): it opens in a window. Side by side or flat is worked out from its name and size, and can be changed by tapping the corner at the top right. */
+    fun openVideo(uri: android.net.Uri, name: String): Boolean {
+        val title = name.substringBeforeLast('.').ifBlank { "Video" }.take(40)
+        return open(title, uri.toString(), VIDEO)
+    }
+
+    private fun ensureWebPage(w: DesktopWindow): WebWindow = web.getOrPut(w.id) {
         WebWindow(activity, w.id, w.kind, w.url, darkPages) { ww ->
             desktop.find(ww.id)?.let { m ->
                 val t = if (ww.isApp) m.title else ww.title.ifBlank { m.title }
@@ -339,7 +375,7 @@ class DesktopSession(private val activity: Activity) {
     fun onSurface(id: Int, surface: Surface?) {
         activity.runOnUiThread {
             val next = HashMap(surfaces)
-            if (surface == null) { next.remove(id); web[id]?.detachSurface() } else { next[id] = surface; web[id]?.attach(surface) }
+            if (surface == null) { next.remove(id); web[id]?.detachSurface(); video[id]?.detachSurface() } else { next[id] = surface; web[id]?.attach(surface); video[id]?.attach(surface) }
             surfaces = next
             settingsDrawn = -1      // the settings draw themselves into their window's surface: a new one is empty
         }
@@ -407,7 +443,7 @@ class DesktopSession(private val activity: Activity) {
         w.width = (h * w.aspect).coerceIn(DesktopWindow.MIN_WIDTH, DesktopWindow.MAX_WIDTH)
         applyShape(w.id); cursors[w.id] = doubleArrayOf(0.5, 0.5); desktop.touch(); changed()
     }
-    fun close(id: Int) { web.remove(id)?.destroy(); cursors.remove(id); desktop.close(id); changed() }
+    fun close(id: Int) { web.remove(id)?.destroy(); video.remove(id)?.release(); videoMode.remove(id); publishSbs(); cursors.remove(id); desktop.close(id); changed() }
     fun focus(id: Int) { desktop.focus(id); changed() }
     fun minimize(id: Int) { desktop.minimize(id); changed() }
     fun toggleMaximize(id: Int) { desktop.toggleMaximize(id); changed() }
@@ -621,7 +657,18 @@ class DesktopSession(private val activity: Activity) {
         if (!isSettings(id)) { web[id]?.touch(action, u, v); return }
         if (action == MotionEvent.ACTION_UP && settings.tap(u, v)) onLookPress?.invoke()
     }
-    private fun pageTap(id: Int, u: Double, v: Double) { if (isSettings(id)) { if (settings.tap(u, v)) onLookPress?.invoke() } else web[id]?.tap(u, v) }
+    private fun pageTap(id: Int, u: Double, v: Double) {
+        if (isSettings(id)) { if (settings.tap(u, v)) onLookPress?.invoke(); return }
+        video[id]?.let { p ->
+            if (VideoPlayer.inModeCorner(u, v)) {
+                val m = (videoMode[id] ?: VideoMode.FLAT).next(); videoMode[id] = m
+                desktop.find(id)?.let { win -> win.aspect = m.aspect(p.videoWidth, p.videoHeight); win.url = win.url.substringBefore('#') + "#" + modeKey(m); applyShape(id); desktop.touch() }
+                publishSbs(); say(m.label.replaceFirstChar { it.uppercase() })
+            } else say(p.tapAt(u, v))
+            onLookPress?.invoke(); return
+        }
+        web[id]?.tap(u, v)
+    }
 
     /** The settings draw themselves into their window's surface, as a page does: when something changed, and once a second for what changed elsewhere. */
     private fun drawSettings(nowNs: Long) {
@@ -1317,6 +1364,7 @@ class DesktopSession(private val activity: Activity) {
         private const val PAD_STEP = 0.16
         /** The kind of the window the settings are in. */
         const val SETTINGS = "settings"
+        const val VIDEO = "video"
         /** The phone's apps are offered this many to a page of the shelf. */
         private const val APPS_A_PAGE = 11
         /** The colours WebXR games are told apart by on their marks (they have none of their own). */
