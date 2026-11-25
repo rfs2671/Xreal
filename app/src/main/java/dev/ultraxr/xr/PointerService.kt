@@ -46,6 +46,13 @@ class PointerService : AccessibilityService() {
     override fun onUnbind(intent: android.content.Intent?): Boolean { running = false; handler.removeCallbacks(tick); hide(); return super.onUnbind(intent) }
     /** False once another app (or Ultra XR's own screens) is in front of the game: the touchpad is then taken away. */
     @Volatile private var gameInFront = true
+    /**
+     * A window that comes up over the game and goes away again without any word to us (the system's permission window a game asks for, Samsung's edge-panel handle):
+     * Android says that it came to the front and says nothing when the game is in front again (worn, 26 November 2026: the game's permission request put the
+     * touchpad away and nothing brought it back, so the game had no pointer at all). The touchpad is given back after a while: at once for the edge panel,
+     * after twenty seconds for a permission window (time to answer it).
+     */
+    @Volatile private var restoreAtNs = 0L
     private var wasConnected = false
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
@@ -57,6 +64,10 @@ class PointerService : AccessibilityService() {
             pkg == "com.android.systemui" || pkg == "android" || cls.contains("InputMethod") -> return   // the notification shade, the volume panel, a keyboard
             else -> false
         }
+        if (front) restoreAtNs = 0L
+        else if (pkg.contains("permissioncontroller")) restoreAtNs = System.nanoTime() + 20_000_000_000L
+        else if (pkg.contains("cocktailbar")) restoreAtNs = System.nanoTime() + 1_500_000_000L
+        else restoreAtNs = 0L
         if (front != gameInFront) { gameInFront = front; Tracking.log("pointer: " + (if (front) "the game is in front again" else "$pkg is in front, touchpad put away")); sync() }
     }
     override fun onInterrupt() {}
@@ -66,6 +77,7 @@ class PointerService : AccessibilityService() {
     private fun sync() {
         // a game that has just connected is in front, whatever was seen before
         val c = wanted(); if (c && !wasConnected) gameInFront = true; wasConnected = c
+        if (c && !gameInFront && restoreAtNs != 0L && System.nanoTime() >= restoreAtNs) { restoreAtNs = 0L; gameInFront = true; Tracking.log("pointer: the window over the game has been there long enough: touchpad given back") }
         val want = c && gameInFront
         if (want && pad == null) show() else if (!want && pad != null) hide()
     }
