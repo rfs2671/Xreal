@@ -26,6 +26,32 @@
 
 // libultra_hands: has a newly begun hand's fit settled yet (see where the fit is run)?
 static bool ultra_settled[2] = {true, true};
+// ULTRA_HANDS_JC_GATE=0.5: a hand is not shown to the application while the keypoint model's mean confidence over its 21 joints (the better camera's), smoothed over about
+// five frames, is below this. The dark bag beside the laptop and the objects a fine-tuned detector begins as hands have joint confidences near 0.4; hands, near 0.6.
+static float ultra_jc_ema[2] = {1.0f, 1.0f};
+static bool ultra_jc_low[2] = {false, false};
+// ULTRA_HANDS_JC_LATCH=N (with ULTRA_HANDS_JC_GATE): the gate is asked of a new track only: it is shown once N frames in a row have a joint confidence over the threshold, and then stays shown
+// for as long as the track lasts, whatever the confidence does (a real hand dips for a frame when fingers hide each other; a thing that is no hand rarely holds it for N frames).
+static int ultra_jc_run[2] = {0, 0};
+static bool ultra_jc_latched[2] = {false, false};
+static int
+ultra_jc_latch_frames()
+{
+	static const int n = []() {
+		const char *e = std::getenv("ULTRA_HANDS_JC_LATCH");
+		return e != nullptr ? std::atoi(e) : 0;
+	}();
+	return n;
+}
+static float
+ultra_jc_threshold()
+{
+	static const float t = []() {
+		const char *e = std::getenv("ULTRA_HANDS_JC_GATE");
+		return e != nullptr ? (float)std::atof(e) : 0.0f;
+	}();
+	return t;
+}
 static float ultra_feat[2][4] = {};   // last fit of each hand: reprojection error, keypoint mean confidence in each view, hand size
 static void
 ultra_drop(const char *why, int hand, double t)
@@ -2037,19 +2063,65 @@ callback_process_unsafe(HandTracking *hgt,
 
 	for (int hand_idx = 0; hand_idx < 2; hand_idx++) {
 		// Don't send the hand to OpenXR until it's been tracked for 4 frames
+		if (ultra_jc_threshold() > 0.0f) {
+			if (hgt->this_frame_hand_detected[hand_idx]) {
+				float best = 0.0f;
+				for (int v = 0; v < 2; v++) {
+					if (!hgt->views[v].regions_of_interest_this_frame[hand_idx].found) {
+						continue;
+					}
+					float sum = 0.0f;
+					for (int j = 0; j < 21; j++) {
+						sum += hgt->keypoint_outputs[hand_idx].views[v].keypoints_in_scaled_stereographic[j].confidence_xy;
+					}
+					best = std::max(best, sum / 21.0f);
+				}
+				if (hgt->hand_tracked_for_num_frames[hand_idx] <= 1) {
+					ultra_jc_run[hand_idx] = 0;
+					ultra_jc_latched[hand_idx] = false;
+				}
+				ultra_jc_ema[hand_idx] = hgt->hand_tracked_for_num_frames[hand_idx] <= 1 ? best : 0.8f * ultra_jc_ema[hand_idx] + 0.2f * best;
+				if (ultra_jc_latch_frames() > 0) {
+					if (!ultra_jc_latched[hand_idx]) {
+						ultra_jc_run[hand_idx] = best >= ultra_jc_threshold() ? ultra_jc_run[hand_idx] + 1 : 0;
+						ultra_jc_latched[hand_idx] = ultra_jc_run[hand_idx] >= ultra_jc_latch_frames();
+					}
+					ultra_jc_low[hand_idx] = !ultra_jc_latched[hand_idx];
+				} else {
+					ultra_jc_low[hand_idx] = ultra_jc_ema[hand_idx] < ultra_jc_threshold();
+				}
+			} else {
+				ultra_jc_low[hand_idx] = false;
+				ultra_jc_run[hand_idx] = 0;
+				ultra_jc_latched[hand_idx] = false;
+			}
+		}
 		{
 			static const bool gate_trace = std::getenv("ULTRA_HANDS_GATE_TRACE") != nullptr;
+			double jc_mean[2] = {0, 0}, jc_min[2] = {1, 1};
+			if (gate_trace) {
+				for (int v = 0; v < 2; v++) {
+					double sum = 0;
+					for (int j = 0; j < 21; j++) {
+						const double cf = hgt->keypoint_outputs[hand_idx].views[v].keypoints_in_scaled_stereographic[j].confidence_xy;
+						sum += cf;
+						if (cf < jc_min[v]) jc_min[v] = cf;
+					}
+					jc_mean[v] = sum / 21.0;
+				}
+			}
 			if (gate_trace && (hgt->this_frame_hand_detected[hand_idx] || hgt->last_frame_hand_detected[hand_idx])) {
-				fprintf(stderr, "GATE %.3f %d det=%d tracked=%d settled=%d both=%d roi0=%d,%.0f,%.0f roi1=%d,%.0f,%.0f err=%.3f mxy=%.3f,%.3f size=%.3f ish=%.3f,%.3f\n", (double)hgt->current_frame_timestamp / 1e9, hand_idx,
+				fprintf(stderr, "GATE %.3f %d det=%d tracked=%d settled=%d both=%d roi0=%d,%.0f,%.0f roi1=%d,%.0f,%.0f err=%.3f mxy=%.3f,%.3f size=%.3f ish=%.3f,%.3f jc=%.3f,%.3f,%.3f,%.3f\n", (double)hgt->current_frame_timestamp / 1e9, hand_idx,
 				        (int)hgt->this_frame_hand_detected[hand_idx], (int)hgt->hand_tracked_for_num_frames[hand_idx],
 				        (int)ultra_settled[hand_idx], (int)hgt->ultra_both_views_seen[hand_idx],
 				        (int)hgt->views[0].regions_of_interest_this_frame[hand_idx].found, (double)hgt->views[0].regions_of_interest_this_frame[hand_idx].center_px.x, (double)hgt->views[0].regions_of_interest_this_frame[hand_idx].center_px.y,
 				        (int)hgt->views[1].regions_of_interest_this_frame[hand_idx].found, (double)hgt->views[1].regions_of_interest_this_frame[hand_idx].center_px.x, (double)hgt->views[1].regions_of_interest_this_frame[hand_idx].center_px.y,
-				        (double)ultra_feat[hand_idx][0], (double)ultra_feat[hand_idx][1], (double)ultra_feat[hand_idx][2], (double)ultra_feat[hand_idx][3], (double)hgt->views[0].ultra_is_hand[hand_idx], (double)hgt->views[1].ultra_is_hand[hand_idx]);
+				        (double)ultra_feat[hand_idx][0], (double)ultra_feat[hand_idx][1], (double)ultra_feat[hand_idx][2], (double)ultra_feat[hand_idx][3], (double)hgt->views[0].ultra_is_hand[hand_idx], (double)hgt->views[1].ultra_is_hand[hand_idx],
+				        jc_mean[0], jc_min[0], jc_mean[1], jc_min[1]);
 			}
 		}
 		if (hgt->hand_tracked_for_num_frames[hand_idx] < (ultra_recalled[hand_idx] ? std::min<uint64_t>(2, hgt->tuneable_values.num_frames_before_display) : hgt->tuneable_values.num_frames_before_display) ||
-		    !hgt->ultra_both_views_seen[hand_idx] || !ultra_settled[hand_idx]) {
+		    !hgt->ultra_both_views_seen[hand_idx] || !ultra_settled[hand_idx] || ultra_jc_low[hand_idx]) {
 			out_xrt_hands[hand_idx]->is_active = false;
 			if (hgt->xr_tracking_diag.enabled() && hgt->this_frame_hand_detected[hand_idx]) {
 				hgt->xr_tracking_diag.frame.hands[hand_idx].reject(xr_mercury_diag::display_warmup);

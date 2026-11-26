@@ -865,3 +865,12 @@ At the very low false rates the original reaches with a high threshold (29 % fou
 - 22 Nov (held out): original 88/10 and 82/0; fine-tune 2 93/13 and 90/0 (better).
 - 23 Nov (held out): original 98/14 and 96/0; fine-tune 2 97/53 and 99/32; fine-tune 1 97/1 and 98/36. **Phantoms** (23 Nov has a long hand-free stretch with a jug and a dark blob that the training data did not contain).
 So it is **not adopted**: availability goes up, but hand-free scenes not in the training data produce false hands. The remedy is data, not thresholds: hand-free scans from many rooms (the Hand-free scan mode) and more labelled peripheral hands. A third run with 22 Nov added to the training set, tested on 23 Nov, is the test of that.
+
+### Eighth phase, 25 November 2026: the keypoint model's own joint confidence as the verifier (native option, off by default)
+
+The keypoint model gives a confidence for each of the 21 joints (`confidence_xy`). Logged per frame (`ULTRA_HANDS_GATE_TRACE`, `jc=` fields): shown hands against frames where the labels say no hand, mean over joints of the better camera: real hands median 0.61, phantoms 0.44 (pooled AUC 0.88; per recording, held out: 17 Nov 0.60, 20 Nov 0.39 (22 phantom frames only), 22 Nov 0.79, 23 Nov 0.96). A verifier from frozen ImageNet features of 96 px crops (MobileNetV3-small + logistic head, 162 mined hard negatives) was weaker (AUC 0.37 to 0.83, leave-one-recording-out).
+
+Options in the native tracker (`libultra_hands`, shipped library unchanged):
+- `ULTRA_HANDS_JC_GATE=T`: a hand is not shown while its joint confidence smoothed over about five frames is under T. 22 Nov right hand 82 % to 70 % (T 0.45) and 58 % (0.50): **not adopted**; with the fine-tuned detector it removes left-hand phantoms (23 Nov 53 % to 2 %) but leaves right-hand ones (32 % to 29 %).
+- `ULTRA_HANDS_JC_GATE=T ULTRA_HANDS_JC_LATCH=N`: asked of a new track only: shown once N frames in a row are over T, then shown for as long as the track lasts. With the original detector, T 0.5, N 4: availability the same (22 Nov 88/81 against 88/82; 23 Nov 97/96 against 98/96; 17 and 20 Nov unchanged), 23 Nov left-hand false frames 14 % to 2 %, 22 Nov unchanged; gaps between tracks no worse (total gap time 9.5 s and 9.5 s on 22 Nov, 8.3 to 4.2 s on 23 Nov). With fine-tune 2: 23 Nov right-hand phantoms 32 % (18 % at T 0.55, N 6) remain.
+- Caveats: T and N were looked at on 23 Nov, so it is no longer a blind test; the labels are one reader's, one second apart; effect on a new blind recording is not known. Not wired into the app; not shipped.
