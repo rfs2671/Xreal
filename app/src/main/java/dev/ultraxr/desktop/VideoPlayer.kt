@@ -130,5 +130,7 @@ class VideoPlayer(
     companion object {
         /** The zone at the top right of the picture that changes the layout. */
         fun inModeCorner(u: Double, v: Double) = u > 0.86 && v < 0.14
+        /** The zone at the top left: the two eyes' halves are exchanged (a file whose halves are the other way round, or glasses that show them the other way round). */
+        fun inSwapCorner(u: Double, v: Double) = u < 0.14 && v < 0.14
     }
 }

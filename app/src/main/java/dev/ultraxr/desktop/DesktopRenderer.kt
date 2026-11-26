@@ -135,6 +135,8 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
 
     /** The windows that hold a side-by-side video: each eye is given its half of the picture (the left half is the left eye's). Set by the session. */
     @Volatile var sbsIds: Set<Int> = emptySet()
+    /** Of those, the windows whose halves are exchanged (the left half for the right eye). */
+    @Volatile var sbsSwapIds: Set<Int> = emptySet()
     /** Which half of the picture the eye being drawn now has (0 the left half of the glasses' picture), and the matrices that pick that half of a side-by-side video. */
     private var curHalf = 0
     private val sbsM = FloatArray(16); private val sbsTex = FloatArray(16)
@@ -391,8 +393,8 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
      * The texture matrix of a side-by-side picture for the eye being drawn: only its left half for the left eye, its right half for the right eye (the other way round when
      * the unit shows the halves swapped), then the texture's own matrix.
      */
-    private fun sbsTexture(m: FloatArray): FloatArray {
-        val src = if (swapEyes) 1 - curHalf else curHalf
+    private fun sbsTexture(m: FloatArray, exchanged: Boolean): FloatArray {
+        val src = if (swapEyes != exchanged) 1 - curHalf else curHalf
         Matrix.setIdentityM(sbsM, 0); Matrix.translateM(sbsM, 0, 0.5f * src, 0f, 0f); Matrix.scaleM(sbsM, 0, 0.5f, 1f, 1f)
         Matrix.multiplyMM(sbsTex, 0, m, 0, sbsM, 0)
         return sbsTex
@@ -413,7 +415,7 @@ class DesktopRenderer(private val preview: Boolean, private val onSurface: (id: 
             Geometry.modelMatrix(c, yaw, pitch, w.width + 2 * halo, w.height + 2 * halo, model)
             draw(progFlat, 0, 0, matrix, ident, w.width + 2 * halo, w.height + 2 * halo, round + halo, Ink.AMBER, 0.55f * w.glow, glow = halo.toFloat())
         }
-        if (t.hasFrame) { Geometry.modelMatrix(c, yaw, pitch, w.width, w.height, model); shadeRgb[0] = shade; shadeRgb[1] = shade; shadeRgb[2] = shade; draw(progOes, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.oes, matrix, if (w.id in sbsIds) sbsTexture(t.m) else t.m, w.width, w.height, round, shadeRgb, 1f) }
+        if (t.hasFrame) { Geometry.modelMatrix(c, yaw, pitch, w.width, w.height, model); shadeRgb[0] = shade; shadeRgb[1] = shade; shadeRgb[2] = shade; draw(progOes, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t.oes, matrix, if (w.id in sbsIds) sbsTexture(t.m, w.id in sbsSwapIds) else t.m, w.width, w.height, round, shadeRgb, 1f) }
         else if (w.growing) for (side in 0 until 4) {
             val across = side < 2; val sign = if (side % 2 == 0) 1.0 else -1.0
             line(c, yaw, pitch, if (across) 0.0 else sign * w.width / 2, if (across) sign * w.height / 2 else 0.0, if (across) w.width else hair, if (across) hair else w.height, Ink.SLATE, 1f, 0.0, matrix)

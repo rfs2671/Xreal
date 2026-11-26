@@ -28,9 +28,10 @@ class DesktopSession(private val activity: Activity) {
     /** Videos in windows (kind [VIDEO]): the player of each, and how its picture is laid out. A video's address is its file's, with the layout after a "#": file...#sbs-half. */
     private val video = HashMap<Int, VideoPlayer>()
     private val videoMode = HashMap<Int, VideoMode>()
+    private val videoSwap = HashSet<Int>()
     /** The activity is to ask for a video file (the phone's file picker): the file comes back to [openVideo]. */
     var onPickVideo: (() -> Unit)? = null
-    private fun publishSbs() { val ids = videoMode.filter { it.value.sbs }.keys.toSet(); for (r in renderers) r.sbsIds = ids }
+    private fun publishSbs() { val ids = videoMode.filter { it.value.sbs }.keys.toSet(); val sw = videoSwap.toSet(); for (r in renderers) { r.sbsIds = ids; r.sbsSwapIds = sw } }
     private val cursors = HashMap<Int, DoubleArray>()
     private val prefs = activity.getSharedPreferences("desktop", Context.MODE_PRIVATE)
     /** The pictures drawn with the 2D canvas (marks, names, titles, the handle's words, the status line), by what they show. The ones not asked for for longest are dropped. */
@@ -319,7 +320,7 @@ class DesktopSession(private val activity: Activity) {
         if (current === this) current = null
         for (w in web.values) w.destroy()
         for (v in video.values) v.release()
-        web.clear(); video.clear(); videoMode.clear(); surfaces = HashMap()
+        web.clear(); video.clear(); videoMode.clear(); videoSwap.clear(); surfaces = HashMap()
     }
 
     fun pause() {
@@ -341,12 +342,14 @@ class DesktopSession(private val activity: Activity) {
     private fun ensureVideo(w: DesktopWindow) {
         if (video.containsKey(w.id)) return
         val uri = android.net.Uri.parse(w.url.substringBefore('#'))
-        val mode = when (w.url.substringAfter('#', "")) { "sbs-half" -> VideoMode.SBS_HALF; "sbs-full" -> VideoMode.SBS_FULL; "flat" -> VideoMode.FLAT; else -> null }
+        val frag = w.url.substringAfter('#', "")
+        if (frag.endsWith("+swap")) videoSwap.add(w.id)
+        val mode = when (frag.removeSuffix("+swap")) { "sbs-half" -> VideoMode.SBS_HALF; "sbs-full" -> VideoMode.SBS_FULL; "flat" -> VideoMode.FLAT; else -> null }
         if (mode != null) videoMode[w.id] = mode
         val player = VideoPlayer(activity, w.id, uri, { vw, vh ->
             activity.runOnUiThread {
                 val m = videoMode.getOrPut(w.id) { VideoMode.detect(w.title, vw, vh) }
-                desktop.find(w.id)?.let { win -> win.aspect = m.aspect(vw, vh); win.url = uri.toString() + "#" + modeKey(m); applyShape(w.id); desktop.touch() }
+                desktop.find(w.id)?.let { win -> win.aspect = m.aspect(vw, vh); win.url = uri.toString() + "#" + modeKey(m) + (if (w.id in videoSwap) "+swap" else ""); applyShape(w.id); desktop.touch() }
                 publishSbs(); say(m.label.replaceFirstChar { it.uppercase() }); onChanged?.invoke()
             }
         }, { msg -> activity.runOnUiThread { say(msg); close(w.id) } })
@@ -443,7 +446,7 @@ class DesktopSession(private val activity: Activity) {
         w.width = (h * w.aspect).coerceIn(DesktopWindow.MIN_WIDTH, DesktopWindow.MAX_WIDTH)
         applyShape(w.id); cursors[w.id] = doubleArrayOf(0.5, 0.5); desktop.touch(); changed()
     }
-    fun close(id: Int) { web.remove(id)?.destroy(); video.remove(id)?.release(); videoMode.remove(id); publishSbs(); cursors.remove(id); desktop.close(id); changed() }
+    fun close(id: Int) { web.remove(id)?.destroy(); video.remove(id)?.release(); videoMode.remove(id); videoSwap.remove(id); publishSbs(); cursors.remove(id); desktop.close(id); changed() }
     fun focus(id: Int) { desktop.focus(id); changed() }
     fun minimize(id: Int) { desktop.minimize(id); changed() }
     fun toggleMaximize(id: Int) { desktop.toggleMaximize(id); changed() }
@@ -662,8 +665,12 @@ class DesktopSession(private val activity: Activity) {
         video[id]?.let { p ->
             if (VideoPlayer.inModeCorner(u, v)) {
                 val m = (videoMode[id] ?: VideoMode.FLAT).next(); videoMode[id] = m
-                desktop.find(id)?.let { win -> win.aspect = m.aspect(p.videoWidth, p.videoHeight); win.url = win.url.substringBefore('#') + "#" + modeKey(m); applyShape(id); desktop.touch() }
+                desktop.find(id)?.let { win -> win.aspect = m.aspect(p.videoWidth, p.videoHeight); win.url = win.url.substringBefore('#') + "#" + modeKey(m) + (if (id in videoSwap) "+swap" else ""); applyShape(id); desktop.touch() }
                 publishSbs(); say(m.label.replaceFirstChar { it.uppercase() })
+            } else if (VideoPlayer.inSwapCorner(u, v)) {
+                if (!videoSwap.add(id)) videoSwap.remove(id)
+                desktop.find(id)?.let { win -> win.url = win.url.substringBefore('#') + "#" + modeKey(videoMode[id] ?: VideoMode.FLAT) + (if (id in videoSwap) "+swap" else ""); desktop.touch() }
+                publishSbs(); say(if (id in videoSwap) "Eyes exchanged" else "Eyes as they were")
             } else say(p.tapAt(u, v))
             onLookPress?.invoke(); return
         }
