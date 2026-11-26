@@ -560,6 +560,11 @@ class DesktopActivity : Activity() {
             && session.focusedWeb()?.forwardKey(event) == true) return true
         // The volume keys scroll the focused window, so it can be done by feel with the glasses on.
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            // Volume-up held (the system calls it a long press after half a second): recentre the view, wherever the focus is. A tap scrolls.
+            if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
+                if (event.isLongPress) { session.recenter(); toast("Recentred"); return true }
+                if (event.repeatCount > 0) return true      // a hold does not scroll
+            }
             if (session.desktop.focused != null) {
                 if (event.action == KeyEvent.ACTION_DOWN) session.padScroll(0.0, if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) -0.22 else 0.22)
                 return true

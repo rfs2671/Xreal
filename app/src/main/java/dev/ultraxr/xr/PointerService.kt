@@ -32,6 +32,7 @@ class PointerService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var pad: Pad? = null
     private var keysLogged = 0
+    private var volUpDownNs = 0L; private var volUpFired = false
     private val tick = object : Runnable {
         override fun run() { sync(); pad?.invalidate(); handler.postDelayed(this, 500) }
     }
@@ -138,7 +139,16 @@ class PointerService : AccessibilityService() {
         if (event.repeatCount == 0 && keysLogged++ < 6) Tracking.log("pointer: key " + event.keyCode + (if (event.action == KeyEvent.ACTION_DOWN) " down" else " up"))
         when (event.keyCode) {
             KeyEvent.KEYCODE_VOLUME_DOWN -> { if (event.repeatCount == 0) PointerInput.hold(now, 1, event.action == KeyEvent.ACTION_DOWN); pad?.invalidate(); return true }
-            KeyEvent.KEYCODE_VOLUME_UP -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) { XrHost.recentreNow(); PointerInput.center(now) }; return true }
+            KeyEvent.KEYCODE_VOLUME_UP -> {
+                // Held for about two thirds of a second: recentre the view and the pointer. A tap is the phone's volume.
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    if (event.repeatCount == 0) { volUpDownNs = now; volUpFired = false }
+                    else if (!volUpFired && now - volUpDownNs >= 650_000_000L) { volUpFired = true; XrHost.recentreNow(); PointerInput.center(now); Tracking.log("pointer: Volume-up held: recentred") }
+                } else if (!volUpFired) {
+                    try { (getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager).adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.FLAG_SHOW_UI) } catch (_: Throwable) {}
+                }
+                return true
+            }
         }
         return false
     }
@@ -209,7 +219,7 @@ class PointerService : AccessibilityService() {
 
         private fun drawPad(canvas: Canvas, width: Int, height: Int) {
             val lines = listOf("Touchpad" to 26f, "" to 10f, "Drag: move the pointer" to 17f, "Tap: select" to 17f, "Two fingers, or hold volume-down:" to 17f, "grab and carry" to 17f,
-                "Volume-up: recentre" to 17f, "" to 10f, "Selections so far: " + PointerInput.clicks to 14f)
+                "Hold Volume-up: recentre" to 17f, "" to 10f, "Selections so far: " + PointerInput.clicks to 14f)
             var y = height * 0.30f
             for ((text, size) in lines) {
                 paint.textSize = size * density; paint.color = if (size > 20f) 0xFFE8F0FA.toInt() else 0xFF9FB0C4.toInt()
