@@ -65,6 +65,9 @@ object Tracking : GlassesLink.Listener {
     @Volatile private var handsHandle = 0L
     /** Whether hands are being tracked now. Off: no pictures go to the hand tracker, no hand is reported, and the battery is spared. */
     @Volatile var handsOn = true; private set
+    /** The tracked hands are drawn over an OpenXR game's picture in the glasses (openxr/HandOverlay): on unless "hand_overlay=0" in hand_options.txt; "hand_overlay_skip=pkg,pkg" leaves those games out. */
+    @Volatile var handOverlayOn = true; private set
+    @Volatile var handOverlaySkip: List<String> = emptyList(); private set
     fun setHandTracking(on: Boolean) { settings.handTracking = on; if (handsOn != on) { handsOn = on; if (!on) hands = emptyList() /* no hand, and no pinch, is left standing */; log(if (on) "hand tracking switched on" else "hand tracking switched off") } }
     @Volatile var handsError = ""; private set
     @Volatile var handsFrames = 0L; private set
@@ -466,6 +469,11 @@ object Tracking : GlassesLink.Listener {
         // The hand tracker is always made ready; whether it is given pictures is the switch ([handsOn]), which can
         // then be turned at any moment, in a game too.
         handsOn = settings.handTracking
+        try {
+            val ho = try { File(app.getExternalFilesDir(null), "hand_options.txt").takeIf { it.isFile }?.readLines().orEmpty() } catch (_: Exception) { emptyList() }
+            handOverlayOn = ho.none { it.replace(" ", "") == "hand_overlay=0" }
+            handOverlaySkip = ho.firstOrNull { it.trim().startsWith("hand_overlay_skip=") }?.substringAfter('=')?.split(',')?.map { it.trim() }.orEmpty()
+        } catch (_: Exception) {}
         try {
             handOptions = dev.ultraxr.core.HandOptions.parse(try { File(app.getExternalFilesDir(null), "hand_options.txt").takeIf { it.isFile }?.readText() } catch (_: Exception) { null })
             // Each switch is set or cleared every time tracking starts: the process outlives one start, and a switch

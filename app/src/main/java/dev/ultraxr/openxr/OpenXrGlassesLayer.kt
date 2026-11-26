@@ -68,6 +68,7 @@ object OpenXrGlassesLayer {
 
     private val main = Handler(Looper.getMainLooper())
     private var layer: View? = null
+    private var handOverlay: HandOverlay? = null
     private var layerManager: WindowManager? = null
     private var connected = false
     private var generation = 0
@@ -116,9 +117,13 @@ object OpenXrGlassesLayer {
                     }
                 })
             }
+            val overlay = if (HandOverlay.wanted(clientPackage)) HandOverlay(window.context) else null
             val root = FrameLayout(window.context).apply {
                 addView(surface, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                // the hands, over the game's picture (added after it, so on top of it)
+                overlay?.let { addView(it.view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
             }
+            handOverlay = overlay
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -164,6 +169,7 @@ object OpenXrGlassesLayer {
 
     private fun closeOnMain(why: String) {
         generation++
+        handOverlay?.let { runCatching { it.stop() } }; handOverlay = null
         layer?.let { view -> runCatching { layerManager?.removeView(view) } }
         layer = null
         layerManager = null
